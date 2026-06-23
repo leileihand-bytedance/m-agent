@@ -24,7 +24,7 @@ from typing import Mapping
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from app.review import load_rules, review_text, format_review_result  # noqa: E402
+from app.review import load_rules, format_review_result  # noqa: E402
 from app.review.reviewer import ReviewResult  # noqa: E402
 
 
@@ -390,23 +390,30 @@ async def run_review_bot(config: ReviewConfig) -> None:
             )
             return
 
-        # 6. 审核(LLM 处理 65 段文档可能需要 1-2 分钟)
-        # 空 issues 是合法结果(文档没问题),不重试
-        # 只有真正 LLM 错误(__llm_error__)才重试,最多 2 次
-        review_result = None
-        llm_attempt = 0
-        while llm_attempt < 3:
-            review_result = review_text(parsed.paragraphs, rules_text, filename)
-            # 是否 LLM 错误
-            is_llm_error = any(f.rule_id.startswith("__") for f in review_result.findings)
-            if not is_llm_error:
-                break
-            llm_attempt += 1
-            print(f"⚠️ LLM 调用失败,重试第 {llm_attempt}/3 次...", flush=True)
-            import time
-            time.sleep(2)
+        # 6. 第一阶段审核（格式正则 + 基础内容 LLM）
+        from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
+        from app.review.output_formatter import format_phase1_result, format_phase2_result  # noqa: E402
 
-        # 7. 存档
+        phase1_result = review_phase1(parsed.paragraphs, rules_text, filename)
+
+        # 立即发第一阶段结果
+        phase1_reply = format_phase1_result(phase1_result)
+        done_id_1 = generate_req_id("review-p1")
+        try:
+            await asyncio.wait_for(
+                ws_client.reply_stream(frame, done_id_1, phase1_reply, True),
+                timeout=30.0,
+            )
+            print(f"✅ 第一阶段结果已发送", flush=True)
+        except asyncio.TimeoutError:
+            print(f"⚠️ 第一阶段发送超时", flush=True)
+        except Exception as exc:
+            print(f"⚠️ 第一阶段发送失败:{exc}", flush=True)
+
+        # 7. 第二阶段审核（深度内容 LLM）
+        phase2_result = review_phase2(parsed.paragraphs, rules_text, filename)
+
+        # 8. 存档（完整结果存档到 phase2_result）
         msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
         review_dir = None
         try:
@@ -416,31 +423,26 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 original_filename=filename,
                 sender=sender,
                 msgid=msgid,
-                result=review_result,
+                result=phase2_result,
                 parsed_paragraphs=parsed.paragraphs,
             )
-            print(f"✅ 审核完成:{filename} ({len(review_result.findings)} 个问题),存档:{review_dir}", flush=True)
+            print(f"✅ 审核完成:{filename} ({len(phase2_result.findings)} 个问题),存档:{review_dir}", flush=True)
         except Exception as exc:
-            print(f"⚠️ 存档失败(不影响主流程):{exc}", flush=True)
+            print(f"⚠️ 存档失败:{exc}", flush=True)
 
-        # 8. 输出意见（直接发送，加超时保护）
-        if len(review_result.findings) <= 10:
-            reply = format_review_result(review_result, filename)
-        else:
-            summary = format_review_result(review_result, filename, max_findings=10)
-            reply = summary + f"\n\n📎 完整报告:{review_dir}/report.md"
-
-        done_id = generate_req_id("review-done")
+        # 9. 追加发送第二阶段结果
+        phase2_reply = format_phase2_result(phase2_result, str(review_dir) if review_dir else None)
+        done_id_2 = generate_req_id("review-p2")
         try:
             await asyncio.wait_for(
-                ws_client.reply_stream(frame, done_id, reply, True),
+                ws_client.reply_stream(frame, done_id_2, phase2_reply, True),
                 timeout=30.0,
             )
-            print(f"✅ 审核结果已发送", flush=True)
+            print(f"✅ 第二阶段结果已发送", flush=True)
         except asyncio.TimeoutError:
-            print(f"⚠️ 发送审核结果超时(30s)，请查看存档:{review_dir}/report.md", flush=True)
+            print(f"⚠️ 第二阶段发送超时", flush=True)
         except Exception as exc:
-            print(f"⚠️ 发送审核结果失败:{exc}，存档已保存:{review_dir}/report.md", flush=True)
+            print(f"⚠️ 第二阶段发送失败:{exc}", flush=True)
 
     async def on_enter(frame):
         await ws_client.reply_welcome(
