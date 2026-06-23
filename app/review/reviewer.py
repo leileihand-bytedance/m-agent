@@ -73,6 +73,22 @@ SEMANTIC_RULE_IDS = (
     "content-outdated",
 )
 
+# 第一阶段规则（格式正则 + 基础内容LLM）
+PHASE1_RULES = (
+    "title-truncated",
+    "content-mismatch",
+    "content-incomplete",
+)
+
+# 第二阶段规则（深度内容LLM）
+PHASE2_RULES = (
+    "toc-mismatch",
+    "content-out-of-scope",
+    "content-wrong-section",
+    "content-duplicate",
+    "content-outdated",
+)
+
 
 def _build_prompt(rules_text: str, paragraphs: list[str], filename: str) -> str:
     """构造发给 LLM 的 prompt(仅语义类规则)。"""
@@ -148,7 +164,103 @@ def _build_prompt(rules_text: str, paragraphs: list[str], filename: str) -> str:
     return prompt
 
 
-def _parse_llm_output(output: str, paragraphs: list[str]) -> tuple[list[Finding], str]:
+def _build_phase_prompt(
+    rules_text: str,
+    paragraphs: list[str],
+    filename: str,
+    phase: int,
+) -> str:
+    """构造发给 LLM 的分阶段 prompt。
+
+    phase=1: 基础语义检查（title-truncated/content-mismatch/content-incomplete）
+    phase=2: 深度内容检查（toc-mismatch/content-out-of-scope/...）
+
+    仅将对应阶段的规则子集传给 LLM，减少单次调用的 token 消耗。
+    """
+    paras_text = "\n\n".join(
+        f"[段 {i+1}]\n{p}" for i, p in enumerate(paragraphs)
+    )
+
+    if phase == 1:
+        target_rules = PHASE1_RULES
+        phase_desc = "基础语义检查（标题完整性、标题-正文匹配性、正文完整性）"
+    else:
+        target_rules = PHASE2_RULES
+        phase_desc = "深度内容检查（目录匹配性、内容相关性、内容归位、重复检测、信息时效性）"
+
+    prompt = f"""你是一位严谨的中文文档审核员。
+
+# 审核规则清单（{phase_desc}）
+
+{rules_text}
+
+# 待审文档
+
+文件名:{filename}
+
+{paras_text}
+
+# 你的任务
+
+按以下步骤思考并输出:
+
+## 步骤 1:识别文档结构
+
+用几行文字描述:
+- 文档头:哪几段
+- 目录区:从哪段到哪段
+- 页脚:哪段
+- 正文区:其余部分
+
+## 步骤 2:逐段落分析
+
+对正文区的每个段落,判断其类型(章节分类/新闻标题/正文/原文引用),然后执行语义类检查:
+
+**阶段1规则（仅标题段需要检查）:**
+- title-truncated: 标题说的 ≠ 正文说的同一件事 → 标题截断
+- content-mismatch: 标题和正文完全不同 → 错配
+
+**阶段1规则（仅正文段需要检查）:**
+- content-incomplete: 段末语义截断,缺宾语或结束语
+
+**阶段2规则（目录区域检查）:**
+- toc-mismatch: 目录与正文在章节名/标题/顺序上对不上
+
+**阶段2规则（内容质量检查）:**
+- content-out-of-scope: 跟银行经营/宏观经济完全无关
+- content-wrong-section: 内容明显属于某板块但放到了别处
+- content-duplicate: 同一件事出现两次以上
+- content-outdated: 信息明显早于周报时间范围
+
+## 步骤 3:输出 JSON
+
+**严格按以下格式输出,只输出 JSON,不要任何其他文字:**
+
+```json
+{{
+  "reasoning": "简要分析思路(段落分类、每条规则的检查结论,100字以内)",
+  "issues": [
+    {{"paragraph_index": 0, "rule_id": "xxx", "original_text": "该段完整原文", "description": "问题描述"}}
+  ]
+}}
+```
+
+**关键规则:**
+- paragraph_index 从 0 开始
+- rule_id 必须是以下之一:{", ".join(target_rules)}
+- original_text 必须是该段的**完整原文**,不要截断
+- **不确定的问题不要写,宁可漏报不要误报**
+- 文档完全没问题 → `{{"issues": []}}`
+- 每条 issue 的 description 要简洁,不超过50字
+"""
+    return prompt
+
+
+def _parse_llm_output(
+    output: str,
+    paragraphs: list[str],
+    allowed_rules: tuple[str, ...] = SEMANTIC_RULE_IDS,
+) -> tuple[list[Finding], str]:
     """从 LLM 输出中解析 JSON,转成 Finding 列表.
 
     Returns:
@@ -188,8 +300,8 @@ def _parse_llm_output(output: str, paragraphs: list[str]) -> tuple[list[Finding]
         if not isinstance(issue, dict):
             continue
         rule_id = str(issue.get("rule_id", ""))
-        # 只接受语义类规则 ID
-        if rule_id not in SEMANTIC_RULE_IDS:
+        # 只接受允许的规则 ID
+        if rule_id not in allowed_rules:
             continue
         try:
             idx = int(issue.get("paragraph_index", -1))
@@ -206,6 +318,131 @@ def _parse_llm_output(output: str, paragraphs: list[str]) -> tuple[list[Finding]
         ))
 
     return findings, reasoning
+
+
+def review_phase1(
+    paragraphs: list[str],
+    rules_text: str,
+    filename: str,
+) -> list[Finding]:
+    """第一阶段审核：基础语义检查（title-truncated/content-mismatch/content-incomplete）。
+
+    格式类规则已在 format_checker.py 正则检测,本函数只处理阶段1的3个语义规则。
+    LLM 调用3次取并集去重。
+
+    Returns:
+        findings 列表（仅含 phase1 规则的 Finding）
+    """
+    if not paragraphs:
+        return []
+
+    findings: list[Finding] = []
+    llm_errors: list[str] = []
+
+    for attempt in range(3):
+        try:
+            client, model_name = _get_anthropic_client()
+            prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=1)
+            message = client.messages.create(
+                model=model_name,
+                max_tokens=8192,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=180.0,
+            )
+            text_parts = []
+            for block in message.content:
+                if hasattr(block, "text") and block.text:
+                    text_parts.append(block.text)
+            output = "\n".join(text_parts)
+
+            findings_part, reasoning = _parse_llm_output(output, paragraphs, PHASE1_RULES)
+            findings.extend(findings_part)
+            reason_preview = reasoning[:40] if reasoning else "(无)"
+            print(f"  phase1 第 {attempt+1} 次: {len(findings_part)} 条, reasoning: {reason_preview}...", flush=True)
+        except Exception as exc:
+            llm_errors.append(str(exc))
+            print(f"  phase1 第 {attempt+1} 次失败: {exc}", flush=True)
+
+    # 3次全部失败
+    if not findings and llm_errors:
+        return [Finding(
+            rule_id="__llm_error__",
+            paragraph_index=0,
+            line_number=1,
+            original_text="(LLM 调用失败)",
+            description=f"LLM phase1 调用失败:{'; '.join(llm_errors)}",
+        )]
+
+    # 去重
+    merged: dict[tuple[str, int], Finding] = {}
+    for f in findings:
+        key = (f.rule_id, f.paragraph_index)
+        if key not in merged or len(f.description) > len(merged[key].description):
+            merged[key] = f
+
+    return list(merged.values())
+
+
+def review_phase2(
+    paragraphs: list[str],
+    rules_text: str,
+    filename: str,
+) -> list[Finding]:
+    """第二阶段审核：深度内容检查（toc-mismatch/content-out-of-scope/content-wrong-section/content-duplicate/content-outdated）。
+
+    LLM 调用3次取并集去重。
+
+    Returns:
+        findings 列表（仅含 phase2 规则的 Finding）
+    """
+    if not paragraphs:
+        return []
+
+    findings: list[Finding] = []
+    llm_errors: list[str] = []
+
+    for attempt in range(3):
+        try:
+            client, model_name = _get_anthropic_client()
+            prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=2)
+            message = client.messages.create(
+                model=model_name,
+                max_tokens=8192,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=180.0,
+            )
+            text_parts = []
+            for block in message.content:
+                if hasattr(block, "text") and block.text:
+                    text_parts.append(block.text)
+            output = "\n".join(text_parts)
+
+            findings_part, reasoning = _parse_llm_output(output, paragraphs, PHASE2_RULES)
+            findings.extend(findings_part)
+            reason_preview = reasoning[:40] if reasoning else "(无)"
+            print(f"  phase2 第 {attempt+1} 次: {len(findings_part)} 条, reasoning: {reason_preview}...", flush=True)
+        except Exception as exc:
+            llm_errors.append(str(exc))
+            print(f"  phase2 第 {attempt+1} 次失败: {exc}", flush=True)
+
+    # 3次全部失败
+    if not findings and llm_errors:
+        return [Finding(
+            rule_id="__llm_error__",
+            paragraph_index=0,
+            line_number=1,
+            original_text="(LLM 调用失败)",
+            description=f"LLM phase2 调用失败:{'; '.join(llm_errors)}",
+        )]
+
+    # 去重
+    merged: dict[tuple[str, int], Finding] = {}
+    for f in findings:
+        key = (f.rule_id, f.paragraph_index)
+        if key not in merged or len(f.description) > len(merged[key].description):
+            merged[key] = f
+
+    return list(merged.values())
 
 
 def review_text(
