@@ -34,7 +34,9 @@ def format_review_result(
     for i, f in enumerate(display, 1):
         rule_label = _rule_label(f.rule_id)
         lines.append(f"错误{i}:【{rule_label}】{f.description}")
-        lines.append(f"所属段落：{f.original_text}")
+        # 原文只显示前40字，避免触发企业微信反垃圾检查
+        original = f.original_text.replace("\n", " ")[:40]
+        lines.append(f"所属段落：{original}...")
         if i < len(display):
             lines.append("")
         shown = i

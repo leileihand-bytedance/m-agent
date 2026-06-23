@@ -242,6 +242,53 @@ def extract_file_payload(frame: Mapping[str, object]) -> FilePayload | None:
 # 主流程
 # ============================================================
 
+# ============================================================
+# 持久化回复队列（解决 ACK 超时问题）
+# ============================================================
+
+class PendingReplyQueue:
+    """持久化待发送回复队列，连接断开后仍保留，重连后自动发送。"""
+
+    def __init__(self):
+        self._queue: dict[str, tuple[object, str]] = {}  # req_id -> (frame, message)
+        self._lock = asyncio.Lock()
+
+    def put(self, frame: object, req_id: str, message: str) -> None:
+        """添加待发送回复到队列。"""
+        self._queue[req_id] = (frame, message)
+
+    async def drain(self, ws_client: object) -> None:
+        """将队列中的所有待发送回复通过 ws_client 发送出去。"""
+        async with self._lock:
+            if not self._queue:
+                return
+            pending = list(self._queue.items())
+            # 不在这里清空，等发送成功后再清
+            print(f"📤 重连后发送 {len(pending)} 条待处理回复...", flush=True)
+        for req_id, (frame, message) in pending:
+            try:
+                await ws_client.reply_stream(frame, req_id, message, True)
+                print(f"✅ 补发成功:req_id={req_id[:12]}...", flush=True)
+                # 发送成功才从队列移除
+                async with self._lock:
+                    self._queue.pop(req_id, None)
+            except Exception as exc:
+                print(f"⚠️ 补发失败:req_id={req_id[:12]}... error={exc}", flush=True)
+                # 发送失败保留在队列，下次重连再试
+                break
+
+    def clear(self) -> None:
+        """清空队列（连接断开时被调用）。"""
+        self._queue.clear()
+
+
+_pending_queue: PendingReplyQueue | None = None
+
+
+# ============================================================
+# 主流程
+# ============================================================
+
 async def run_review_bot(config: ReviewConfig) -> None:
     try:
         from wecom_aibot_sdk import WSClient, generate_req_id
@@ -249,6 +296,9 @@ async def run_review_bot(config: ReviewConfig) -> None:
         raise RuntimeError(
             "缺少依赖 wecom-aibot-sdk。请先安装:python -m pip install -r app/requirements.txt"
         ) from exc
+
+    global _pending_queue
+    _pending_queue = PendingReplyQueue()
 
     config.reviews_dir.mkdir(parents=True, exist_ok=True)
     if not config.rules_path.exists():
@@ -287,7 +337,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             )
             return
 
-        # 1. ACK
+        # 1. ACK（快速回复，不进队列）
         await ws_client.reply_stream(
             frame, stream_id,
             "已收到文件,在努力审核了,请稍等……", True,
@@ -373,14 +423,24 @@ async def run_review_bot(config: ReviewConfig) -> None:
         except Exception as exc:
             print(f"⚠️ 存档失败(不影响主流程):{exc}", flush=True)
 
-        # 8. 输出意见
+        # 8. 输出意见（直接发送，加超时保护）
         if len(review_result.findings) <= 10:
             reply = format_review_result(review_result, filename)
         else:
             summary = format_review_result(review_result, filename, max_findings=10)
             reply = summary + f"\n\n📎 完整报告:{review_dir}/report.md"
 
-        await ws_client.reply_stream(frame, generate_req_id("review-done"), reply, True)
+        done_id = generate_req_id("review-done")
+        try:
+            await asyncio.wait_for(
+                ws_client.reply_stream(frame, done_id, reply, True),
+                timeout=30.0,
+            )
+            print(f"✅ 审核结果已发送", flush=True)
+        except asyncio.TimeoutError:
+            print(f"⚠️ 发送审核结果超时(30s)，请查看存档:{review_dir}/report.md", flush=True)
+        except Exception as exc:
+            print(f"⚠️ 发送审核结果失败:{exc}，存档已保存:{review_dir}/report.md", flush=True)
 
     async def on_enter(frame):
         await ws_client.reply_welcome(
