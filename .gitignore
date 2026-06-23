@@ -1,0 +1,38 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!app/config.example.env
+!app/review/config.example.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+*.swp
+
+# Logs and runtime state
+*.log
+logs/
+tmp/
+
+# Root-level temp scripts (do not commit)
+test_*.py
+audit_*.py
+full_audit.py
+parse_result.py
+run_audit.py
+run_audit.sh
+
+# Raw user materials (sensitive)
+data/leaders/
+data/reviews/
+
+# AI suggestions before user review
+data/leaders/*/suggestions/
+!data/leaders/*/suggestions/.gitkeep

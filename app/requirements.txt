@@ -1,0 +1,2 @@
+wecom-aibot-sdk==1.0.7
+anthropic>=0.25.0
