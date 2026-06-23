@@ -206,7 +206,6 @@ def _parse_llm_output(output: str, paragraphs: list[str]) -> tuple[list[Finding]
         ))
 
     return findings, reasoning
-    return findings
 
 
 def review_text(
@@ -307,21 +306,6 @@ def review_text(
 
     return ReviewResult(
         findings=all_findings,
-        total_rules=total_rules,
-        passed_rules=max(0, passed_rules),
-        filename=filename,
-    )
-    # 按段号排序
-    findings.sort(key=lambda f: f.paragraph_index)
-
-    # 计算"通过规则数"
-    hit_rule_ids = {f.rule_id for f in findings if not f.rule_id.startswith("__")}
-    passed_rules = total_rules - len(hit_rule_ids)
-    if passed_rules_hint is not None:
-        passed_rules = passed_rules_hint
-
-    return ReviewResult(
-        findings=findings,
         total_rules=total_rules,
         passed_rules=max(0, passed_rules),
         filename=filename,
