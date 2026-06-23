@@ -67,6 +67,91 @@ def format_review_result(
     return "\n".join(lines)
 
 
+def format_phase1_result(result: ReviewResult, max_findings: int = 20) -> str:
+    """格式化第一阶段审核结果（发给用户的第一条消息）。
+
+    格式：
+    第一阶段审核完成（低级错误）
+
+    格式检查 + 基础内容审核，共 N 条：
+    错误1:【规则标签】问题描述
+    所属段落：原文...
+    ...
+
+    第二阶段审核中，请稍候...
+    """
+    findings = result.findings
+    total = len(findings)
+    sorted_findings = sorted(findings, key=lambda f: f.paragraph_index)
+    display = sorted_findings[:max_findings]
+
+    lines = ["第一阶段审核完成（低级错误）", ""]
+    lines.append(f"格式检查 + 基础内容审核，共 {total} 条：")
+
+    shown = 0
+    for i, f in enumerate(display, 1):
+        rule_label = _rule_label(f.rule_id)
+        safe_description = _sanitize_text(f.description)
+        lines.append(f"错误{i}:【{rule_label}】{safe_description}")
+        original = _sanitize_text(f.original_text.replace("\n", " "))[:40]
+        lines.append(f"所属段落：{original}...")
+        if i < len(display):
+            lines.append("")
+        shown = i
+
+    if shown < total:
+        lines.append("")
+        lines.append(f"... 还有 {total - shown} 处问题未显示")
+
+    lines.append("")
+    lines.append("第二阶段审核中，请稍候...")
+
+    return "\n".join(lines)
+
+
+def format_phase2_result(result: ReviewResult, review_dir: str | None = None, max_findings: int = 20) -> str:
+    """格式化第二阶段审核结果（追加发给用户的第二条消息）。
+
+    格式：
+    第二阶段审核完成（内容质量）
+
+    深度内容审核，共 N 条：
+    错误1:【规则标签】问题描述
+    所属段落：原文...
+    ...
+
+    点击查看完整存档：data/reviews/<date-seq>
+    """
+    findings = result.findings
+    total = len(findings)
+    sorted_findings = sorted(findings, key=lambda f: f.paragraph_index)
+    display = sorted_findings[:max_findings]
+
+    lines = ["第二阶段审核完成（内容质量）", ""]
+    lines.append(f"深度内容审核，共 {total} 条：")
+
+    shown = 0
+    for i, f in enumerate(display, 1):
+        rule_label = _rule_label(f.rule_id)
+        safe_description = _sanitize_text(f.description)
+        lines.append(f"错误{i}:【{rule_label}】{safe_description}")
+        original = _sanitize_text(f.original_text.replace("\n", " "))[:40]
+        lines.append(f"所属段落：{original}...")
+        if i < len(display):
+            lines.append("")
+        shown = i
+
+    if shown < total:
+        lines.append("")
+        lines.append(f"... 还有 {total - shown} 处问题未显示")
+
+    if review_dir:
+        lines.append("")
+        lines.append(f"点击查看完整存档：{review_dir}/report.md")
+
+    return "\n".join(lines)
+
+
 def _rule_label(rule_id: str) -> str:
     """把 rule_id 转成人类可读的中文标签."""
     labels = {
