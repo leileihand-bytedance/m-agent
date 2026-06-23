@@ -1,95 +1,68 @@
-# M-Agent
+# M-Agent 智能审核模块
 
-M-Agent 是一个面向政府报告写作场景的多 Agent 协同写作项目。
+企业微信机器人自动审核 `.docx` 文档，标出低级错误。
 
-当前第一阶段不做完整写稿工具，而是先做一个更小的闭环：
+## 功能
 
-```text
-企业微信经验沉淀入口
+- 接收企业微信文件消息（`.docx`）
+- 两层审核架构：
+  - **格式类规则** → 代码正则检测（稳定）
+  - **语义类规则** → LLM CoT + 3次取并集
+- 按出现顺序输出问题清单
+- 审核结果存档到 `data/reviews/`
+
+## 快速开始
+
+```bash
+# 安装依赖
+pip install -r app/requirements.txt
+
+# 配置（复制示例并填入 Bot ID/Secret）
+cp app/review/config.example.env .env
+
+# 检查配置
+python -m app.review.main --check-config
+
+# 启动 Bot
+python -m app.review.main
 ```
 
-目标是让用户把日常材料发给企业微信智能机器人，程序解析材料并生成领导风格提炼建议，再通过企业微信返回给用户确认。用户确认后，程序更新该领导的风格档案。
+## 审核规则
 
-## 当前阶段
+| 类型 | 规则 | 检测方式 |
+|------|------|----------|
+| 格式 | `quote-pair` | 正则代码 |
+| 格式 | `num-unit` | 正则代码 |
+| 格式 | `mixed-punct` | 正则代码 |
+| 格式 | `toc-no-ordinal` | 正则代码 |
+| 格式 | `toc-seq-skip` | 正则代码 |
+| 语义 | `title-truncated` | LLM CoT |
+| 语义 | `content-mismatch` | LLM CoT |
+| 语义 | `content-incomplete` | LLM CoT |
+| 语义 | `toc-mismatch` | LLM CoT |
+| 语义 | `content-out-of-scope` | LLM CoT |
+| 语义 | `content-wrong-section` | LLM CoT |
+| 语义 | `content-duplicate` | LLM CoT |
+| 语义 | `content-outdated` | LLM CoT |
 
-第一阶段采用简化结构：
+## 目录结构
 
-```text
-docs/  方案、设计和开发计划
-app/   实际运行的小程序
-data/  日常材料、AI 提炼建议和领导风格档案
+```
+app/review/           # 审核模块核心代码
+  ├── main.py         # Bot 入口（独立进程）
+  ├── reviewer.py     # LLM 调用 + 语义审核
+  ├── format_checker.py  # 格式类规则正则检测
+  ├── parser.py       # .docx 解析
+  ├── output_formatter.py  # 审核意见格式化
+  └── rule_loader.py  # 规则库加载
+
+app/data/rules.md     # 审核规则库
+tests/                # 单元测试
 ```
 
-当前不要创建复杂的 `agents/`、`templates/`、`knowledge/`、`runs/`、`services/` 多层目录。这些只作为未来演进概念保留。
+## 测试
 
-## 目录说明
-
-```text
-app/
-  README.md
-  config.example.env
-  main.py
-  prompts/
-    style_extraction.md
-
-data/
-  leaders/
-    example-leader/
-      source/
-      suggestions/
-      profile.md
-      update-log.md
+```bash
+python tests/test_reviewer.py
+python tests/test_review_bot.py
 ```
-
-## 关键原则
-
-1. AI 可以提炼经验，但不能自动写入长期档案。
-2. 用户确认后，才能更新 `data/leaders/某领导/profile.md`。
-3. 每次更新都要记录到 `update-log.md`。
-4. 原始材料可能包含敏感信息，默认不要提交到远程仓库。
-5. 第一版优先保持简单，先跑通领导风格沉淀闭环。
-
-## 当前进展
-
-已完成：
-
-1. 企业微信长连接接入。
-2. 文本消息收发。
-3. 文件消息接收、下载、解密和保存。
-4. `.md`、`.txt`、`.docx` 材料可转为后续 AI 提炼可读取的文本。
-5. `.md` 文件直接作为可提炼材料，不再重复生成 `.parsed.md`。
-
-当前限制：
-
-1. PDF 已有失败提示，但当前本机环境缺少 PDF 解析依赖，暂时不会提取 PDF 正文。
-2. AI 风格提炼和用户确认写入还未实现。
-
-下一步实现 `app/` 中的 AI 风格提炼和确认写入逻辑。
-
-## 当前交互方式
-
-机器人只围绕一件事工作：收到文件或文字材料后，归到某位领导名下，为后续风格提炼做准备。
-
-推荐用法：
-
-```text
-黄总
-```
-
-然后发送文件或文字材料。
-
-也可以直接发送：
-
-```text
-把这段提炼到黄总：今天会上强调服务小微
-```
-
-如果只发送文件或材料，没有说明领导，机器人会追问要提炼到哪位领导。领导名只对下一份材料有效，不会长期沿用。
-
-## 近期完成
-
-- 企业微信长连接 ✓
-- 文本消息收发 ✓
-- 文件接收与解析 ✓
-- 开始提炼命令 ✓
-- 确认入库处理 ✓
