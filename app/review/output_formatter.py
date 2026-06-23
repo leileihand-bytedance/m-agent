@@ -8,7 +8,24 @@
 
 from __future__ import annotations
 
+import re
+
 from .reviewer import ReviewResult, Finding
+
+# 敏感词列表（触发企业微信反垃圾检查的词）
+_SPAM_SENSITIVE_PATTERNS = [
+    re.compile(r"军事打击|武装冲突|空袭|导弹|核武器|生化|战争"),
+    re.compile(r"哈梅内伊|内贾德|苏莱曼尼|伊朗领袖|伊朗总统"),
+    re.compile(r"封锁霍尔木兹|石油运输受阻"),
+]
+
+
+def _sanitize_text(text: str) -> str:
+    """替换敏感词，避免触发企业微信反垃圾检查."""
+    result = text
+    for pattern in _SPAM_SENSITIVE_PATTERNS:
+        result = pattern.sub("[敏感内容]", result)
+    return result
 
 
 def format_review_result(
@@ -33,9 +50,11 @@ def format_review_result(
     shown = 0
     for i, f in enumerate(display, 1):
         rule_label = _rule_label(f.rule_id)
-        lines.append(f"错误{i}:【{rule_label}】{f.description}")
-        # 原文只显示前40字，避免触发企业微信反垃圾检查
-        original = f.original_text.replace("\n", " ")[:40]
+        # 描述和原文都要脱敏
+        safe_description = _sanitize_text(f.description)
+        lines.append(f"错误{i}:【{rule_label}】{safe_description}")
+        # 原文只显示前40字，且做敏感词替换
+        original = _sanitize_text(f.original_text.replace("\n", " "))[:40]
         lines.append(f"所属段落：{original}...")
         if i < len(display):
             lines.append("")
@@ -82,9 +101,9 @@ def build_report_markdown(result: ReviewResult, filename: str) -> str:
     ]
     for i, f in enumerate(result.findings, 1):
         rule_label = _rule_label(f.rule_id)
-        quote = f.original_text[:80].replace("\n", " ")
+        quote = _sanitize_text(f.original_text[:80].replace("\n", " "))
         lines.append(f"### 错误{i}. [{rule_label}]")
         lines.append(f"- 原文: {quote}")
-        lines.append(f"- 问题: {f.description}")
+        lines.append(f"- 问题: {_sanitize_text(f.description)}")
         lines.append("")
     return "\n".join(lines)
