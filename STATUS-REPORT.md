@@ -5,6 +5,47 @@
 
 ---
 
+## 一一二、[2026-06-24] 两阶段审核拆分 & 规则优化
+
+### 两阶段架构
+
+**Phase 1（低级错误，10条）：**
+- 格式正则（5条）：`quote-pair`、`num-unit`、`mixed-punct`、`toc-no-ordinal`、`toc-seq-skip`
+- 基础语义（4条）：`title-truncated`、`content-mismatch`、`content-incomplete`、`toc-mismatch`
+- LLM 调用：2次取并集
+
+**Phase 2（内容质量，4条）：**
+- `content-out-of-scope`、`content-wrong-section`、`content-duplicate`、`content-outdated`
+- LLM 调用：2次取并集
+
+### 消息流程
+
+1. Bot 收到文件 → Phase1 完成后**立即发第一条**（"第一阶段审核完成（低级错误）"）
+2. Phase2 完成后**追加发第二条**（"第二阶段审核完成（内容质量）"）
+3. 第二条不再显示存档链接（面向用户，纯结果展示）
+
+### 规则优化
+
+- `title-truncated`：区分"截断（语句不完整）"vs"缩写（语句完整但简略）"
+- `content-wrong-section`：明确板块归位标准（央行→监管动态，党和国家领导人→党政要闻，民营银行→同业动向，其他→市场观察兜底）
+- `content-out-of-scope`：房地产调控/金融科技要放，普通科技不相关的不放
+- `toc-mismatch` 保留在 Phase1
+- Phase2 不含存档链接
+
+### 文件改动
+
+- `app/review/reviewer.py` — 两阶段拆分 + 调用次数优化
+- `app/review/output_formatter.py` — phase1/phase2 格式化函数
+- `app/review/main.py` — 两阶段发送逻辑
+- `app/data/rules.md` — 规则定义优化
+
+### Bot 状态
+
+- PID: 90344 在线
+- 日志: /tmp/review-bot.log
+
+---
+
 ## 一一一、[2026-06-23 下午] 敏感词脱敏修复
 
 ### 问题

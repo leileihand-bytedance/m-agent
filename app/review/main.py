@@ -430,19 +430,27 @@ async def run_review_bot(config: ReviewConfig) -> None:
         except Exception as exc:
             print(f"⚠️ 存档失败:{exc}", flush=True)
 
-        # 9. 追加发送第二阶段结果
-        phase2_reply = format_phase2_result(phase2_result, str(review_dir) if review_dir else None)
+        # 9. 追加发送第二阶段结果（带重试）
+        phase2_reply = format_phase2_result(phase2_result)
         done_id_2 = generate_req_id("review-p2")
-        try:
-            await asyncio.wait_for(
-                ws_client.reply_stream(frame, done_id_2, phase2_reply, True),
-                timeout=30.0,
-            )
-            print(f"✅ 第二阶段结果已发送", flush=True)
-        except asyncio.TimeoutError:
-            print(f"⚠️ 第二阶段发送超时", flush=True)
-        except Exception as exc:
-            print(f"⚠️ 第二阶段发送失败:{exc}", flush=True)
+        phase2_sent = False
+        for retry in range(3):
+            try:
+                await asyncio.wait_for(
+                    ws_client.reply_stream(frame, done_id_2, phase2_reply, True),
+                    timeout=30.0,
+                )
+                print(f"✅ 第二阶段结果已发送", flush=True)
+                phase2_sent = True
+                break
+            except asyncio.TimeoutError:
+                print(f"⚠️ 第二阶段发送超时，第 {retry+1} 次重试...", flush=True)
+            except Exception as exc:
+                print(f"⚠️ 第二阶段发送失败:{exc}，第 {retry+1} 次重试...", flush=True)
+            if retry < 2:
+                await asyncio.sleep(2 * (retry + 1))  # 2s, 4s backoff
+        if not phase2_sent:
+            print(f"⚠️ 第二阶段结果发送失败（已重试3次），存档已保存:{review_dir}/report.md", flush=True)
 
     async def on_enter(frame):
         await ws_client.reply_welcome(

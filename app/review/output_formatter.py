@@ -109,7 +109,7 @@ def format_phase1_result(result: ReviewResult, max_findings: int = 20) -> str:
     return "\n".join(lines)
 
 
-def format_phase2_result(result: ReviewResult, review_dir: str | None = None, max_findings: int = 20) -> str:
+def format_phase2_result(result: ReviewResult, max_findings: int = 20) -> str:
     """格式化第二阶段审核结果（追加发给用户的第二条消息）。
 
     格式：
@@ -119,8 +119,6 @@ def format_phase2_result(result: ReviewResult, review_dir: str | None = None, ma
     错误1:【规则标签】问题描述
     所属段落：原文...
     ...
-
-    点击查看完整存档：data/reviews/<date-seq>
     """
     findings = result.findings
     total = len(findings)
@@ -144,10 +142,6 @@ def format_phase2_result(result: ReviewResult, review_dir: str | None = None, ma
     if shown < total:
         lines.append("")
         lines.append(f"... 还有 {total - shown} 处问题未显示")
-
-    if review_dir:
-        lines.append("")
-        lines.append(f"点击查看完整存档：{review_dir}/report.md")
 
     return "\n".join(lines)
 
