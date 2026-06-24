@@ -9,6 +9,7 @@ rules.md 是给 LLM 读的"审核清单",LLM 只处理语义类规则。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -320,7 +321,7 @@ def _parse_llm_output(
     return findings, reasoning
 
 
-def review_phase1(
+async def review_phase1(
     paragraphs: list[str],
     rules_text: str,
     filename: str,
@@ -340,11 +341,13 @@ def review_phase1(
     semantic_findings: list[Finding] = []
     llm_errors: list[str] = []
 
-    for attempt in range(2):
+    async def _call_phase1_once(attempt: int) -> tuple[list[Finding], str, str | None]:
+        """单次 LLM 调用（异步执行）。"""
         try:
             client, model_name = _get_anthropic_client()
             prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=1)
-            message = client.messages.create(
+            message = await asyncio.to_thread(
+                client.messages.create,
                 model=model_name,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
@@ -355,16 +358,25 @@ def review_phase1(
                 if hasattr(block, "text") and block.text:
                     text_parts.append(block.text)
             output = "\n".join(text_parts)
-
             findings_part, reasoning = _parse_llm_output(output, paragraphs, PHASE1_RULES)
-            semantic_findings.extend(findings_part)
             reason_preview = reasoning[:40] if reasoning else "(无)"
             print(f"  phase1 第 {attempt+1} 次: {len(findings_part)} 条, reasoning: {reason_preview}...", flush=True)
+            return findings_part, reasoning, None
         except Exception as exc:
-            llm_errors.append(str(exc))
             print(f"  phase1 第 {attempt+1} 次失败: {exc}", flush=True)
+            return [], "", str(exc)
 
-    # 3次全部失败
+    # 并行执行两次 LLM 调用
+    results = await asyncio.gather(
+        _call_phase1_once(0),
+        _call_phase1_once(1),
+    )
+    for findings_part, reasoning, err in results:
+        if err:
+            llm_errors.append(err)
+        semantic_findings.extend(findings_part)
+
+    # 全部失败
     if not semantic_findings and llm_errors:
         return ReviewResult(
             findings=[Finding(
@@ -404,7 +416,7 @@ def review_phase1(
     )
 
 
-def review_phase2(
+async def review_phase2(
     paragraphs: list[str],
     rules_text: str,
     filename: str,
@@ -420,11 +432,13 @@ def review_phase2(
     semantic_findings: list[Finding] = []
     llm_errors: list[str] = []
 
-    for attempt in range(2):
+    async def _call_phase2_once(attempt: int) -> tuple[list[Finding], str, str | None]:
+        """单次 LLM 调用（异步执行）。"""
         try:
             client, model_name = _get_anthropic_client()
             prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=2)
-            message = client.messages.create(
+            message = await asyncio.to_thread(
+                client.messages.create,
                 model=model_name,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
@@ -435,16 +449,24 @@ def review_phase2(
                 if hasattr(block, "text") and block.text:
                     text_parts.append(block.text)
             output = "\n".join(text_parts)
-
             findings_part, reasoning = _parse_llm_output(output, paragraphs, PHASE2_RULES)
-            semantic_findings.extend(findings_part)
             reason_preview = reasoning[:40] if reasoning else "(无)"
             print(f"  phase2 第 {attempt+1} 次: {len(findings_part)} 条, reasoning: {reason_preview}...", flush=True)
+            return findings_part, reasoning, None
         except Exception as exc:
-            llm_errors.append(str(exc))
             print(f"  phase2 第 {attempt+1} 次失败: {exc}", flush=True)
+            return [], "", str(exc)
 
-    # 3次全部失败
+    results = await asyncio.gather(
+        _call_phase2_once(0),
+        _call_phase2_once(1),
+    )
+    for findings_part, reasoning, err in results:
+        if err:
+            llm_errors.append(err)
+        semantic_findings.extend(findings_part)
+
+    # 全部失败
     if not semantic_findings and llm_errors:
         return ReviewResult(
             findings=[Finding(

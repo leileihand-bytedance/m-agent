@@ -172,17 +172,22 @@ def check_mixed_punct(paragraphs: list[str]) -> list["Finding"]:
 # consecutive-punct: 连续相同标点
 # ============================================================
 
-_CONSECUTIVE_PUNCT_RE = re.compile(r'[，。！？；：""''（）【】》』」]{2,}')
+_CONSECUTIVE_PUNCT_RE = re.compile(r'[，。！？；]{2,}|(?<=[？！；])([？！；])')
 
 
 def check_consecutive_punct(paragraphs: list[str]) -> list["Finding"]:
-    """检测连续相同标点字符（如。。、！！、，，）。"""
+    """检测连续相同标点字符（如。。、！！），排除书名号/引号后紧跟标点的正常用法。"""
     from .reviewer import Finding
     findings = []
 
     for idx, para in enumerate(paragraphs):
         for m in _CONSECUTIVE_PUNCT_RE.finditer(para):
             repeated = m.group()
+            # 跳过书名号/引号后紧跟标点的情况（如"》。"、"》，"是正常用法）
+            if m.start() > 0:
+                prev_char = para[m.start() - 1]
+                if prev_char in '""''""''《』（）【】':
+                    continue
             findings.append(Finding(
                 rule_id="consecutive-punct",
                 paragraph_index=idx,

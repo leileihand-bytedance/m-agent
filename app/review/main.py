@@ -394,7 +394,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
         from app.review.output_formatter import format_phase1_result, format_phase2_result  # noqa: E402
 
-        phase1_result = review_phase1(parsed.paragraphs, rules_text, filename)
+        phase1_result = await review_phase1(parsed.paragraphs, rules_text, filename)
 
         # 立即发第一阶段结果
         phase1_reply = format_phase1_result(phase1_result)
@@ -411,9 +411,20 @@ async def run_review_bot(config: ReviewConfig) -> None:
             print(f"⚠️ 第一阶段发送失败:{exc}", flush=True)
 
         # 7. 第二阶段审核（深度内容 LLM）
-        phase2_result = review_phase2(parsed.paragraphs, rules_text, filename)
+        phase2_result = await review_phase2(parsed.paragraphs, rules_text, filename)
 
-        # 8. 存档（完整结果存档到 phase2_result）
+        # 8. 合并两个阶段的 findings，存档用完整结果
+        from app.review.reviewer import ReviewResult
+        all_findings = list(phase1_result.findings)
+        all_findings.extend(phase2_result.findings)
+        all_findings.sort(key=lambda f: f.paragraph_index)
+        combined_result = ReviewResult(
+            findings=all_findings,
+            total_rules=phase1_result.total_rules + phase2_result.total_rules,
+            passed_rules=phase1_result.passed_rules + phase2_result.passed_rules,
+            filename=filename,
+        )
+
         msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
         review_dir = None
         try:
@@ -423,10 +434,10 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 original_filename=filename,
                 sender=sender,
                 msgid=msgid,
-                result=phase2_result,
+                result=combined_result,
                 parsed_paragraphs=parsed.paragraphs,
             )
-            print(f"✅ 审核完成:{filename} ({len(phase2_result.findings)} 个问题),存档:{review_dir}", flush=True)
+            print(f"✅ 审核完成:{filename} ({len(combined_result.findings)} 个问题),存档:{review_dir}", flush=True)
         except Exception as exc:
             print(f"⚠️ 存档失败:{exc}", flush=True)
 

@@ -5,12 +5,43 @@
 
 ---
 
+## 一一三、[2026-06-24] Phase1/Phase2 并行执行 & 规则持续优化
+
+### Phase1/Phase2 并行化
+
+- Phase1 两次 LLM 调用改为 `asyncio.gather` 并行执行，耗时从 ~185s 降至 ~90s
+- Phase2 同样改为并行执行
+- `review_phase1` / `review_phase2` 改为 `async` 函数
+- 修复 `asyncio` 未 import 的 bug（导致审核完全没结果）
+
+### 存档逻辑修复
+
+- 之前只保存 phase2_result，导致 phase1 findings（格式检查等）丢失
+- 现在合并 phase1 + phase2 所有 findings 再存档
+
+### 新增格式规则 `consecutive-punct`
+
+- 检测连续相同标点（`。。`、`！！`），排除书名号后紧跟标点的正常用法（`》。`、`》，`）
+- Phase1 格式规则从 5 条增至 6 条
+
+### rules.md 规则强化
+
+- **content-mismatch**：会议名称须精确匹配，标题说"金融稳定工作会议"但正文说"国库工作会议"须报错配
+- **content-wrong-section**：明确"资本市场综述/股市/债市/汇市评论"属于市场观察，不得放入监管动态
+
+### Bot 状态
+
+- PID: 91585 在线
+- 日志: /tmp/review-bot.log
+
+---
+
 ## 一一二、[2026-06-24] 两阶段审核拆分 & 规则优化
 
 ### 两阶段架构
 
-**Phase 1（低级错误，10条）：**
-- 格式正则（5条）：`quote-pair`、`num-unit`、`mixed-punct`、`toc-no-ordinal`、`toc-seq-skip`
+**Phase 1（低级错误，11条）：**
+- 格式正则（6条）：`quote-pair`、`num-unit`、`mixed-punct`、`consecutive-punct`、`toc-no-ordinal`、`toc-seq-skip`
 - 基础语义（4条）：`title-truncated`、`content-mismatch`、`content-incomplete`、`toc-mismatch`
 - LLM 调用：2次取并集
 
