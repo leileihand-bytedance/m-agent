@@ -331,7 +331,7 @@ def review_phase1(
         ReviewResult（含格式类 findings + phase1 语义 findings）
     """
     if not paragraphs:
-        return ReviewResult(findings=[], total_rules=len(PHASE1_RULES) + 5, passed_rules=len(PHASE1_RULES) + 5, filename=filename)
+        return ReviewResult(findings=[], total_rules=len(PHASE1_RULES) + 6, passed_rules=len(PHASE1_RULES) + 6, filename=filename)
 
     # 格式类规则（正则，秒级）
     format_findings = check_all_format_rules(paragraphs)
@@ -374,7 +374,7 @@ def review_phase1(
                 original_text="(LLM 调用失败)",
                 description=f"LLM phase1 调用失败:{'; '.join(llm_errors)}",
             )],
-            total_rules=len(PHASE1_RULES) + 5,
+            total_rules=len(PHASE1_RULES) + 6,
             passed_rules=0,
             filename=filename,
         )
@@ -394,11 +394,11 @@ def review_phase1(
 
     # 计算通过规则数
     hit_rule_ids = {f.rule_id for f in all_findings if not f.rule_id.startswith("__")}
-    passed_rules = (len(PHASE1_RULES) + 5) - len(hit_rule_ids)
+    passed_rules = (len(PHASE1_RULES) + 6) - len(hit_rule_ids)
 
     return ReviewResult(
         findings=all_findings,
-        total_rules=len(PHASE1_RULES) + 5,
+        total_rules=len(PHASE1_RULES) + 6,
         passed_rules=max(0, passed_rules),
         filename=filename,
     )

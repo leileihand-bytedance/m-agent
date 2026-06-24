@@ -4,6 +4,7 @@
 - quote-pair: 引号不成对
 - num-unit: 数字和单位之间有空格
 - mixed-punct: 中英文标点混用
+- consecutive-punct: 连续相同标点（如。。、！！）
 - toc-no-ordinal: 目录项带序号
 - toc-seq-skip: 目录序号跳号
 """
@@ -168,6 +169,31 @@ def check_mixed_punct(paragraphs: list[str]) -> list["Finding"]:
 
 
 # ============================================================
+# consecutive-punct: 连续相同标点
+# ============================================================
+
+_CONSECUTIVE_PUNCT_RE = re.compile(r'[，。！？；：""''（）【】》』」]{2,}')
+
+
+def check_consecutive_punct(paragraphs: list[str]) -> list["Finding"]:
+    """检测连续相同标点字符（如。。、！！、，，）。"""
+    from .reviewer import Finding
+    findings = []
+
+    for idx, para in enumerate(paragraphs):
+        for m in _CONSECUTIVE_PUNCT_RE.finditer(para):
+            repeated = m.group()
+            findings.append(Finding(
+                rule_id="consecutive-punct",
+                paragraph_index=idx,
+                line_number=idx + 1,
+                original_text=para,
+                description=f"连续相同标点: '{repeated}'",
+            ))
+    return findings
+
+
+# ============================================================
 # toc-no-ordinal: 目录项/章节标题带序号
 # ============================================================
 
@@ -275,6 +301,7 @@ def check_all_format_rules(paragraphs: list[str]) -> list["Finding"]:
     all_findings.extend(check_quote_pair(paragraphs))
     all_findings.extend(check_num_unit(paragraphs))
     all_findings.extend(check_mixed_punct(paragraphs))
+    all_findings.extend(check_consecutive_punct(paragraphs))
     all_findings.extend(check_toc_no_ordinal(paragraphs))
     all_findings.extend(check_toc_seq_skip(paragraphs))
     # 按段号排序

@@ -158,6 +158,7 @@ def _rule_label(rule_id: str) -> str:
         "toc-mismatch": "目录正文不匹配",
         "num-unit": "数字单位格式",
         "mixed-punct": "中英文标点混用",
+        "consecutive-punct": "连续相同标点",
         "content-out-of-scope": "内容不在收录范围",
         "content-wrong-section": "内容放错板块",
         "content-duplicate": "重复内容",
