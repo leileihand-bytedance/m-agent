@@ -623,10 +623,11 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
     """检测内容放错板块（content-wrong-section）。
 
     识别流程：
-    1. 定位每个新闻段落所属板块（往前找最近的板块分类标题）
-    2. 从标题+正文提取内容主体
-    3. 关键词匹配判断期望板块
-    4. 期望板块与实际板块不一致 → 报错
+    1. 遍历段落，识别当前板块标题
+    2. 只检测新闻标题段落（5-60字符，无句末标点），正文跟随标题
+    3. 标题含实体关键词 → 匹配期望板块
+    4. 实体出现在引用语境（"据X数据显示"）→ 不作为主体判断
+    5. 期望板块与实际板块不一致 → 报错
     """
     from .reviewer import Finding
     from .section_entities import (
@@ -647,39 +648,54 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
     for idx, para in enumerate(paragraphs):
         stripped = para.strip()
 
-        is_section_title = False
-        for kw in SECTION_KEYWORDS:
-            if stripped == kw:
-                current_section = kw
-                is_section_title = True
-                break
-
-        if is_section_title:
+        # 识别并更新当前板块
+        if stripped in SECTION_KEYWORDS:
+            current_section = stripped
             continue
+
+        # 跳过非正文区
         if current_section is None:
             continue
         if current_section == "前沿观点":
             continue
 
+        # ===== 标题优先：只检测新闻标题 =====
+        # 正文段落跟随所属标题，不再单独检测
+        if not _is_news_title(para):
+            continue
+
+        # 检查文本中是否有实体关键词（排除引用语境）
         text_to_check = stripped[:180]
 
         matched_entity = None
         expected_section = None
 
+        # 监管动态实体（一行一局一会）
         for kw in REGULATORY_ENTITIES:
             if kw in text_to_check:
+                # 排除引用语境（如"据中国人民银行数据"）
+                if _is_entity_in_citation_context(text_to_check, kw):
+                    continue
                 matched_entity = kw
                 expected_section = "监管动态"
                 break
+
+        # 党政要闻实体（党和国家领导人、国务院各部委）
         if not matched_entity:
             for kw in PARTY_GOV_ENTITIES:
                 if kw in text_to_check:
+                    if _is_entity_in_citation_context(text_to_check, kw):
+                        continue
                     matched_entity = kw
                     expected_section = "党政要闻"
                     break
+
+        # 同业动向实体（民营/数字银行）
         if not matched_entity:
             for kw in BANKING_ENTITIES:
                 if kw in text_to_check:
+                    if _is_entity_in_citation_context(text_to_check, kw):
+                        continue
                     matched_entity = kw
                     expected_section = "同业动向"
                     break
@@ -697,3 +713,51 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
             ))
 
     return findings
+
+
+def _is_news_title(para: str) -> bool:
+    """判断段落是否为新闻标题。
+
+    标准：长度 5-60 字符，末尾无句末标点。
+    """
+    stripped = para.strip()
+    if not stripped:
+        return False
+    if len(stripped) < 5 or len(stripped) > 60:
+        return False
+    # 新闻标题通常不以句末标点结尾
+    return stripped[-1] not in "。！？；?!."
+
+
+def _is_entity_in_citation_context(text: str, entity: str) -> bool:
+    """判断实体是否在引用语境中出现（数据来源而非主体）。
+
+    例如：'据中国人民银行数据显示' 中的'中国人民银行'是数据来源，不是主体。
+    """
+    # 找到实体在文本中的所有位置
+    start = 0
+    while True:
+        pos = text.find(entity, start)
+        if pos == -1:
+            break
+
+        # 检查实体前面30字符内是否有引用前缀
+        prefix_start = max(0, pos - 30)
+        prefix = text[prefix_start:pos]
+
+        for pfx in ("据", "根据", "来自", "依据"):
+            if prefix.endswith(pfx):
+                return True
+
+        # 检查是否是 "X数据显示" / "X公布的数据" 等模式
+        # 必须是 "数据显示" / "公布的数据" / "统计" 等完整后缀
+        entity_end = pos + len(entity)
+        suffix = text[entity_end:entity_end + 10]
+
+        for kw in ("数据显示", "公布的数据", "统计数据", "发布的数据"):
+            if suffix.startswith(kw):
+                return True
+
+        start = pos + 1
+
+    return False

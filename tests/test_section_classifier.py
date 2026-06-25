@@ -75,3 +75,41 @@ def test_csrc_in_regulatory():
     findings = check_section_mismatch(paragraphs)
     wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
     assert len(wrong_section) == 0
+
+
+def test_citation_context_not_flagged():
+    """正文引用'中国人民银行数据'不应作为主体报错."""
+    paragraphs = [
+        "市场观察",
+        "需求疲软下中国新增贷款降至七年新低",
+        "2025年全年，中国银行业新增贷款额创2018年以来最低水平。据中国人民银行1月15日公布的数据计算，12月金融机构新增人民币贷款...",
+    ]
+    findings = check_section_mismatch(paragraphs)
+    wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
+    assert len(wrong_section) == 0, f"正文引用数据不应报错，实际报了{len(wrong_section)}条: {[f.description for f in wrong_section]}"
+
+
+def test_news_title_only_checked():
+    """正文含央行关键词但标题不含 → 不报错."""
+    paragraphs = [
+        "市场观察",
+        "需求疲软下中国新增贷款降至七年新低",
+        "2025年全年，中国人民银行...数据...",
+    ]
+    findings = check_section_mismatch(paragraphs)
+    wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
+    assert len(wrong_section) == 0, f"正文关键词不应触发检测，实际报了{len(wrong_section)}条"
+
+
+def test_consecutive_titles_deduped():
+    """同一新闻的多个标题+正文只报一条."""
+    paragraphs = [
+        "监管动态",
+        "国务院党组会议召开学习贯彻习近平总书记在二十届中央纪委五次全会上的重要讲话和全会精神",
+        "1月14日，国务院总理、党组书记李强主持召开国务院党组会议...",
+        "1月14日，国务院总理、党组书记李强主持召开国务院党组会议，学习贯彻习近平总书记在二十届中央纪委五次全会上的重要讲话和全会精神，部署进一步推动政府党风廉政建设和...",
+    ]
+    findings = check_section_mismatch(paragraphs)
+    wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
+    # 只有一个标题段落含实体关键词（段37），应该只报1条
+    assert len(wrong_section) == 1, f"应只报1条，实际报了{len(wrong_section)}条: {[f.paragraph_index for f in wrong_section]}"
