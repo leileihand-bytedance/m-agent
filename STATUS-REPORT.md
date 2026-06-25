@@ -5,6 +5,43 @@
 
 ---
 
+## 一一四、[2026-06-25] content-wrong-section 代码化检测
+
+### 问题
+
+Phase 2 的 `content-wrong-section`（板块归位错误）依赖 LLM 判断，不稳定漏报。"国务院会议"被放在监管动态没被检测出来。
+
+### 方案
+
+代码化关键词匹配 + LLM 兜底 Hybrid 架构：
+
+**板块主体关键词库**（`app/review/section_entities.py`）：
+- **监管动态**：REGULATORY_ENTITIES — 中国人民银行/央行、金融监管总局、证监会、外汇管理局
+- **党政要闻**：PARTY_GOV_ENTITIES — 党和国家领导人、国务院/国务院各部委（39个）
+- **同业动向**：BANKING_ENTITIES — 民营银行/数字银行（8个）
+
+**检测流程**：
+1. 遍历段落，识别当前所属板块（往前找最近的板块分类标题）
+2. 从标题+正文提取前180字作为识别文本
+3. 关键词匹配判断期望板块（REGULATORY > PARTY_GOV > BANKING）
+4. 期望板块 ≠ 实际板块 → 报错
+
+**Phase 2 集成**：`review_phase2()` 中先执行代码预检测，再调用 LLM，两路结果合并去重。
+
+### 文件改动
+
+- `app/review/section_entities.py` — **新建**，板块主体关键词库
+- `app/review/reviewer.py` — 新增 `check_section_mismatch()` 函数，集成到 `review_phase2`
+- `tests/test_section_classifier.py` — **新建**，6个测试用例
+- `app/data/rules.md` — 标注 `content-wrong-section` 检测方式
+
+### Bot 状态
+
+- PID: 5364 在线
+- 日志: /tmp/review-bot.log
+
+---
+
 ## 一一三、[2026-06-24] Phase1/Phase2 并行执行 & 规则持续优化
 
 ### Phase1/Phase2 并行化
