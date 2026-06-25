@@ -632,6 +632,7 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
     from .reviewer import Finding
     from .section_entities import (
         REGULATORY_ENTITIES, PARTY_GOV_ENTITIES, BANKING_ENTITIES,
+        MARKET_OBSERVATION_MARKERS,
     )
 
     SECTION_KEYWORDS = {
@@ -698,6 +699,15 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
                         continue
                     matched_entity = kw
                     expected_section = "同业动向"
+                    break
+
+        # 市场观察专属内容类型（A股综述/港股/美股/债市/汇市/大宗商品）
+        # 这些内容类型只能放在市场观察
+        if not matched_entity:
+            for kw in MARKET_OBSERVATION_MARKERS:
+                if kw in text_to_check:
+                    matched_entity = kw
+                    expected_section = "市场观察"
                     break
 
         if not matched_entity:

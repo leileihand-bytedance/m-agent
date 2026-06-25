@@ -45,12 +45,24 @@ def test_no_match_no_error():
     """无关键词匹配（市场观察兜底）→ 不报错."""
     paragraphs = [
         "监管动态",
+        "某公司推出新产品",
+        "该公司近日推出了一款创新产品...",
+    ]
+    findings = check_section_mismatch(paragraphs)
+    wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
+    assert len(wrong_section) == 0
+
+
+def test_market_observation_in_wrong_section():
+    """A股市场综述放在监管动态 → 应报错."""
+    paragraphs = [
+        "监管动态",
         "本周A股主要指数集体走强",
         "本周A股主要指数集体走强，延续跨年强势行情...",
     ]
     findings = check_section_mismatch(paragraphs)
     wrong_section = [f for f in findings if f.rule_id == "content-wrong-section"]
-    assert len(wrong_section) == 0
+    assert len(wrong_section) == 1, f"A股综述在监管动态应报错，实际{len(wrong_section)}条"
 
 
 def test_pbc_in_regulatory():
