@@ -466,6 +466,14 @@ async def review_phase2(
             llm_errors.append(err)
         semantic_findings.extend(findings_part)
 
+    # ===== 代码化预检测（确定性高）=====
+    from .section_entities import (
+        REGULATORY_ENTITIES, PARTY_GOV_ENTITIES, BANKING_ENTITIES,
+    )
+    code_findings = check_section_mismatch(paragraphs)
+    semantic_findings.extend(code_findings)
+    # =====================================
+
     # 全部失败
     if not semantic_findings and llm_errors:
         return ReviewResult(
