@@ -609,3 +609,83 @@ def review_text(
 def _compute_line_number(paragraphs: list[str], paragraph_index: int) -> int:
     """估算段落对应的行号(从1开始).保留以兼容旧调用."""
     return paragraph_index + 1
+
+
+def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
+    """检测内容放错板块（content-wrong-section）。
+
+    识别流程：
+    1. 定位每个新闻段落所属板块（往前找最近的板块分类标题）
+    2. 从标题+正文提取内容主体
+    3. 关键词匹配判断期望板块
+    4. 期望板块与实际板块不一致 → 报错
+    """
+    from .reviewer import Finding
+    from .section_entities import (
+        REGULATORY_ENTITIES, PARTY_GOV_ENTITIES, BANKING_ENTITIES,
+    )
+
+    SECTION_KEYWORDS = {
+        "党政要闻": "党政要闻",
+        "监管动态": "监管动态",
+        "同业动向": "同业动向",
+        "市场观察": "市场观察",
+        "前沿观点": "前沿观点",
+    }
+
+    findings = []
+    current_section = None
+
+    for idx, para in enumerate(paragraphs):
+        stripped = para.strip()
+
+        is_section_title = False
+        for kw in SECTION_KEYWORDS:
+            if stripped == kw:
+                current_section = kw
+                is_section_title = True
+                break
+
+        if is_section_title:
+            continue
+        if current_section is None:
+            continue
+        if current_section == "前沿观点":
+            continue
+
+        text_to_check = stripped[:180]
+
+        matched_entity = None
+        expected_section = None
+
+        for kw in REGULATORY_ENTITIES:
+            if kw in text_to_check:
+                matched_entity = kw
+                expected_section = "监管动态"
+                break
+        if not matched_entity:
+            for kw in PARTY_GOV_ENTITIES:
+                if kw in text_to_check:
+                    matched_entity = kw
+                    expected_section = "党政要闻"
+                    break
+        if not matched_entity:
+            for kw in BANKING_ENTITIES:
+                if kw in text_to_check:
+                    matched_entity = kw
+                    expected_section = "同业动向"
+                    break
+
+        if not matched_entity:
+            continue
+
+        if current_section != expected_section:
+            findings.append(Finding(
+                rule_id="content-wrong-section",
+                paragraph_index=idx,
+                line_number=idx + 1,
+                original_text=para,
+                description=f"内容主体'{matched_entity}'应归入{expected_section}，却放在了{current_section}",
+            ))
+
+    return findings
