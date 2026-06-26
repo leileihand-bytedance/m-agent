@@ -340,7 +340,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         # 1. ACK（快速回复，不进队列）
         await ws_client.reply_stream(
             frame, stream_id,
-            "已收到文件,在努力审核了,请稍等……", True,
+            "收到文件啦，正在加紧审核，请稍等（模型反应有点慢，你可以先干点别的，一会儿再来看）……", True,
         )
 
         # 2. 下载(SDK 内部从 HTTP Content-Disposition 拿真实 filename)

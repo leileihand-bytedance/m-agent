@@ -71,9 +71,9 @@ def format_phase1_result(result: ReviewResult, max_findings: int = 20) -> str:
     """格式化第一阶段审核结果（发给用户的第一条消息）。
 
     格式：
-    第一阶段审核完成（低级错误）
+    第一阶段审核结果如下：
 
-    格式检查 + 基础内容审核，共 N 条：
+    共 N 条：
     错误1:【规则标签】问题描述
     所属段落：原文...
     ...
@@ -85,8 +85,8 @@ def format_phase1_result(result: ReviewResult, max_findings: int = 20) -> str:
     sorted_findings = sorted(findings, key=lambda f: f.paragraph_index)
     display = sorted_findings[:max_findings]
 
-    lines = ["第一阶段审核完成（低级错误）", ""]
-    lines.append(f"格式检查 + 基础内容审核，共 {total} 条：")
+    lines = ["第一阶段审核结果如下：", ""]
+    lines.append(f"共 {total} 条：")
 
     shown = 0
     for i, f in enumerate(display, 1):
@@ -113,9 +113,9 @@ def format_phase2_result(result: ReviewResult, max_findings: int = 20) -> str:
     """格式化第二阶段审核结果（追加发给用户的第二条消息）。
 
     格式：
-    第二阶段审核完成（内容质量）
+    第二阶段审核结果如下：
 
-    深度内容审核，共 N 条：
+    共 N 条：
     错误1:【规则标签】问题描述
     所属段落：原文...
     ...
@@ -125,8 +125,8 @@ def format_phase2_result(result: ReviewResult, max_findings: int = 20) -> str:
     sorted_findings = sorted(findings, key=lambda f: f.paragraph_index)
     display = sorted_findings[:max_findings]
 
-    lines = ["第二阶段审核完成（内容质量）", ""]
-    lines.append(f"深度内容审核，共 {total} 条：")
+    lines = ["第二阶段审核结果如下：", ""]
+    lines.append(f"共 {total} 条：")
 
     shown = 0
     for i, f in enumerate(display, 1):
