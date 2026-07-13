@@ -84,7 +84,7 @@ direct_report, writer1
 后台读取：
 
 ```text
-data/platform/jobs/
+../M-Agent-Files/tasks/writing/YYYY/MM/
 ```
 
 只展示任务摘要，包括：
@@ -104,7 +104,7 @@ data/platform/jobs/
 第一阶段只管理本地 SQLite 政策库：
 
 ```text
-data/policy_knowledge/policies.sqlite3
+../M-Agent-Files/knowledge/policy/policies.sqlite3
 ```
 
 后台页面应提供：
@@ -113,7 +113,7 @@ data/policy_knowledge/policies.sqlite3
 2. 筛选搜索：支持按来源、分类、关键词筛选。
 3. 勾选删除：支持批量勾选无关政策。
 4. 删除预览：删除前展示待删除清单。
-5. 自动备份：真正删除前先复制 SQLite 到 `data/policy_knowledge/backups/`。
+5. 自动备份：真正删除前先复制 SQLite 到 `../M-Agent-Files/knowledge/policy/backups/`。
 
 建议数据流：
 
@@ -121,7 +121,7 @@ data/policy_knowledge/policies.sqlite3
 管理后台页面
   -> app/admin/services.py
   -> app.policy_knowledge.store
-  -> data/policy_knowledge/policies.sqlite3
+  -> ../M-Agent-Files/knowledge/policy/policies.sqlite3
   -> 备份 SQLite
   -> 删除所选 source + doc_id
 ```

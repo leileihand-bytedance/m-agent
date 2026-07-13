@@ -8,6 +8,7 @@ import socket
 import subprocess
 
 from app.platform.config import normalize_direct_report_critic_mode, parse_bool
+from app.platform.data_paths import DataPaths, configured_path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_PATH = ROOT / ".env"
@@ -22,6 +23,9 @@ class WritingBotConfig:
     anthropic_base_url: str
     skills_dir: Path
     jobs_dir: Path
+    policy_db_path: Path
+    bank_db_path: Path
+    conversation_dir: Path
     model_max_tokens: int = 4096
     direct_report_critic_mode: str = "advisory"
     chat_log_enabled: bool = True
@@ -119,31 +123,38 @@ def _default_portal_base_url(*, host: str, port: int) -> str:
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     values = parse_env_file(env_path)
+    data_paths = DataPaths.from_values(values, project_root=ROOT)
     skills_dir = Path(values.get("M_AGENT_SKILLS_DIR", str(ROOT / "skills")) or str(ROOT / "skills"))
     if not skills_dir.is_absolute():
         skills_dir = ROOT / skills_dir
-    jobs_dir = Path(values.get("M_AGENT_PLATFORM_JOBS_DIR", str(ROOT / "data/platform/jobs")) or str(ROOT / "data/platform/jobs"))
-    if not jobs_dir.is_absolute():
-        jobs_dir = ROOT / jobs_dir
+    jobs_dir = configured_path(
+        values, "M_AGENT_PLATFORM_JOBS_DIR", data_paths.writing_jobs, project_root=ROOT
+    )
+    policy_db_path = configured_path(
+        values, "M_AGENT_POLICY_DB_PATH", data_paths.policy_db, project_root=ROOT
+    )
+    bank_db_path = configured_path(
+        values, "M_AGENT_BANK_DB_PATH", data_paths.bank_db, project_root=ROOT
+    )
+    conversation_dir = configured_path(
+        values, "M_AGENT_CONVERSATION_DIR", data_paths.conversations, project_root=ROOT
+    )
     policy_path_raw = values.get("M_AGENT_PLATFORM_POLICY", "").strip()
     access_policy_path = Path(policy_path_raw) if policy_path_raw else None
     if access_policy_path and not access_policy_path.is_absolute():
         access_policy_path = ROOT / access_policy_path
-    chat_log_dir = Path(values.get("M_AGENT_CHAT_LOG_DIR", str(ROOT / "data/platform/chat_logs")) or str(ROOT / "data/platform/chat_logs"))
-    if not chat_log_dir.is_absolute():
-        chat_log_dir = ROOT / chat_log_dir
-    ops_events_dir = Path(values.get("M_AGENT_OPS_EVENTS_DIR", str(ROOT / "data/platform/ops_events")) or str(ROOT / "data/platform/ops_events"))
-    if not ops_events_dir.is_absolute():
-        ops_events_dir = ROOT / ops_events_dir
-    ops_heartbeat_dir = Path(values.get("M_AGENT_OPS_HEARTBEAT_DIR", str(ROOT / "data/platform/heartbeats")) or str(ROOT / "data/platform/heartbeats"))
-    if not ops_heartbeat_dir.is_absolute():
-        ops_heartbeat_dir = ROOT / ops_heartbeat_dir
-    user_registry_path = Path(
-        values.get("M_AGENT_USER_REGISTRY_PATH", str(ROOT / "data/review_users.yaml"))
-        or str(ROOT / "data/review_users.yaml")
+    chat_log_dir = configured_path(
+        values, "M_AGENT_CHAT_LOG_DIR", data_paths.chat_logs, project_root=ROOT
     )
-    if not user_registry_path.is_absolute():
-        user_registry_path = ROOT / user_registry_path
+    ops_events_dir = configured_path(
+        values, "M_AGENT_OPS_EVENTS_DIR", data_paths.ops_events, project_root=ROOT
+    )
+    ops_heartbeat_dir = configured_path(
+        values, "M_AGENT_OPS_HEARTBEAT_DIR", data_paths.heartbeats, project_root=ROOT
+    )
+    user_registry_path = configured_path(
+        values, "M_AGENT_USER_REGISTRY_PATH", data_paths.user_registry, project_root=ROOT
+    )
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
     portal_host = values.get("M_AGENT_PORTAL_HOST", "127.0.0.1") or "127.0.0.1"
@@ -162,6 +173,9 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         or "https://api.minimaxi.com/anthropic",
         skills_dir=skills_dir,
         jobs_dir=jobs_dir,
+        policy_db_path=policy_db_path,
+        bank_db_path=bank_db_path,
+        conversation_dir=conversation_dir,
         model_max_tokens=model_max_tokens,
         direct_report_critic_mode=normalize_direct_report_critic_mode(
             values.get("M_AGENT_DIRECT_REPORT_CRITIC_MODE")

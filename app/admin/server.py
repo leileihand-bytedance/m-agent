@@ -10,13 +10,22 @@ from typing import Callable
 from urllib.parse import parse_qs
 
 from app.admin.services import AdminPaths, list_jobs, list_policy_users, list_skills, set_skill_enabled, set_user_skills
+from app.platform.config import DEFAULT_ENV_PATH, parse_env_file
+from app.platform.data_paths import DataPaths, configured_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ENV_VALUES = parse_env_file(DEFAULT_ENV_PATH)
+_DATA_PATHS = DataPaths.from_values(_ENV_VALUES, project_root=PROJECT_ROOT)
 DEFAULT_PATHS = AdminPaths(
     skills_dir=PROJECT_ROOT / "skills",
     policy_path=PROJECT_ROOT / "config" / "platform-policy.yaml",
-    jobs_dir=PROJECT_ROOT / "data" / "platform" / "jobs",
+    jobs_dir=configured_path(
+        _ENV_VALUES,
+        "M_AGENT_PLATFORM_JOBS_DIR",
+        _DATA_PATHS.writing_jobs,
+        project_root=PROJECT_ROOT,
+    ),
 )
 
 

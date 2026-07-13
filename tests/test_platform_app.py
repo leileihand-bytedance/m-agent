@@ -53,7 +53,7 @@ def test_platform_app_handles_allowed_text_request_and_records_job(tmp_path):
     assert result.skill_id == "direct_report"
     assert result.output["title"] == "微众银行直报标题"
 
-    result_files = list(tmp_path.glob("*/output/result.json"))
+    result_files = list(tmp_path.glob("**/output/result.json"))
     assert len(result_files) == 1
     recorded = json.loads(result_files[0].read_text(encoding="utf-8"))
     assert recorded["skill_id"] == "direct_report"
@@ -446,7 +446,7 @@ def test_platform_app_records_registered_sender_name(tmp_path):
         text="帮我根据这个链接写直报：https://example.com/news",
     )
 
-    meta_path = next((tmp_path / "jobs").glob("*/meta.json"))
+    meta_path = next((tmp_path / "jobs").glob("**/meta.json"))
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     conversation = conversation_store.get_active_conversation(
         channel="wecom",
@@ -655,7 +655,7 @@ def test_platform_app_adds_job_context_to_workflow_inputs(tmp_path):
 
     assert seen_payloads
     assert "materials" in seen_payloads[0]
-    meta_files = list(tmp_path.glob("*/meta.json"))
+    meta_files = list(tmp_path.glob("**/meta.json"))
     assert len(meta_files) == 1
 
 
@@ -726,7 +726,7 @@ def test_platform_app_runs_writer1_end_to_end_with_policy_materials(tmp_path):
     assert seen_payloads[0]["skill_id"] == "writer1"
     assert seen_payloads[0]["materials"][1]["source"] == "policy_knowledge"
 
-    result_files = list(tmp_path.glob("*/output/result.json"))
+    result_files = list(tmp_path.glob("**/output/result.json"))
     assert len(result_files) == 1
     recorded = json.loads(result_files[0].read_text(encoding="utf-8"))
     assert recorded["skill_id"] == "writer1"
@@ -801,7 +801,7 @@ def test_platform_app_handles_structured_brief_submission_with_uploaded_files(tm
         "材料B.pdf",
     ]
 
-    saved_files = sorted(path.name for path in tmp_path.glob("*/input/*"))
+    saved_files = sorted(path.name for path in tmp_path.glob("**/input/*"))
     assert saved_files == ["材料A.docx", "材料B.pdf"]
 
 
@@ -849,7 +849,7 @@ def test_platform_app_checks_permission_before_saving_uploaded_files(tmp_path):
     )
 
     assert result.message == "你没有使用该能力的权限。"
-    assert list(jobs_dir.glob("*/input/*")) == []
+    assert list(jobs_dir.glob("**/input/*")) == []
 
 
 def test_platform_app_starts_new_rewrite_task_instead_of_revising_active_direct_report(tmp_path):

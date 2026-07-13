@@ -38,7 +38,7 @@
 导入后生成：
 
 ```text
-data/bank_knowledge/bank.sqlite3
+../M-Agent-Files/knowledge/bank/bank.sqlite3
 ```
 
 该数据库包含内部或敏感材料，已加入 `.gitignore`，不要提交。

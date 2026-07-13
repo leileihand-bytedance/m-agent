@@ -6,15 +6,12 @@ from pathlib import Path
 
 from app.bank_knowledge.ingest import import_folder
 from app.bank_knowledge.store import BankKnowledgeStore
-from app.platform.config import ROOT
-
-
-DEFAULT_DB_PATH = ROOT / "data/bank_knowledge/bank.sqlite3"
+from app.platform.config import load_config
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="微众银行信息库导入和检索工具")
-    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite 数据库路径")
+    parser.add_argument("--db", default=str(load_config().bank_db_path), help="SQLite 数据库路径")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     import_parser = subparsers.add_parser("import-folder", help="导入一个本地信息库文件夹")

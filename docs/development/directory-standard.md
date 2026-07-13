@@ -10,9 +10,20 @@ M-Agent/
 ├── skills/
 ├── tests/
 ├── docs/
-├── data/
 └── scripts/
 ```
+
+运行数据不再放在代码仓库内，默认位于项目同级的桌面目录：
+
+```text
+M-Agent-Files/
+├── tasks/          # 用户上传和系统生成的任务文件
+├── knowledge/      # 政策库、政策 Wiki、微众银行信息库
+├── runtime/        # 会话、日志、用户名表、运维事件和心跳
+└── legacy/         # 历史运行数据迁移保留区
+```
+
+该目录不建立 Git 仓库，也不允许复制进 `M-Agent/` 后提交。
 
 ## `app/platform/`
 
@@ -258,24 +269,26 @@ docs/archive/           # 历史方案，不作为新开发依据
 
 新增能力时更新 `docs/capabilities/README.md` 或新增能力文档。
 
-## `config/` 与 `data/` 的边界
+## `config/` 与运行数据的边界
 
 ```text
-config/    # 静态配置，可随仓库提交
+M-Agent/config/    # 静态配置，可随仓库提交
     platform-policy.yaml          # 用户 skill 权限策略
     platform-policy.example.yaml  # 权限策略示例
 
-data/      # 运行时数据，原则上不提交到仓库（通过 .gitignore 忽略）
-    platform/jobs/                # 每次请求的任务目录
-    platform/conversations/       # 平台级会话状态
-    reviews/                      # 审核结果存档
-    review_users.yaml             # 审核 Bot 用户 ID 与英文名映射注册表
+M-Agent-Files/     # 真实运行数据，位于代码仓库之外
+    tasks/writing/YYYY/MM/        # 写作任务
+    tasks/review/YYYY/MM/         # 审核任务
+    runtime/conversations/        # 平台级会话状态
+    runtime/users/review_users.yaml
+    knowledge/                    # 本地知识库
 ```
 
 说明：
 
-- `data/review_users.yaml` 只记录审核 Bot 里企业微信 userid 对应的英文名，不是权限配置，会随用户首次使用动态写入，属于运行时数据，放在 `data/` 合理。
-- 如果希望预置某些用户的英文名随仓库分发，可以把该文件提交；否则由 `.gitignore` 保持其为运行时产物即可。
+- `M_AGENT_DATA_DIR` 是唯一推荐配置入口，默认值为项目同级的 `../M-Agent-Files`。
+- 用户名表包含企业微信 userid，始终属于本机敏感运行数据，不允许随仓库分发。
+- `data/error-examples/` 只允许保留已经脱敏、具有长期测试价值的固定错例；真实用户原件必须进入 `M-Agent-Files/tasks/`。
 
 禁止把真实用户材料、日志、密钥、任务记录提交到仓库。
 

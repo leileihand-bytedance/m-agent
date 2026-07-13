@@ -2,8 +2,8 @@
 
 特性:
   - 使用 Python 标准 logging 模块
-  - 公共日志: data/logs/review-bot-YYYY-MM.log
-  - 用户日志: data/logs/users/<userid>/YYYY-MM.log
+  - 公共日志: M-Agent-Files/runtime/logs/review-bot-YYYY-MM.log
+  - 用户日志: M-Agent-Files/runtime/logs/users/<userid>/YYYY-MM.log
   - 按月自动切分
   - 日志格式包含时间、级别、用户名(userid/english_name)
 """
@@ -134,7 +134,7 @@ def setup_logging(logs_dir: Path, *, console_output: bool = False) -> logging.Lo
     """配置并返回审核 Bot 的根 logger.
 
     Args:
-        logs_dir: 日志根目录,建议 data/logs
+        logs_dir: 日志根目录,默认由 M_AGENT_DATA_DIR 派生
         console_output: 是否同时输出到控制台,默认 False
 
     Returns:

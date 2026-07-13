@@ -1,7 +1,7 @@
 """共享用户名称注册表.
 
 当前用于把企业微信 userid 映射为便于排查问题的用户名.
-默认数据文件为 data/review_users.yaml, 兼容原审核 Bot 已使用的映射表.
+默认数据文件位于 M-Agent-Files/runtime/users/, 兼容原审核 Bot 的导入接口.
 """
 
 from __future__ import annotations
@@ -11,8 +11,11 @@ from pathlib import Path
 
 import yaml
 
+from app.platform.data_paths import DataPaths
 
-DEFAULT_REGISTRY_PATH = Path("data/review_users.yaml")
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_REGISTRY_PATH = DataPaths.from_values({}, project_root=_PROJECT_ROOT).user_registry
 
 # 支持中文、英文、数字、下划线、短横线，长度 2-30
 _NAME_RE = re.compile(r"^[\w一-龥\-]{2,30}$")

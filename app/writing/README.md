@@ -53,7 +53,10 @@ skills/direct_report/
 WRITING_BOT_ID
 WRITING_BOT_SECRET
 M_AGENT_PORTAL_BASE_URL
+M_AGENT_DATA_DIR
 ```
+
+`M_AGENT_DATA_DIR` 默认指向项目同级的桌面 `M-Agent-Files/`。用户上传、系统生成、知识库、会话和日志都保存在该目录，`app/writing/` 不得自行新增其他持久化目录。
 
 如果后续需要重新启用跨设备素材入口：
 

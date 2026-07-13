@@ -72,3 +72,18 @@ def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
     assert config.chat_log_enabled is False
     assert config.chat_log_dir == Path(__file__).resolve().parent.parent / "custom-chat-logs"
     assert config.user_registry_path == Path(__file__).resolve().parent.parent / "custom-users.yaml"
+
+
+def test_load_config_uses_single_external_data_root(tmp_path):
+    data_root = tmp_path / "M-Agent-Files"
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"M_AGENT_DATA_DIR={data_root}\n", encoding="utf-8")
+
+    config = load_config(env_path)
+
+    assert config.jobs_dir == data_root / "tasks" / "writing"
+    assert config.conversation_dir == data_root / "runtime" / "conversations"
+    assert config.chat_log_dir == data_root / "runtime" / "chat-logs"
+    assert config.policy_db_path == data_root / "knowledge" / "policy" / "policies.sqlite3"
+    assert config.bank_db_path == data_root / "knowledge" / "bank" / "bank.sqlite3"
+    assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"

@@ -286,8 +286,8 @@ users:
 每个任务应有独立任务目录：
 
 ```text
-data/platform/jobs/
-└── 2026-07-03-0001/
+../M-Agent-Files/tasks/writing/
+└── 2026/07/20260703-0001/
     ├── input/
     ├── work/
     ├── output/
@@ -325,7 +325,7 @@ skill 和工具只能访问当前任务目录。
 - 审核能力包装为 `review` skill。
 - 复杂多轮任务上下文和人工确认。
 
-现有 `data/reviews/` 可以继续由审核旧模块使用，迁移后再统一。
+审核旧模块已接入统一数据根目录，任务写入 `../M-Agent-Files/tasks/review/YYYY/MM/`；原件和系统生成文件不再混放。
 
 ### 8. 会话和任务记录
 
@@ -359,10 +359,10 @@ skill 和工具只能访问当前任务目录。
 
 ```text
 app/platform/user_registry.py
-data/review_users.yaml
+../M-Agent-Files/runtime/users/review_users.yaml
 ```
 
-写作 Bot 和审核 Bot 共用同一份映射表。写作链路会在任务记录、会话记录、开发期对话日志和运行输出中同时保留 `sender_name` 与 `sender_userid`。`data/review_users.yaml` 是本机敏感运行数据，已加入 `.gitignore`。
+写作 Bot 和审核 Bot 共用同一份映射表。写作链路会在任务记录、会话记录、开发期对话日志和运行输出中同时保留 `sender_name` 与 `sender_userid`。该文件位于 Git 仓库之外，属于本机敏感运行数据。
 
 ### 9. 安全边界
 

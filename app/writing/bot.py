@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.platform.app import PlatformApp
-from app.platform.config import PlatformConfig, ROOT
+from app.platform.config import PlatformConfig
 from app.platform.gateway.wecom import format_text_reply
 from app.platform.intent import ConversationIntent
 from app.platform.models import PlatformResult, UploadedFile
@@ -38,8 +38,9 @@ def build_platform_config(config) -> PlatformConfig:
         anthropic_base_url=config.anthropic_base_url,
         skills_dir=config.skills_dir,
         jobs_dir=config.jobs_dir,
-        policy_db_path=ROOT / "data/policy_knowledge/policies.sqlite3",
-        bank_db_path=ROOT / "data/bank_knowledge/bank.sqlite3",
+        policy_db_path=config.policy_db_path,
+        bank_db_path=config.bank_db_path,
+        conversation_dir=config.conversation_dir,
         model_max_tokens=config.model_max_tokens,
         direct_report_critic_mode=config.direct_report_critic_mode,
         chat_log_enabled=config.chat_log_enabled,

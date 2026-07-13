@@ -35,6 +35,7 @@ tmp/
 /run_audit.sh
 
 # Raw user materials (sensitive)
+/M-Agent-Files/
 data/leaders/
 data/reviews/
 data/review_users.yaml

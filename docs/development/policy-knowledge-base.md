@@ -66,7 +66,7 @@
 
 两类来源
   -> app.policy_knowledge.store
-  -> data/policy_knowledge/policies.sqlite3
+  -> ../M-Agent-Files/knowledge/policy/policies.sqlite3
   -> platform 工具 policy_research / policy_materials / policy_search
   -> direct_report / writer1 / writer2
 ```
@@ -224,7 +224,7 @@ writer1 / writer2：
 当前政策知识库只保留一层主数据：
 
 ```text
-data/policy_knowledge/policies.sqlite3
+../M-Agent-Files/knowledge/policy/policies.sqlite3
 ```
 
 清理政策噪音时，以 SQLite 数据为准。

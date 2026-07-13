@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.platform.config import DEFAULT_ENV_PATH, ROOT, parse_env_file
+from app.platform.data_paths import DataPaths, configured_path
 
 
 @dataclass(frozen=True)
@@ -25,10 +26,19 @@ class OpsBotConfig:
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> OpsBotConfig:
     values = parse_env_file(env_path)
-    ops_events_dir = _path_from_env(values.get("M_AGENT_OPS_EVENTS_DIR"), ROOT / "data/platform/ops_events")
-    chat_log_dir = _path_from_env(values.get("M_AGENT_CHAT_LOG_DIR"), ROOT / "data/platform/chat_logs")
-    state_path = _path_from_env(values.get("M_AGENT_OPS_STATE_PATH"), ROOT / "data/platform/ops_state.json")
-    heartbeat_dir = _path_from_env(values.get("M_AGENT_OPS_HEARTBEAT_DIR"), ROOT / "data/platform/heartbeats")
+    data_paths = DataPaths.from_values(values, project_root=ROOT)
+    ops_events_dir = configured_path(
+        values, "M_AGENT_OPS_EVENTS_DIR", data_paths.ops_events, project_root=ROOT
+    )
+    chat_log_dir = configured_path(
+        values, "M_AGENT_CHAT_LOG_DIR", data_paths.chat_logs, project_root=ROOT
+    )
+    state_path = configured_path(
+        values, "M_AGENT_OPS_STATE_PATH", data_paths.ops_state, project_root=ROOT
+    )
+    heartbeat_dir = configured_path(
+        values, "M_AGENT_OPS_HEARTBEAT_DIR", data_paths.heartbeats, project_root=ROOT
+    )
     return OpsBotConfig(
         bot_id=values.get("M_AGENT_OPS_BOT_ID", ""),
         bot_secret=values.get("M_AGENT_OPS_BOT_SECRET", ""),
@@ -50,13 +60,6 @@ def mask_value(value: str) -> str:
     if len(value) < 8:
         return "***"
     return f"{value[:4]}...{value[-4:]}"
-
-
-def _path_from_env(raw: str | None, default: Path) -> Path:
-    path = Path(raw or str(default))
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
 
 
 def _int_from_env(raw: str | None, default: int) -> int:

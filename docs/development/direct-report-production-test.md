@@ -12,7 +12,7 @@
   -> web_reader
   -> Pydantic AI llm_writer
   -> 企业微信回复
-  -> data/platform/jobs/ 任务记录
+  -> ../M-Agent-Files/tasks/writing/ 任务记录
 ```
 
 本轮不重点测试：
@@ -68,6 +68,7 @@ MODEL_NAME=MiniMax-M2.7
 MODEL_BASE_URL=https://api.minimaxi.com/anthropic
 MODEL_API_KEY=...
 M_AGENT_MODEL_MAX_TOKENS=4096
+M_AGENT_DATA_DIR=../M-Agent-Files
 ```
 
 写作底座优先读取 `MODEL_*`。旧的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` 只作为兼容兜底。
@@ -108,7 +109,7 @@ python -m app.writing.bot --check-config
 - 显示“配置检查通过”。
 - Bot ID 已脱敏显示。
 - Skills 目录指向 `skills`。
-- 任务目录指向 `data/platform/jobs`。
+- 任务目录指向 `../M-Agent-Files/tasks/writing`。
 - 权限配置如果是正式测试，应显示已配置的 policy 路径。
 
 再运行自动化测试：
@@ -147,7 +148,7 @@ python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
 
 - Bot 先快速回复“收到，正在按直报写作流程处理，请稍后……”。
 - 稍后收到标题、正文、来源。
-- `data/platform/jobs/` 下新增一个任务目录。
+- `../M-Agent-Files/tasks/writing/YYYY/MM/` 下新增一个任务目录。
 - 任务目录中有 `meta.json` 和 `output/result.json`。
 - `result.json` 中 `skill_id` 为 `direct_report`。
 
@@ -169,7 +170,7 @@ python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
 - 页面提示“已提交，处理结果会返回企业微信对话”。
 - 企业微信会话先收到“已收到写直报素材，正在处理，请稍后……”。
 - 稍后收到标题、正文、来源。
-- `data/platform/jobs/` 下新增一个任务目录，`input/` 中能看到上传文件。
+- `../M-Agent-Files/tasks/writing/YYYY/MM/` 下新增一个任务目录，`input/` 中能看到上传文件。
 
 ### 用例 2：空消息或无效消息
 

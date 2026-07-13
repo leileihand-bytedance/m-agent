@@ -101,7 +101,8 @@ def list_jobs(paths: AdminPaths, limit: int = 20) -> list[JobAdminSummary]:
         return []
 
     summaries: list[JobAdminSummary] = []
-    for job_dir in sorted((item for item in jobs_dir.iterdir() if item.is_dir()), reverse=True):
+    job_dirs = (path.parent for path in jobs_dir.glob("**/meta.json"))
+    for job_dir in sorted(job_dirs, key=lambda path: path.name, reverse=True):
         meta = _read_json(job_dir / "meta.json")
         result = _read_json(job_dir / "output" / "result.json")
         output = result.get("output", {}) if isinstance(result.get("output", {}), dict) else {}

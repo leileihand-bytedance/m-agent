@@ -4,7 +4,7 @@
   - 接入企业微信长连接(独立 Bot,只做审核)
   - 接收文件消息 → 检查后缀(.docx 接受,其他拒)
   - 解析 .docx → 加载 rules.md → 跑审核引擎 → 输出意见
-  - 存档到 data/reviews/<日期-序号>/
+  - 存档到 M-Agent-Files/tasks/review/YYYY/MM/<日期-序号>/
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import inspect
+import json
 import logging
 import re
 import sys
@@ -29,16 +30,18 @@ sys.path.insert(0, str(_ROOT))
 
 from app.review.bot_logging import setup_logging, redirect_stdout_to_logging, log_extra
 from app.review.notification import AdminNotifier, NotificationConfig
-from app.review.user_registry import UserRegistry, RegistrationFlow, DEFAULT_REGISTRY_PATH
+from app.review.user_registry import UserRegistry, RegistrationFlow
 from app.review import load_rules, format_review_result  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
 from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
+from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
 
 
 # 全局 logger,在 main() 中初始化
 logger = logging.getLogger("review_bot")
+_DEFAULT_DATA_PATHS = DataPaths.from_values({}, project_root=_ROOT)
 
 _FOLLOWUP_REVIEW_REQUEST_RE = re.compile(
     r"^(?:请|麻烦)?(?:帮我)?(?:(?:审(?:核)?|看)(?:一下|下)?(?:这个|这份|该)?(?:材料|文件|文档|附件)?|"
@@ -65,8 +68,9 @@ class ReviewConfig:
     notification_cooldown: int
     direct_admin_notifications: bool
     require_registration: bool
-    ops_events_dir: Path = _ROOT / "data/platform/ops_events"
-    ops_heartbeat_dir: Path = _ROOT / "data/platform/heartbeats"
+    ops_events_dir: Path = _DEFAULT_DATA_PATHS.ops_events
+    ops_heartbeat_dir: Path = _DEFAULT_DATA_PATHS.heartbeats
+    user_registry_path: Path = _DEFAULT_DATA_PATHS.user_registry
     max_file_size_mb: int = 10
     reply_ack_timeout_seconds: float = 30.0
 
@@ -121,24 +125,27 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
     if env_path is None:
         env_path = _ROOT / ".env"
     values = parse_env_file(env_path)
+    data_paths = DataPaths.from_values(values, project_root=_ROOT)
 
     rules_path = Path(values.get("M_AGENT_REVIEW_RULES", "app/data/rules.md") or "app/data/rules.md")
     if not rules_path.is_absolute():
         rules_path = _ROOT / rules_path
 
-    reviews_dir = Path(values.get("M_AGENT_REVIEWS_DIR", "data/reviews") or "data/reviews")
-    if not reviews_dir.is_absolute():
-        reviews_dir = _ROOT / reviews_dir
-
-    logs_dir = Path(values.get("M_AGENT_LOGS_DIR", "data/logs") or "data/logs")
-    if not logs_dir.is_absolute():
-        logs_dir = _ROOT / logs_dir
-    ops_events_dir = Path(values.get("M_AGENT_OPS_EVENTS_DIR", "data/platform/ops_events") or "data/platform/ops_events")
-    if not ops_events_dir.is_absolute():
-        ops_events_dir = _ROOT / ops_events_dir
-    ops_heartbeat_dir = Path(values.get("M_AGENT_OPS_HEARTBEAT_DIR", "data/platform/heartbeats") or "data/platform/heartbeats")
-    if not ops_heartbeat_dir.is_absolute():
-        ops_heartbeat_dir = _ROOT / ops_heartbeat_dir
+    reviews_dir = configured_path(
+        values, "M_AGENT_REVIEWS_DIR", data_paths.review_tasks, project_root=_ROOT
+    )
+    logs_dir = configured_path(
+        values, "M_AGENT_LOGS_DIR", data_paths.logs, project_root=_ROOT
+    )
+    ops_events_dir = configured_path(
+        values, "M_AGENT_OPS_EVENTS_DIR", data_paths.ops_events, project_root=_ROOT
+    )
+    ops_heartbeat_dir = configured_path(
+        values, "M_AGENT_OPS_HEARTBEAT_DIR", data_paths.heartbeats, project_root=_ROOT
+    )
+    user_registry_path = configured_path(
+        values, "M_AGENT_USER_REGISTRY_PATH", data_paths.user_registry, project_root=_ROOT
+    )
 
     return ReviewConfig(
         wecom_bot_id=require_value(values, "WECOM_REVIEW_BOT_ID"),
@@ -148,6 +155,7 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
         logs_dir=logs_dir,
         ops_events_dir=ops_events_dir,
         ops_heartbeat_dir=ops_heartbeat_dir,
+        user_registry_path=user_registry_path,
         admin_user_id=values.get("REVIEW_ADMIN_USER_ID", "").strip(),
         admin_name=values.get("REVIEW_ADMIN_NAME", "").strip() or "管理员",
         notification_cooldown=_env_int(values, "REVIEW_NOTIFICATION_COOLDOWN", 300),
@@ -187,15 +195,18 @@ from app.review.parser import parse_docx as _parse_docx  # noqa: E402
 
 def _next_review_index(reviews_dir: Path, date_str: str) -> int:
     """取当天下一个序号(从 001 开始)."""
+    month_dir = reviews_dir / date_str[:4] / date_str[4:6]
+    if not month_dir.exists():
+        return 1
     existing = [
-        d for d in reviews_dir.iterdir()
+        d for d in month_dir.iterdir()
         if d.is_dir() and d.name.startswith(date_str)
     ]
     return len(existing) + 1
 
 
 def _safe_source_name(original_filename: str) -> str:
-    """把原始文件名清洗成可安全存入 source/ 目录的文件名."""
+    """把原始文件名清洗成可安全存入 input/ 目录的文件名."""
     original = original_filename or "uploaded.docx"
     path = Path(original)
     stem = path.stem or "uploaded"
@@ -218,54 +229,55 @@ def save_review(
     text_content: str | None = None,
     doc_type: DocumentType = DocumentType.NEI_CAN,
 ) -> Path:
-    """保存审核记录到 data/reviews/<日期-序号>/.
+    """保存审核记录到统一审核任务目录.
 
     目录结构:
-      data/reviews/2026-06-13-001/
-        source/原文件
-        report.md            (审核意见)
-        meta.md              (时间 / Bot ID / 触发用户)
+      tasks/review/2026/06/20260613-001/
+        input/原文件
+        output/report.md
+        meta.json
     """
     date_str = datetime.now().strftime("%Y%m%d")
     idx = _next_review_index(reviews_dir, date_str)
-    review_dir = reviews_dir / f"{date_str}-{idx:03d}"
-    source_dir = review_dir / "source"
-    source_dir.mkdir(parents=True, exist_ok=True)
+    review_dir = reviews_dir / date_str[:4] / date_str[4:6] / f"{date_str}-{idx:03d}"
+    input_dir = review_dir / "input"
+    output_dir = review_dir / "output"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 保存原始文件
     safe_name = _safe_source_name(original_filename)
-    source_path = source_dir / safe_name
+    source_path = input_dir / safe_name
     if file_bytes is not None:
         source_path.write_bytes(file_bytes)
     else:
         source_path.write_text(text_content or "", encoding="utf-8")
 
     # 2. 保存 report.md
-    report_path = review_dir / "report.md"
+    report_path = output_dir / "report.md"
     report_path.write_text(
         format_review_result(result, original_filename, doc_type=doc_type),
         encoding="utf-8",
     )
 
-    # 3. 保存 meta.md
-    meta_path = review_dir / "meta.md"
+    # 3. 保存结构化元信息
+    meta_path = review_dir / "meta.json"
     meta_path.write_text(
-        "\n".join(
-            [
-                "# 审核记录元信息",
-                "",
-                f"**文件:** {original_filename}",
-                f"**发送人:** {sender}",
-                f"**消息 ID:** {msgid}",
-                f"**审核时间:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"**规则数:** {result.total_rules}",
-                f"**通过规则:** {result.passed_rules}",
-                f"**发现问题:** {len(result.findings)}",
-                "",
-                "## 解析预览",
-                "",
-            ]
-            + [f"- 段{i+1}: {p[:80]}" for i, p in enumerate(parsed_paragraphs[:10])]
+        json.dumps(
+            {
+                "task_id": review_dir.name,
+                "original_filename": original_filename,
+                "sender_userid": sender,
+                "message_id": msgid,
+                "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "document_type": doc_type.value,
+                "total_rules": result.total_rules,
+                "passed_rules": result.passed_rules,
+                "finding_count": len(result.findings),
+                "paragraph_preview": [p[:80] for p in parsed_paragraphs[:10]],
+            },
+            ensure_ascii=False,
+            indent=2,
         ),
         encoding="utf-8",
     )
@@ -477,14 +489,14 @@ def _prepare_review_reply_file(
 ) -> Path | None:
     """准备回传给用户的审核文档.
 
-    - 有问题: 基于 source/ 原文生成 `marked_原文件名.docx`
+    - 有问题: 基于 input/ 原文生成到 output/ 的 `marked_原文件名.docx`
     - 无问题: 不回传文档
     """
     if review_dir is None:
         return None
 
     source_name = _safe_source_name(original_filename)
-    source_path = review_dir / "source" / source_name
+    source_path = review_dir / "input" / source_name
     if not source_path.exists():
         return None
 
@@ -494,7 +506,7 @@ def _prepare_review_reply_file(
     from app.review.error_marker import mark_errors_in_docx  # noqa: E402
 
     source_path_obj = Path(source_name)
-    marked_path = review_dir / "source" / f"marked_{source_path_obj.stem}{source_path_obj.suffix}"
+    marked_path = review_dir / "output" / f"marked_{source_path_obj.stem}{source_path_obj.suffix}"
     mark_errors_in_docx(source_path, marked_path, findings)
     return marked_path
 
@@ -773,7 +785,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         "日志目录: %s", config.logs_dir, extra=log_extra("system", "system")
     )
 
-    registry = UserRegistry(DEFAULT_REGISTRY_PATH)
+    registry = UserRegistry(config.user_registry_path)
     registration_flow = RegistrationFlow(
         registry, require_registration=config.require_registration
     )

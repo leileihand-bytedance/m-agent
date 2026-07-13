@@ -22,7 +22,8 @@ def test_job_store_creates_isolated_job_directories(tmp_path):
     assert job.work_dir.exists()
     assert job.output_dir.exists()
     assert job.meta_path.exists()
-    assert job.job_dir.parent == tmp_path
+    now = job.job_id[:8]
+    assert job.job_dir.parent == tmp_path / now[:4] / now[4:6]
 
     meta = json.loads(job.meta_path.read_text(encoding="utf-8"))
     assert meta["channel"] == "wecom"

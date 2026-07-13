@@ -56,3 +56,16 @@ def test_ops_load_config_does_not_embed_a_real_admin_default(tmp_path):
     config = load_config(env_path)
 
     assert config.admin_user_id == ""
+
+
+def test_ops_load_config_uses_single_external_data_root(tmp_path):
+    data_root = tmp_path / "M-Agent-Files"
+    env_path = tmp_path / ".env"
+    env_path.write_text(f"M_AGENT_DATA_DIR={data_root}\n", encoding="utf-8")
+
+    config = load_config(env_path)
+
+    assert config.ops_events_dir == data_root / "runtime" / "ops" / "events"
+    assert config.chat_log_dir == data_root / "runtime" / "chat-logs"
+    assert config.state_path == data_root / "runtime" / "ops" / "state.json"
+    assert config.heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"

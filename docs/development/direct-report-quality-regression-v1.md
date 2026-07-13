@@ -88,7 +88,7 @@ python -m pytest tests/test_direct_report_quality_regression.py -q
 真实输出位置：
 
 ```text
-data/platform/jobs/<job_id>/output/result.json
+../M-Agent-Files/tasks/writing/YYYY/MM/<job_id>/output/result.json
 ```
 
 人工评审稿已经整理到：

@@ -120,18 +120,19 @@ def test_save_review_creates_directory():
 
         # 验证目录结构
         assert review_dir.exists()
-        assert (review_dir / "source").exists()
-        assert (review_dir / "source" / "测试报告.docx").exists()
-        assert (review_dir / "report.md").exists()
-        assert (review_dir / "meta.md").exists()
+        assert (review_dir / "input").exists()
+        assert (review_dir / "output").exists()
+        assert (review_dir / "input" / "测试报告.docx").exists()
+        assert (review_dir / "output" / "report.md").exists()
+        assert (review_dir / "meta.json").exists()
 
         # 验证 report.md 内容
-        report = (review_dir / "report.md").read_text(encoding="utf-8")
+        report = (review_dir / "output" / "report.md").read_text(encoding="utf-8")
         assert "测试报告.docx" in report
         assert "dupe-char-check" in report
 
         # 验证 meta.md 内容
-        meta = (review_dir / "meta.md").read_text(encoding="utf-8")
+        meta = (review_dir / "meta.json").read_text(encoding="utf-8")
         assert "user123" in meta
         assert "msg456" in meta
 
@@ -194,7 +195,7 @@ def test_save_review_sanitizes_filename():
         )
 
         # 验证文件确实在 source 下,没有逃逸
-        source_files = list((review_dir / "source").iterdir())
+        source_files = list((review_dir / "input").iterdir())
         assert len(source_files) == 1
         saved = source_files[0]
         assert "passwd" in saved.name
@@ -227,7 +228,7 @@ def test_save_review_supports_text_message_archive(tmp_path: Path):
         doc_type=DocumentType.GENERAL,
     )
 
-    text_source = review_dir / "source" / "文字消息.txt"
+    text_source = review_dir / "input" / "文字消息.txt"
     assert text_source.exists()
     assert text_source.read_text(encoding="utf-8") == "第一段文字。\n\n第二段文字。"
 
@@ -241,7 +242,7 @@ def test_prepare_review_reply_file_builds_marked_doc_for_neican_findings(tmp_pat
     doc.save(str(source_doc))
 
     review_dir = tmp_path / "review"
-    source_dir = review_dir / "source"
+    source_dir = review_dir / "input"
     source_dir.mkdir(parents=True)
     saved_source = source_dir / "内参周报.docx"
     saved_source.write_bytes(source_doc.read_bytes())
@@ -269,7 +270,7 @@ def test_prepare_review_reply_file_returns_source_when_no_findings(tmp_path: Pat
     source_doc.write_bytes(b"fake-docx")
 
     review_dir = tmp_path / "review"
-    source_dir = review_dir / "source"
+    source_dir = review_dir / "input"
     source_dir.mkdir(parents=True)
     saved_source = source_dir / "内参周报.docx"
     saved_source.write_bytes(source_doc.read_bytes())
@@ -296,6 +297,7 @@ def test_load_config_from_env_file():
                 "WECOM_REVIEW_BOT_SECRET=test_secret_abcde",
                 "M_AGENT_REVIEW_RULES=app/data/rules.md",
                 "M_AGENT_REVIEWS_DIR=data/reviews",
+                f"M_AGENT_DATA_DIR={Path(tmpdir) / 'M-Agent-Files'}",
                 "REVIEW_REPLY_ACK_TIMEOUT_SECONDS=45",
             ]),
             encoding="utf-8",
@@ -310,10 +312,38 @@ def test_load_config_from_env_file():
         assert config.wecom_bot_secret == "test_secret_abcde"
         assert config.rules_path.name == "rules.md"
         assert config.reviews_dir.name == "reviews"
+        assert config.user_registry_path == (
+            Path(tmpdir) / "M-Agent-Files" / "runtime" / "users" / "review_users.yaml"
+        ).resolve()
         assert config.max_file_size_mb == 10  # 默认值
         assert config.reply_ack_timeout_seconds == 45.0
         assert config.direct_admin_notifications is False
         print("✅ test_load_config_from_env_file: 配置加载正确")
+
+
+def test_review_load_config_uses_single_external_data_root(tmp_path: Path):
+    data_root = tmp_path / "M-Agent-Files"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "WECOM_REVIEW_BOT_ID=bot-id",
+                "WECOM_REVIEW_BOT_SECRET=bot-secret",
+                f"M_AGENT_DATA_DIR={data_root}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    from app.review.main import load_config
+
+    config = load_config(env_path)
+
+    assert config.reviews_dir == data_root / "tasks" / "review"
+    assert config.logs_dir == data_root / "runtime" / "logs"
+    assert config.ops_events_dir == data_root / "runtime" / "ops" / "events"
+    assert config.ops_heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"
+    assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
 
 
 def test_configure_ws_client_timeouts_overrides_sdk_reply_ack_timeout():

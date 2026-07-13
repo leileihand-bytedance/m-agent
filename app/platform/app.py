@@ -68,7 +68,9 @@ class PlatformApp:
             registry=registry,
             tools=tools,
             job_store=JobStore(config.jobs_dir),
-            conversation_store=ConversationStore(config.jobs_dir.parent / "conversations"),
+            conversation_store=ConversationStore(
+                config.conversation_dir or (config.jobs_dir.parent / "conversations")
+            ),
             chat_log_store=ChatLogStore(
                 config.chat_log_dir or (config.jobs_dir.parent / "chat_logs"),
                 enabled=config.chat_log_enabled,

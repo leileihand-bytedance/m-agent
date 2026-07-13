@@ -34,6 +34,14 @@ post-commit hook 会记录本地提交并在存在未推送提交时告警；pre
 
 ## 测试分层
 
+运行数据目录或迁移逻辑变更时，至少运行：
+
+```bash
+python -m pytest tests/test_platform_data_paths.py tests/test_runtime_data_migration.py tests/test_platform_storage.py tests/test_review_bot.py tests/test_admin_services.py -v
+```
+
+真实迁移必须先运行 `python scripts/migrate_runtime_data.py` 预演，再加 `--apply` 执行；迁移工具只复制和校验，不自动删除旧数据。
+
 ### 1. 平台单元测试
 
 验证底座区：

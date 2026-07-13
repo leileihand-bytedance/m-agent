@@ -177,6 +177,9 @@ def test_build_platform_config_uses_writing_bot_runtime_settings(tmp_path):
         anthropic_base_url="https://example.com/anthropic",
         skills_dir=Path("skills"),
         jobs_dir=tmp_path / "jobs",
+        policy_db_path=tmp_path / "policy" / "policies.sqlite3",
+        bank_db_path=tmp_path / "bank" / "bank.sqlite3",
+        conversation_dir=tmp_path / "conversations",
         model_max_tokens=6144,
         direct_report_critic_mode="advisory",
         chat_log_enabled=False,
@@ -198,8 +201,9 @@ def test_build_platform_config_uses_writing_bot_runtime_settings(tmp_path):
     assert platform_config.user_registry_path == tmp_path / "users.yaml"
     assert platform_config.skills_dir == Path("skills")
     assert platform_config.jobs_dir == tmp_path / "jobs"
-    assert platform_config.policy_db_path.name == "policies.sqlite3"
-    assert platform_config.bank_db_path.name == "bank.sqlite3"
+    assert platform_config.policy_db_path == tmp_path / "policy" / "policies.sqlite3"
+    assert platform_config.bank_db_path == tmp_path / "bank" / "bank.sqlite3"
+    assert platform_config.conversation_dir == tmp_path / "conversations"
     assert platform_config.access_policy_path == tmp_path / "policy.yaml"
 
 
@@ -239,6 +243,32 @@ def test_writing_load_config_prefers_model_api_settings_over_legacy_anthropic(tm
     assert config.ops_events_dir == Path(__file__).resolve().parent.parent / "custom-ops-events"
     assert config.user_registry_path == Path(__file__).resolve().parent.parent / "custom-users.yaml"
     assert config.intake_ttl_seconds == 900
+
+
+def test_writing_load_config_uses_single_external_data_root(tmp_path):
+    data_root = tmp_path / "M-Agent-Files"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "WRITING_BOT_ID=bot-id",
+                "WRITING_BOT_SECRET=bot-secret",
+                f"M_AGENT_DATA_DIR={data_root}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(env_path)
+
+    assert config.jobs_dir == data_root / "tasks" / "writing"
+    assert config.policy_db_path == data_root / "knowledge" / "policy" / "policies.sqlite3"
+    assert config.bank_db_path == data_root / "knowledge" / "bank" / "bank.sqlite3"
+    assert config.conversation_dir == data_root / "runtime" / "conversations"
+    assert config.chat_log_dir == data_root / "runtime" / "chat-logs"
+    assert config.ops_events_dir == data_root / "runtime" / "ops" / "events"
+    assert config.ops_heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"
+    assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
 
 
 def test_writing_load_config_defaults_to_local_only_portal(tmp_path, monkeypatch):

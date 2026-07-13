@@ -48,7 +48,7 @@ class JobStore:
     ) -> JobContext:
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
-        job_dir = self._root_dir / job_id
+        job_dir = self._root_dir / job_id[:4] / job_id[4:6] / job_id
         input_dir = job_dir / "input"
         work_dir = job_dir / "work"
         output_dir = job_dir / "output"
@@ -109,7 +109,7 @@ class JobStore:
             return None
 
         result_paths = sorted(
-            self._root_dir.glob("*/output/result.json"),
+            self._root_dir.glob("**/output/result.json"),
             key=lambda path: path.stat().st_mtime_ns,
             reverse=True,
         )

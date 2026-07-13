@@ -264,13 +264,13 @@ app/platform/storage.py
 - `meta.json` 同时保存 `sender_userid` 和 `sender_name`，便于把企业微信内部 ID 对应到真实使用者。
 - 只在 `meta.json` 中保存截断后的消息预览，避免把长正文和敏感材料直接写入元信息。
 
-默认任务目录：
+默认任务目录（由 `M_AGENT_DATA_DIR` 派生）：
 
 ```text
-data/platform/jobs/
+../M-Agent-Files/tasks/writing/YYYY/MM/<job_id>/
 ```
 
-该目录已加入 `.gitignore`。
+运行数据根目录位于 Git 仓库之外；每个任务仍固定包含 `input/`、`work/`、`output/` 和 `meta.json`。
 
 ### 9. 开发期对话日志层
 
@@ -278,7 +278,7 @@ data/platform/jobs/
 
 ```text
 app/platform/chat_log.py
-data/platform/chat_logs/
+../M-Agent-Files/runtime/chat-logs/
 ```
 
 职责：
@@ -292,7 +292,7 @@ data/platform/chat_logs/
 默认日志目录：
 
 ```text
-data/platform/chat_logs/
+../M-Agent-Files/runtime/chat-logs/
 ```
 
 该目录已加入 `.gitignore`，不要提交真实对话日志。
@@ -301,7 +301,7 @@ data/platform/chat_logs/
 
 ```text
 M_AGENT_CHAT_LOG_ENABLED=true
-M_AGENT_CHAT_LOG_DIR=data/platform/chat_logs
+M_AGENT_DATA_DIR=../M-Agent-Files
 ```
 
 ### 10. 运维事件和日报层
@@ -310,9 +310,9 @@ M_AGENT_CHAT_LOG_DIR=data/platform/chat_logs
 
 ```text
 app/platform/ops/
-data/platform/ops_events/
-data/platform/ops_state.json
-data/platform/heartbeats/
+../M-Agent-Files/runtime/ops/events/
+../M-Agent-Files/runtime/ops/state.json
+../M-Agent-Files/runtime/ops/heartbeats/
 ```
 
 职责：
@@ -333,9 +333,7 @@ data/platform/heartbeats/
 M_AGENT_OPS_BOT_ID=
 M_AGENT_OPS_BOT_SECRET=
 M_AGENT_OPS_ADMIN_USER_ID=
-M_AGENT_OPS_EVENTS_DIR=data/platform/ops_events
-M_AGENT_OPS_STATE_PATH=data/platform/ops_state.json
-M_AGENT_OPS_HEARTBEAT_DIR=data/platform/heartbeats
+M_AGENT_DATA_DIR=../M-Agent-Files
 M_AGENT_OPS_HEARTBEAT_MAX_AGE_SECONDS=180
 M_AGENT_OPS_MONITORED_SERVICES=writing_bot,review_bot
 M_AGENT_OPS_DAILY_REPORT_HOUR=9
@@ -353,7 +351,7 @@ M_AGENT_OPS_DAILY_REPORT_MINUTE=0
 
 ```text
 app/platform/conversation.py
-data/platform/conversations/
+../M-Agent-Files/runtime/conversations/
 ```
 
 职责：
@@ -369,16 +367,16 @@ data/platform/conversations/
 当前会话目录：
 
 ```text
-data/platform/conversations/
+../M-Agent-Files/runtime/conversations/
 ```
 
-### 11. 用户名称映射层
+### 12. 用户名称映射层
 
 位置：
 
 ```text
 app/platform/user_registry.py
-data/review_users.yaml
+../M-Agent-Files/runtime/users/review_users.yaml
 ```
 
 职责：
@@ -391,12 +389,30 @@ data/review_users.yaml
 配置项：
 
 ```text
-M_AGENT_USER_REGISTRY_PATH=data/review_users.yaml
+M_AGENT_DATA_DIR=../M-Agent-Files
 ```
 
-`data/review_users.yaml` 属于本机运行数据，包含企业微信用户 ID，已加入 `.gitignore`，不要提交到仓库。
+用户名表属于本机运行数据，包含企业微信用户 ID，保存在 Git 仓库之外，不要复制或提交到仓库。
 
-### 12. 身份和权限层
+### 13. 统一非 Git 数据根目录
+
+位置：
+
+```text
+app/platform/data_paths.py
+../M-Agent-Files/
+```
+
+职责：
+
+- 用 `M_AGENT_DATA_DIR` 统一派生写作任务、审核任务、知识库、日志、会话和运维路径。
+- 默认使用项目同级的桌面 `M-Agent-Files/`，目录权限设为仅当前用户可访问。
+- 写作和审核任务按 `YYYY/MM/<task_id>` 分层，避免单目录无限增长。
+- 审核原文件保存在 `input/`，标注文档和审核报告保存在 `output/`。
+- `scripts/migrate_runtime_data.py` 负责预演、复制、冲突拦截、SHA-256 校验和迁移清单记录；迁移不会自动删除旧数据。
+- 首次切换后，旧目录可整体移入 `legacy/pre-migration-source/` 保留回滚能力；确认稳定前不得直接删除。
+
+### 14. 身份和权限层
 
 位置：
 
@@ -425,7 +441,7 @@ M_AGENT_PLATFORM_POLICY=config/platform-policy.yaml
 
 `config/platform-policy.yaml` 包含真实企业微信用户 ID，只保留在本机并已加入 `.gitignore`；仓库只提交脱敏的 example 文件。
 
-### 13. 功能区
+### 15. 功能区
 
 位置：
 
