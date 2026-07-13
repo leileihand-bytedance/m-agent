@@ -140,6 +140,12 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
     )
 
     assert "项目总览" in html
+    assert '<section id="overview">' not in html
+    assert 'href="#overview"' not in html
+    assert '<a href="#architecture">项目总览</a>' in html
+    assert "已启用能力" not in html
+    assert "累计任务" not in html
+    assert "Git 状态" not in html
     assert "板块进展" in html
     assert "下一步待办" in html
     assert "运行状态" in html
@@ -181,7 +187,8 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
         )
     )
 
-    assert "整体架构与功能模块" in html
+    assert '<h2>项目总览</h2>' in html
+    assert "整体架构与功能模块" not in html
     assert "用户入口" in html
     assert "通用底座" in html
     assert "工具与知识库" in html

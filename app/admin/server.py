@@ -148,22 +148,6 @@ def render_dashboard(
     }}
     h2 {{ margin: 0; font-size: 18px; }}
     .hint {{ margin: 4px 0 0; color: var(--muted); font-size: 13px; }}
-    .summary-grid {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      padding: 16px 18px 18px;
-    }}
-    .metric {{
-      min-height: 112px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 14px;
-      background: #fff;
-    }}
-    .metric-label {{ color: var(--muted); font-size: 13px; }}
-    .metric-value {{ margin-top: 7px; font-size: 25px; font-weight: 750; line-height: 1.2; }}
-    .metric-meta {{ margin-top: 8px; color: #475467; font-size: 12px; }}
     .architecture-section {{
       width: 100%;
       min-width: 0;
@@ -463,8 +447,6 @@ def render_dashboard(
     @media (max-width: 760px) {{
       header {{ padding: 16px; }}
       main {{ width: calc(100% - 20px); }}
-      .summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-      .metric-value {{ font-size: 21px; }}
       .architecture-toolbar {{ display: block; }}
       .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
       .architecture-viewbar {{ align-items: stretch; flex-direction: column; }}
@@ -500,8 +482,7 @@ def render_dashboard(
     <p>查看各板块进度、下一步待办、运行健康，并管理 Skill。</p>
   </header>
   <nav aria-label="控制台导航">
-    <a href="#overview">总览</a>
-    <a href="#architecture">架构</a>
+    <a href="#architecture">项目总览</a>
     <a href="#modules">板块</a>
     <a href="#todos">待办</a>
     <a href="#runtime">运行</a>
@@ -510,7 +491,6 @@ def render_dashboard(
     {sensitive_nav}
   </nav>
   <main>
-    {_render_overview_section(overview)}
     {_render_architecture_section(overview)}
     {_render_modules_section(overview)}
     {_render_todos_section(overview)}
@@ -817,36 +797,6 @@ def main() -> None:
     run(host=args.host, port=args.port)
 
 
-def _render_overview_section(overview: ProjectOverview) -> str:
-    repository = overview.repository
-    git_meta_parts = [part for part in (repository.branch, repository.short_commit) if part]
-    if repository.dirty_count:
-        git_meta_parts.append(f"{repository.dirty_count} 项未提交变更")
-    git_meta = " · ".join(git_meta_parts) or "暂无仓库信息"
-    return f"""<section id="overview">
-  <div class="section-head">
-    <div>
-      <h2>项目总览</h2>
-      <p class="hint">自动汇总核心配置、TODO、运行数据和本地 Git 记录。更新时间：{escape(overview.generated_at)}</p>
-    </div>
-  </div>
-  <div class="summary-grid">
-    {_render_metric("已启用能力", f"{overview.enabled_skill_count} / {overview.total_skill_count}", "已启用 Skill / 已安装 Skill")}
-    {_render_metric("开放待办", str(overview.open_todo_count), f"其中 P0/P1 共 {overview.urgent_todo_count} 项")}
-    {_render_metric("累计任务", str(overview.writing_job_count + overview.review_task_count), f"写作 {overview.writing_job_count} · 审核 {overview.review_task_count}")}
-    {_render_metric("Git 状态", repository.sync_label, git_meta)}
-  </div>
-</section>"""
-
-
-def _render_metric(label: str, value: str, meta: str) -> str:
-    return f"""<div class="metric">
-  <div class="metric-label">{escape(label)}</div>
-  <div class="metric-value">{escape(value)}</div>
-  <div class="metric-meta">{escape(meta)}</div>
-</div>"""
-
-
 def _render_architecture_section(overview: ProjectOverview) -> str:
     counts = overview.capability_status_counts
     total = sum(counts.values())
@@ -873,7 +823,7 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
     return f"""<section id="architecture" class="architecture-section">
   <div class="architecture-toolbar">
     <div>
-      <h2>整体架构与功能模块</h2>
+      <h2>项目总览</h2>
       <p class="hint">建设成熟度来自现有代码、Skill 配置和 TODO；Bot 是否在线另看节点心跳。</p>
     </div>
     <div class="architecture-filters" role="group" aria-label="按建设状态筛选功能">
