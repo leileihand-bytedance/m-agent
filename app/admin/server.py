@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import re
 from typing import Callable
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from app.admin.services import (
     AdminPaths,
@@ -48,11 +48,26 @@ DEFAULT_PATHS = AdminPaths(
 )
 
 
-def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
+def render_dashboard(
+    paths: AdminPaths = DEFAULT_PATHS,
+    *,
+    show_sensitive: bool = False,
+) -> str:
     overview = build_project_overview(paths)
     skills = list_skills(paths.skills_dir)
-    users = list_policy_users(paths.policy_path)
-    jobs = list_jobs(paths, limit=20)
+    users = list_policy_users(paths.policy_path) if show_sensitive else {}
+    jobs = list_jobs(paths, limit=20) if show_sensitive else []
+    sensitive_nav = (
+        '<a href="#users">权限</a><a href="#jobs">任务</a>' if show_sensitive else ""
+    )
+    sensitive_sections = (
+        _render_users_section(users) + _render_jobs_section(jobs) if show_sensitive else ""
+    )
+    sensitive_toggle = (
+        '<a class="sensitive-access-link" href="/">隐藏用户权限与任务记录</a>'
+        if show_sensitive
+        else '<a class="sensitive-access-link" href="/?show_sensitive=1#users">显示用户权限与任务记录</a>'
+    )
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -416,6 +431,21 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
       font-size: 14px;
     }}
     form.inline {{ display: inline; }}
+    .sensitive-access {{ display: flex; justify-content: flex-end; }}
+    .sensitive-access-link {{
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      border: 1px solid #b8c2d6;
+      border-radius: 6px;
+      padding: 7px 10px;
+      background: #fff;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+    }}
+    .sensitive-access-link:hover {{ color: var(--accent); border-color: var(--accent); }}
     .muted {{ color: var(--muted); }}
     .empty {{ padding: 22px 18px; color: var(--muted); }}
     .skill-preview {{
@@ -467,7 +497,7 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
 <body>
   <header>
     <h1>M-Agent 项目控制台</h1>
-    <p>查看各板块进度、下一步待办、运行健康，并管理 Skill 与用户权限。</p>
+    <p>查看各板块进度、下一步待办、运行健康，并管理 Skill。</p>
   </header>
   <nav aria-label="控制台导航">
     <a href="#overview">总览</a>
@@ -477,8 +507,7 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     <a href="#runtime">运行</a>
     <a href="#changes">更新</a>
     <a href="#skills">Skills</a>
-    <a href="#users">权限</a>
-    <a href="#jobs">任务</a>
+    {sensitive_nav}
   </nav>
   <main>
     {_render_overview_section(overview)}
@@ -488,8 +517,8 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     {_render_runtime_section(overview)}
     {_render_changes_section(overview)}
     {_render_skills_section(skills)}
-    {_render_users_section(users)}
-    {_render_jobs_section(jobs)}
+    <div class="sensitive-access">{sensitive_toggle}</div>
+    {sensitive_sections}
   </main>
   <script src="/static/vendor/vis-network.min.js"></script>
   <script>
@@ -689,13 +718,16 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
         server_version = "MAgentAdmin/0.1"
 
         def do_GET(self) -> None:
-            if self.path == "/static/vendor/vis-network.min.js":
+            request = urlsplit(self.path)
+            if request.path == "/static/vendor/vis-network.min.js":
                 self._send_javascript(VIS_NETWORK_ASSET)
                 return
-            if self.path not in {"/", "/index.html"}:
+            if request.path not in {"/", "/index.html"}:
                 self._send_text("Not found", HTTPStatus.NOT_FOUND)
                 return
-            self._send_html(render_dashboard(paths))
+            query = parse_qs(request.query, keep_blank_values=True)
+            show_sensitive = query.get("show_sensitive") == ["1"]
+            self._send_html(render_dashboard(paths, show_sensitive=show_sensitive))
 
         def do_POST(self) -> None:
             handlers: dict[str, Callable[[dict[str, list[str]]], None]] = {
@@ -714,7 +746,8 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
                 self._send_text(f"操作失败：{exc}", HTTPStatus.BAD_REQUEST)
                 return
             self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", "/")
+            redirect = "/?show_sensitive=1#users" if self.path == "/users/update" else "/"
+            self.send_header("Location", redirect)
             self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:

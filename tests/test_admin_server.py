@@ -51,7 +51,8 @@ def test_render_dashboard_lists_skills_users_and_jobs(tmp_path, monkeypatch):
     )
 
     html = render_dashboard(
-        AdminPaths(skills_dir=skills_dir, policy_path=policy_path, jobs_dir=tmp_path / "jobs")
+        AdminPaths(skills_dir=skills_dir, policy_path=policy_path, jobs_dir=tmp_path / "jobs"),
+        show_sensitive=True,
     )
 
     assert "direct_report 名称" in html
@@ -69,12 +70,40 @@ def test_render_dashboard_empty_state(tmp_path):
             skills_dir=tmp_path / "missing-skills",
             policy_path=tmp_path / "missing-policy.yaml",
             jobs_dir=tmp_path / "missing-jobs",
-        )
+        ),
+        show_sensitive=True,
     )
 
     assert "暂无 Skill" in html
     assert "暂无用户权限配置" in html
     assert "暂无任务记录" in html
+
+
+def test_render_dashboard_does_not_load_or_render_users_and_jobs_by_default(tmp_path, monkeypatch):
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("默认页面不应读取敏感管理数据")
+
+    monkeypatch.setattr("app.admin.server.list_policy_users", fail_if_called)
+    monkeypatch.setattr("app.admin.server.list_jobs", fail_if_called)
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+        )
+    )
+
+    assert 'id="users"' not in html
+    assert 'id="jobs"' not in html
+    assert 'href="#users"' not in html
+    assert 'href="#jobs"' not in html
+    assert 'href="/?show_sensitive=1#users"' in html
+    assert "显示用户权限与任务记录" in html
 
 
 def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_path):
