@@ -480,12 +480,13 @@ def test_review_load_config_uses_single_external_data_root(tmp_path: Path):
     assert config.auto_batch_seconds == 8.0
 
 
-def test_default_file_ack_is_immediate_and_does_not_emphasize_model_slowness():
+def test_default_file_ack_keeps_original_review_time_expectation():
     reply = _build_file_ack(None)
 
-    assert "收到文件" in reply
-    assert "正在" in reply
-    assert "模型反应有点慢" not in reply
+    assert reply == (
+        "收到文件啦，正在加紧审核，请稍等"
+        "（模型反应有点慢，你可以先干点别的，一会儿再来看）……"
+    )
 
 
 def test_extract_primary_inference_texts_reads_each_real_docx(tmp_path: Path):
