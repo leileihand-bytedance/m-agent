@@ -66,26 +66,32 @@ def test_direct_report_and_brief_title_connector_rules_are_explicit():
 def test_writer1_prompt_mentions_planning_revision_feedback_and_anti_news_style():
     prompt = (ROOT / "skills/writer1/prompts/draft.md").read_text(encoding="utf-8")
     skill = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
+    critic = (ROOT / "skills/writer1/prompts/critic.md").read_text(encoding="utf-8")
 
     assert "写作规划" in prompt
     assert "revision_feedback" in prompt
-    assert "新闻稿" in prompt + skill
-    assert "地方政府和监管部门" in prompt + skill
+    assert "新闻稿" in prompt + skill + critic
+    assert "地方政府和监管部门" in prompt + skill + critic
     assert "1000字左右" in prompt + skill
     assert "机制成果型" in prompt + skill
     assert "产品工具型" in prompt + skill
     assert "活动亮相型" in prompt + skill
+    assert "内部流转简报" not in prompt + skill + critic
+    assert "适合内部流转和领导阅读" not in prompt + skill + critic
 
 
 def test_writer2_prompt_mentions_unified_theme_weak_relation_and_revision_feedback():
     prompt = (ROOT / "skills/writer2/prompts/draft.md").read_text(encoding="utf-8")
     skill = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
+    critic = (ROOT / "skills/writer2/prompts/critic.md").read_text(encoding="utf-8")
 
     assert "写作规划" in prompt
     assert "revision_feedback" in prompt
     assert "统一主题" in prompt + skill
     assert "不要强行整合" in prompt + skill or "弱关联" in prompt + skill
-    assert "地方政府和监管部门" in prompt + skill
+    assert "地方政府和监管部门" in prompt + skill + critic
     assert "1000字左右" in prompt + skill
     assert "平台合作型" in prompt + skill
     assert "外部认可型" in prompt + skill
+    assert "内部流转简报" not in prompt + skill + critic
+    assert "适合内部流转和领导阅读" not in prompt + skill + critic
