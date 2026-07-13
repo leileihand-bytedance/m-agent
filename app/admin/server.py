@@ -110,9 +110,11 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
       width: min(1240px, calc(100% - 32px));
       margin: 24px auto 48px;
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       gap: 20px;
     }}
     section {{
+      min-width: 0;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -144,6 +146,130 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     .metric-label {{ color: var(--muted); font-size: 13px; }}
     .metric-value {{ margin-top: 7px; font-size: 25px; font-weight: 750; line-height: 1.2; }}
     .metric-meta {{ margin-top: 8px; color: #475467; font-size: 12px; }}
+    .architecture-section {{
+      width: 100%;
+      min-width: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      overflow: visible;
+    }}
+    .architecture-section > .section-head {{ padding: 4px 0 16px; }}
+    .architecture-toolbar {{
+      min-width: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 14px;
+      margin-bottom: 2px;
+    }}
+    .architecture-filters {{
+      display: flex;
+      width: fit-content;
+      max-width: 100%;
+      overflow-x: auto;
+      border: 1px solid #b8c2d6;
+      border-radius: 6px;
+      background: #fff;
+    }}
+    .architecture-flow, .architecture-layer, .capability-grid {{ min-width: 0; }}
+    .capability-filter {{
+      flex: 0 0 auto;
+      border: 0;
+      border-right: 1px solid #d9dee7;
+      border-radius: 0;
+      padding: 8px 11px;
+      white-space: nowrap;
+      color: #475467;
+    }}
+    .capability-filter:last-child {{ border-right: 0; }}
+    .capability-filter.is-active {{ background: #17202a; color: #fff; }}
+    .architecture-flow {{ position: relative; }}
+    .architecture-layer {{
+      position: relative;
+      display: grid;
+      grid-template-columns: 176px minmax(0, 1fr);
+      gap: 18px;
+      padding: 20px 0 24px;
+      border-top: 1px solid var(--line);
+    }}
+    .architecture-layer::before {{
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: 0;
+      width: 2px;
+      height: 20px;
+      background: #98a2b3;
+    }}
+    .architecture-layer:first-child::before {{ display: none; }}
+    .layer-heading {{ padding: 1px 8px 0 0; }}
+    .layer-order {{
+      display: block;
+      margin-bottom: 6px;
+      color: #667085;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .layer-heading h3 {{ margin: 0; font-size: 16px; }}
+    .layer-heading p {{ margin: 7px 0 0; color: var(--muted); font-size: 12px; }}
+    .capability-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .capability-node {{
+      min-width: 0;
+      min-height: 154px;
+      padding: 13px 14px 12px;
+      border: 1px solid var(--line);
+      border-left: 4px solid #98a2b3;
+      border-radius: 7px;
+      background: #fff;
+    }}
+    .capability-node[hidden], .architecture-layer[hidden] {{ display: none; }}
+    .capability-node.capability-state-stable {{ border-left-color: var(--ok); }}
+    .capability-node.capability-state-optimizing {{ border-left-color: var(--accent); }}
+    .capability-node.capability-state-building {{ border-left-color: var(--warn); }}
+    .capability-node.capability-state-planned {{ border-left-color: #667085; }}
+    .capability-node.capability-state-paused, .capability-node.capability-state-disabled {{ border-left-color: #7f5632; }}
+    .capability-node-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }}
+    .capability-node h4 {{ margin: 0; font-size: 14px; }}
+    .capability-description {{ margin: 8px 0 10px; color: #344054; font-size: 12px; }}
+    .capability-evidence, .capability-next {{
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      word-break: break-word;
+    }}
+    .capability-next {{ color: #475467; }}
+    .capability-status {{
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .capability-status.stable {{ color: var(--ok); }}
+    .capability-status.optimizing {{ color: var(--accent); }}
+    .capability-status.building {{ color: var(--warn); }}
+    .capability-status.planned {{ color: #667085; }}
+    .capability-status.paused, .capability-status.disabled {{ color: #7f5632; }}
+    .runtime-indicator {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }}
+    .runtime-indicator::before {{ content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }}
+    .runtime-indicator.healthy {{ color: var(--ok); }}
+    .runtime-indicator.stale, .runtime-indicator.missing {{ color: var(--danger); }}
     table {{
       width: 100%;
       border-collapse: collapse;
@@ -233,6 +359,12 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
       main {{ width: calc(100% - 20px); }}
       .summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
       .metric-value {{ font-size: 21px; }}
+      .architecture-toolbar {{ display: block; }}
+      .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
+      .architecture-layer {{ grid-template-columns: 1fr; gap: 12px; }}
+      .architecture-layer::before {{ left: 12px; }}
+      .capability-grid {{ grid-template-columns: 1fr; }}
+      .capability-node {{ min-height: 0; }}
       .change-list li {{ grid-template-columns: 64px 1fr; }}
       .change-list li span:last-child {{ grid-column: 1 / -1; }}
       table, thead, tbody, th, td, tr {{ display: block; }}
@@ -256,6 +388,7 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
   </header>
   <nav aria-label="控制台导航">
     <a href="#overview">总览</a>
+    <a href="#architecture">架构</a>
     <a href="#modules">板块</a>
     <a href="#todos">待办</a>
     <a href="#runtime">运行</a>
@@ -266,6 +399,7 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
   </nav>
   <main>
     {_render_overview_section(overview)}
+    {_render_architecture_section(overview)}
     {_render_modules_section(overview)}
     {_render_todos_section(overview)}
     {_render_runtime_section(overview)}
@@ -274,6 +408,25 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     {_render_users_section(users)}
     {_render_jobs_section(jobs)}
   </main>
+  <script>
+    (() => {{
+      const filters = Array.from(document.querySelectorAll("[data-capability-filter]"));
+      const nodes = Array.from(document.querySelectorAll("[data-capability-status]"));
+      const layers = Array.from(document.querySelectorAll("[data-architecture-layer]"));
+      for (const filter of filters) {{
+        filter.addEventListener("click", () => {{
+          const selected = filter.dataset.capabilityFilter;
+          for (const item of filters) item.classList.toggle("is-active", item === filter);
+          for (const node of nodes) {{
+            node.hidden = selected !== "all" && node.dataset.capabilityStatus !== selected;
+          }}
+          for (const layer of layers) {{
+            layer.hidden = !Array.from(layer.querySelectorAll("[data-capability-status]")).some(node => !node.hidden);
+          }}
+        }});
+      }}
+    }})();
+  </script>
 </body>
 </html>"""
 
@@ -391,6 +544,80 @@ def _render_metric(label: str, value: str, meta: str) -> str:
   <div class="metric-value">{escape(value)}</div>
   <div class="metric-meta">{escape(meta)}</div>
 </div>"""
+
+
+def _render_architecture_section(overview: ProjectOverview) -> str:
+    counts = overview.capability_status_counts
+    total = sum(counts.values())
+    filters = (
+        ("all", "全部", total),
+        ("stable", "稳定运行", counts.get("stable", 0)),
+        ("optimizing", "上线优化中", counts.get("optimizing", 0)),
+        ("building", "建设中", counts.get("building", 0)),
+        ("planned", "待建设", counts.get("planned", 0)),
+        ("paused", "已暂缓", counts.get("paused", 0)),
+        ("disabled", "已关闭", counts.get("disabled", 0)),
+    )
+    filter_html = "".join(
+        f'<button type="button" class="capability-filter{" is-active" if status == "all" else ""}" '
+        f'data-capability-filter="{escape(status)}">{escape(label)} {count}</button>'
+        for status, label, count in filters
+    )
+    layers = "\n".join(_render_architecture_layer(layer) for layer in overview.architecture_layers)
+    return f"""<section id="architecture" class="architecture-section">
+  <div class="architecture-toolbar">
+    <div>
+      <h2>整体架构与功能模块</h2>
+      <p class="hint">建设成熟度来自现有代码、Skill 配置和 TODO；Bot 是否在线另看节点心跳。</p>
+    </div>
+    <div class="architecture-filters" role="group" aria-label="按建设状态筛选功能">
+      {filter_html}
+    </div>
+  </div>
+  <div class="architecture-flow">{layers}</div>
+</section>"""
+
+
+def _render_architecture_layer(layer: object) -> str:
+    capabilities = "\n".join(
+        _render_capability_node(capability) for capability in getattr(layer, "capabilities")
+    )
+    return f"""<div class="architecture-layer" data-architecture-layer="{escape(str(getattr(layer, "key")))}">
+  <div class="layer-heading">
+    <span class="layer-order">{escape(str(getattr(layer, "order")))}</span>
+    <h3>{escape(str(getattr(layer, "name")))}</h3>
+    <p>{escape(str(getattr(layer, "description")))}</p>
+  </div>
+  <div class="capability-grid">{capabilities}</div>
+</div>"""
+
+
+def _render_capability_node(capability: object) -> str:
+    status = str(getattr(capability, "status"))
+    runtime_status = str(getattr(capability, "runtime_status"))
+    runtime_label = str(getattr(capability, "runtime_label"))
+    runtime_html = ""
+    if runtime_status and runtime_label:
+        runtime_html = (
+            f'<div class="runtime-indicator {escape(runtime_status)}">{escape(runtime_label)}</div>'
+        )
+    todo_id = str(getattr(capability, "todo_id"))
+    next_action = str(getattr(capability, "next_action"))
+    next_html = ""
+    if todo_id and next_action:
+        next_html = (
+            f'<div class="capability-next"><strong>{escape(todo_id)}</strong>：{escape(next_action)}</div>'
+        )
+    return f"""<article class="capability-node capability-state-{escape(status)}" data-capability-status="{escape(status)}">
+  <div class="capability-node-head">
+    <h4>{escape(str(getattr(capability, "name")))}</h4>
+    <span class="capability-status {escape(status)}">{escape(str(getattr(capability, "status_label")))}</span>
+  </div>
+  <p class="capability-description">{escape(str(getattr(capability, "description")))}</p>
+  {runtime_html}
+  <div class="capability-evidence">依据：{escape(str(getattr(capability, "evidence")))}</div>
+  {next_html}
+</article>"""
 
 
 def _render_modules_section(overview: ProjectOverview) -> str:

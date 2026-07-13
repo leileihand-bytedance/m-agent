@@ -115,6 +115,29 @@ class ModuleAdminSummary:
 
 
 @dataclass(frozen=True)
+class CapabilityAdminSummary:
+    id: str
+    name: str
+    description: str
+    status: str
+    status_label: str
+    evidence: str
+    todo_id: str = ""
+    next_action: str = ""
+    runtime_status: str = ""
+    runtime_label: str = ""
+
+
+@dataclass(frozen=True)
+class ArchitectureLayerSummary:
+    key: str
+    order: str
+    name: str
+    description: str
+    capabilities: tuple[CapabilityAdminSummary, ...]
+
+
+@dataclass(frozen=True)
 class ProjectOverview:
     generated_at: str
     enabled_skill_count: int
@@ -128,8 +151,33 @@ class ProjectOverview:
     repository: RepositoryAdminSummary
     todos: tuple[TodoAdminSummary, ...]
     services: tuple[ServiceHealthSummary, ...]
+    architecture_layers: tuple[ArchitectureLayerSummary, ...]
+    capability_status_counts: dict[str, int]
     modules: tuple[ModuleAdminSummary, ...]
     recent_changes: tuple[RecentChangeSummary, ...]
+
+
+@dataclass(frozen=True)
+class _CapabilitySpec:
+    id: str
+    name: str
+    description: str
+    default_status: str
+    evidence_paths: tuple[str, ...] = ()
+    todo_ids: tuple[str, ...] = ()
+    todo_policy: str = "none"
+    skill_ids: tuple[str, ...] = ()
+    runtime_service: str = ""
+    build_when_evidence_exists: bool = False
+
+
+@dataclass(frozen=True)
+class _ArchitectureLayerSpec:
+    key: str
+    order: str
+    name: str
+    description: str
+    capabilities: tuple[_CapabilitySpec, ...]
 
 
 _TODO_HEADING_RE = re.compile(r"^###\s+(TODO-\d{3})[：:]\s*(.+?)\s*$", re.MULTILINE)
@@ -146,6 +194,324 @@ _MODULE_SPECS = (
     ("knowledge", "知识库", ("政策知识库", "微众银行信息库", "知识库"), ("app/policy_knowledge", "app/bank_knowledge", "docs/development/policy-knowledge-base.md", "docs/development/bank-knowledge-base.md")),
     ("operations", "入口与运维", ("运维", "企业微信入口"), ("app/platform/ops", "app/writing/bot.py", "app/review/main.py")),
     ("admin", "管理后台", ("管理后台",), ("app/admin", "docs/development/admin-console.md")),
+)
+_CAPABILITY_STATUS_LABELS = {
+    "stable": "稳定运行",
+    "optimizing": "已上线·优化中",
+    "building": "建设中",
+    "planned": "待建设",
+    "paused": "已暂缓",
+    "disabled": "已关闭",
+}
+_RUNTIME_STATUS_LABELS = {
+    "healthy": "当前在线",
+    "stale": "心跳超时",
+    "missing": "未运行",
+}
+_ARCHITECTURE_LAYER_SPECS = (
+    _ArchitectureLayerSpec(
+        key="entry",
+        order="01",
+        name="用户入口",
+        description="用户、管理员与系统交互的入口。",
+        capabilities=(
+            _CapabilitySpec(
+                "writing_bot",
+                "写作 Bot",
+                "接收直报、简报、润色和连续改稿请求。",
+                "optimizing",
+                ("app/writing/bot.py",),
+                ("TODO-001", "TODO-002", "TODO-003"),
+                "optimize",
+                runtime_service="writing_bot",
+            ),
+            _CapabilitySpec(
+                "review_bot",
+                "审核 Bot",
+                "保持独立入口，承载内容、格式和多文件审核。",
+                "optimizing",
+                ("app/review/main.py",),
+                ("TODO-023", "TODO-021", "TODO-020"),
+                "optimize",
+                runtime_service="review_bot",
+            ),
+            _CapabilitySpec(
+                "ops_bot",
+                "运维 Bot",
+                "发送实时异常告警和工作日日报。",
+                "stable",
+                ("app/platform/ops/bot.py",),
+                runtime_service="ops_bot",
+            ),
+            _CapabilitySpec(
+                "admin_console",
+                "本机项目控制台",
+                "查看项目状态并管理 Skill 和用户权限。",
+                "stable",
+                ("app/admin/server.py",),
+            ),
+            _CapabilitySpec(
+                "unified_entry",
+                "统一企业微信入口",
+                "长期将更多业务能力收口到统一入口。",
+                "paused",
+                ("app/platform/gateway/wecom.py",),
+                ("TODO-004",),
+                "work",
+            ),
+        ),
+    ),
+    _ArchitectureLayerSpec(
+        key="platform",
+        order="02",
+        name="通用底座",
+        description="所有业务能力共用的安全运行框架。",
+        capabilities=(
+            _CapabilitySpec(
+                "gateway_identity",
+                "入口适配与用户权限",
+                "标准化企业微信消息并限制用户可用能力。",
+                "stable",
+                ("app/platform/gateway/wecom.py", "app/platform/identity.py"),
+            ),
+            _CapabilitySpec(
+                "router_registry",
+                "意图路由与 Skill 注册",
+                "只在已登记、已授权的能力中识别用户意图。",
+                "stable",
+                ("app/platform/router.py", "app/platform/registry.py"),
+            ),
+            _CapabilitySpec(
+                "runtime_gateway",
+                "运行层与工具授权",
+                "通过 ToolGateway 和 Pydantic AI 执行受限工作流。",
+                "stable",
+                ("app/platform/runtime.py", "app/platform/tools.py", "app/platform/pydantic_runtime.py"),
+            ),
+            _CapabilitySpec(
+                "conversation_revision",
+                "会话与稿件版本链",
+                "保存活跃稿件并区分续改、回退和新任务。",
+                "optimizing",
+                ("app/platform/conversation.py", "app/platform/intent.py"),
+                ("TODO-018",),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "task_intake",
+                "公共任务组装",
+                "统一处理先发材料、后说用途和多文件显式开始。",
+                "building",
+                ("app/writing/intake.py", "app/review/intake.py"),
+                ("TODO-003",),
+                "work",
+                build_when_evidence_exists=True,
+            ),
+            _CapabilitySpec(
+                "document_service",
+                "统一文档服务",
+                "安全解析 DOCX、PDF、PPTX 并保留定位信息。",
+                "building",
+                ("app/platform/documents/service.py",),
+                ("TODO-024",),
+                "work",
+                build_when_evidence_exists=True,
+            ),
+            _CapabilitySpec(
+                "attachment_delivery",
+                "公共附件回传",
+                "统一处理大文件、图片压缩和多结果回传。",
+                "planned",
+                todo_ids=("TODO-017",),
+                todo_policy="work",
+            ),
+        ),
+    ),
+    _ArchitectureLayerSpec(
+        key="capabilities",
+        order="03",
+        name="业务功能",
+        description="面向用户交付结果的写作与审核能力。",
+        capabilities=(
+            _CapabilitySpec(
+                "direct_report",
+                "直报写作",
+                "根据链接、文字或文件生成直报并支持连续改稿。",
+                "stable",
+                ("skills/direct_report",),
+                ("TODO-001",),
+                "optimize",
+                ("direct_report",),
+            ),
+            _CapabilitySpec(
+                "brief_writing",
+                "简报写作",
+                "覆盖单素材和多素材简报，并支持连续改稿。",
+                "stable",
+                ("skills/writer1", "skills/writer2"),
+                ("TODO-002",),
+                "optimize",
+                ("writer1", "writer2"),
+            ),
+            _CapabilitySpec(
+                "rewrite",
+                "材料润色",
+                "对用户直接粘贴的初稿做独立润色和后续修改。",
+                "stable",
+                ("skills/rewrite",),
+                skill_ids=("rewrite",),
+            ),
+            _CapabilitySpec(
+                "general_review",
+                "通用内容审核",
+                "检查文字、逻辑、事实一致性并返回标注文档。",
+                "stable",
+                ("app/review/general_reviewer.py",),
+                ("TODO-023",),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "official_format_review",
+                "公文格式审核",
+                "按显式指令检查字体、字号、层级和页面设置。",
+                "stable",
+                ("app/review/official_format_checker.py",),
+                ("TODO-019",),
+                "work",
+            ),
+            _CapabilitySpec(
+                "multi_file_review",
+                "多文件联合审核",
+                "联合检查正文、附件引用和跨文件矛盾。",
+                "planned",
+                ("app/review/multi_file_reviewer.py",),
+                ("TODO-021",),
+                "work",
+                build_when_evidence_exists=True,
+            ),
+            _CapabilitySpec(
+                "ppt_review",
+                "PPT 专项审核",
+                "检查幻灯片文字、逻辑、版式并提供可交付结果。",
+                "planned",
+                todo_ids=("TODO-020",),
+                todo_policy="work",
+            ),
+            _CapabilitySpec(
+                "writing_final_review",
+                "直报/简报成稿审核",
+                "为写作结果增加各自口径的末端审核。",
+                "planned",
+                todo_ids=("TODO-016",),
+                todo_policy="work",
+            ),
+        ),
+    ),
+    _ArchitectureLayerSpec(
+        key="resources",
+        order="04",
+        name="工具与知识库",
+        description="写作和审核共用的材料读取、搜索与背景信息。",
+        capabilities=(
+            _CapabilitySpec(
+                "web_tools",
+                "网页读取与联网搜索",
+                "读取公开链接并在必要时补充外部背景。",
+                "stable",
+                ("app/platform/builtin_tools.py",),
+                ("TODO-012",),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "docx_reader",
+                "DOCX 读取",
+                "提取正文、表格和基础结构并保留定位。",
+                "stable",
+                ("app/platform/documents/parsers/docx.py",),
+            ),
+            _CapabilitySpec(
+                "pdf_ppt_reader",
+                "PDF / PPTX 读取",
+                "已可提取文本和结构，继续补 OCR 与页面渲染。",
+                "building",
+                ("app/platform/documents/parsers/pdf.py", "app/platform/documents/parsers/pptx.py"),
+                ("TODO-024",),
+                "work",
+                build_when_evidence_exists=True,
+            ),
+            _CapabilitySpec(
+                "policy_knowledge",
+                "政策知识库",
+                "为写作提供经过筛选的监管和宏观政策背景。",
+                "stable",
+                ("app/policy_knowledge",),
+                ("TODO-008", "TODO-009"),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "bank_knowledge",
+                "微众银行信息库",
+                "提供银行自身产品、数据和事实口径。",
+                "stable",
+                ("app/bank_knowledge",),
+                ("TODO-010",),
+                "optimize",
+            ),
+        ),
+    ),
+    _ArchitectureLayerSpec(
+        key="operations",
+        order="05",
+        name="运维与数据",
+        description="保证项目可追踪、可告警、可交付和可维护。",
+        capabilities=(
+            _CapabilitySpec(
+                "task_files",
+                "任务与文件存储",
+                "用户材料和系统产物统一保存到 M-Agent-Files。",
+                "stable",
+                ("app/platform/data_paths.py", "app/platform/storage.py"),
+            ),
+            _CapabilitySpec(
+                "logs_identity",
+                "日志与用户名映射",
+                "记录开发期对话、任务和可读用户名。",
+                "stable",
+                ("app/platform/chat_log.py", "app/platform/user_registry.py"),
+            ),
+            _CapabilitySpec(
+                "ops_monitoring",
+                "告警、心跳与日报",
+                "监控三个 Bot 并向管理员发送异常和日报。",
+                "stable",
+                ("app/platform/ops",),
+                runtime_service="ops_bot",
+            ),
+            _CapabilitySpec(
+                "delivery_rules",
+                "测试、文档与 Git 闸门",
+                "用自动化测试和受管推送保证交付可追溯。",
+                "stable",
+                ("scripts/project_docs.py", "docs/development/testing-and-delivery.md"),
+            ),
+            _CapabilitySpec(
+                "retention_cleanup",
+                "运行数据保留与清理",
+                "按类别制定保留周期并先预演再清理。",
+                "planned",
+                todo_ids=("TODO-022",),
+                todo_policy="work",
+            ),
+            _CapabilitySpec(
+                "policy_admin",
+                "政策库可视化管理",
+                "查看、筛选、备份并勾选删除政策数据。",
+                "planned",
+                todo_ids=("TODO-007",),
+                todo_policy="work",
+            ),
+        ),
+    ),
 )
 
 
@@ -307,6 +673,15 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
     repository = repository_summary(project_root)
     recent_changes = tuple(list_recent_changes(project_root, limit=8))
     open_todos = [todo for todo in todos if todo.is_open]
+    architecture_layers = tuple(
+        _build_architecture_layers(
+            project_root=project_root,
+            skills=skills,
+            todos=todos,
+            services=services,
+        )
+    )
+    capability_status_counts = _count_capability_statuses(architecture_layers)
     modules = tuple(
         _build_module_summaries(
             project_root=project_root,
@@ -332,6 +707,8 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         repository=repository,
         todos=tuple(todos),
         services=tuple(services),
+        architecture_layers=architecture_layers,
+        capability_status_counts=capability_status_counts,
         modules=modules,
         recent_changes=recent_changes,
     )
@@ -381,6 +758,142 @@ def list_recent_changes(project_root: Path, *, limit: int = 8) -> list[RecentCha
         if len(parts) == 3:
             changes.append(RecentChangeSummary(commit=parts[0], date=parts[1], subject=parts[2]))
     return changes
+
+
+def _build_architecture_layers(
+    *,
+    project_root: Path,
+    skills: list[SkillAdminSummary],
+    todos: list[TodoAdminSummary],
+    services: list[ServiceHealthSummary],
+) -> list[ArchitectureLayerSummary]:
+    skills_by_id = {skill.id: skill for skill in skills}
+    todos_by_id = {todo.todo_id: todo for todo in todos}
+    services_by_id = {service.service: service for service in services}
+    layers: list[ArchitectureLayerSummary] = []
+    for layer_spec in _ARCHITECTURE_LAYER_SPECS:
+        capabilities = tuple(
+            _build_capability_summary(
+                project_root=project_root,
+                spec=spec,
+                skills_by_id=skills_by_id,
+                todos_by_id=todos_by_id,
+                services_by_id=services_by_id,
+            )
+            for spec in layer_spec.capabilities
+        )
+        layers.append(
+            ArchitectureLayerSummary(
+                key=layer_spec.key,
+                order=layer_spec.order,
+                name=layer_spec.name,
+                description=layer_spec.description,
+                capabilities=capabilities,
+            )
+        )
+    return layers
+
+
+def _build_capability_summary(
+    *,
+    project_root: Path,
+    spec: _CapabilitySpec,
+    skills_by_id: dict[str, SkillAdminSummary],
+    todos_by_id: dict[str, TodoAdminSummary],
+    services_by_id: dict[str, ServiceHealthSummary],
+) -> CapabilityAdminSummary:
+    related_todos = [todos_by_id[todo_id] for todo_id in spec.todo_ids if todo_id in todos_by_id]
+    evidence_exists = any((project_root / relative_path).exists() for relative_path in spec.evidence_paths)
+    status = _resolve_capability_status(
+        spec,
+        related_todos=related_todos,
+        evidence_exists=evidence_exists,
+        skills_by_id=skills_by_id,
+    )
+    next_todo = next((todo for todo in related_todos if todo.is_open), related_todos[0] if related_todos else None)
+    service = services_by_id.get(spec.runtime_service)
+    runtime_status = service.status if service else ""
+    return CapabilityAdminSummary(
+        id=spec.id,
+        name=spec.name,
+        description=spec.description,
+        status=status,
+        status_label=_CAPABILITY_STATUS_LABELS[status],
+        evidence=_capability_evidence(
+            project_root=project_root,
+            spec=spec,
+            next_todo=next_todo,
+            skills_by_id=skills_by_id,
+        ),
+        todo_id=next_todo.todo_id if next_todo else "",
+        next_action=next_todo.next_action if next_todo and next_todo.is_open else "",
+        runtime_status=runtime_status,
+        runtime_label=_RUNTIME_STATUS_LABELS.get(runtime_status, ""),
+    )
+
+
+def _resolve_capability_status(
+    spec: _CapabilitySpec,
+    *,
+    related_todos: list[TodoAdminSummary],
+    evidence_exists: bool,
+    skills_by_id: dict[str, SkillAdminSummary],
+) -> str:
+    if spec.skill_ids:
+        related_skills = [skills_by_id[skill_id] for skill_id in spec.skill_ids if skill_id in skills_by_id]
+        if not related_skills:
+            return "planned"
+        if not any(skill.enabled for skill in related_skills):
+            return "disabled"
+
+    if spec.todo_policy == "optimize":
+        if any(todo.status in {"未开始", "进行中"} for todo in related_todos):
+            return "optimizing"
+        return spec.default_status
+
+    if spec.todo_policy == "work" and related_todos:
+        statuses = {todo.status for todo in related_todos}
+        if "进行中" in statuses:
+            return "building"
+        if "已暂缓" in statuses:
+            return "paused"
+        if "未开始" in statuses:
+            if spec.build_when_evidence_exists and evidence_exists:
+                return "building"
+            return "planned"
+        if "已完成" in statuses:
+            return "stable"
+    return spec.default_status
+
+
+def _capability_evidence(
+    *,
+    project_root: Path,
+    spec: _CapabilitySpec,
+    next_todo: TodoAdminSummary | None,
+    skills_by_id: dict[str, SkillAdminSummary],
+) -> str:
+    evidence: list[str] = []
+    related_skills = [skills_by_id[skill_id] for skill_id in spec.skill_ids if skill_id in skills_by_id]
+    if related_skills:
+        enabled_count = sum(1 for skill in related_skills if skill.enabled)
+        evidence.append(f"Skill {enabled_count}/{len(related_skills)} 已启用")
+    existing_paths = [path for path in spec.evidence_paths if (project_root / path).exists()]
+    if existing_paths:
+        evidence.append("代码：" + "、".join(existing_paths[:2]))
+    if next_todo:
+        evidence.append(f"{next_todo.todo_id}（{next_todo.status}）")
+    return " · ".join(evidence) or "项目架构基线"
+
+
+def _count_capability_statuses(
+    layers: tuple[ArchitectureLayerSummary, ...],
+) -> dict[str, int]:
+    counts = {status: 0 for status in _CAPABILITY_STATUS_LABELS}
+    for layer in layers:
+        for capability in layer.capabilities:
+            counts[capability.status] += 1
+    return counts
 
 
 def _build_module_summaries(
@@ -440,10 +953,12 @@ def _section_next_action(section: str) -> str:
         if goal_match and line.endswith("：") and not line.startswith("-"):
             break
     for goal in goals:
-        for marker in ("待补", "待完成", "尚未完成", "下一步"):
+        for marker in ("待补", "待完成", "尚未完成"):
             marker_index = goal.find(marker)
             if marker_index >= 0:
                 return goal[marker_index:]
+        if goal.startswith("下一步"):
+            return goal
     for goal in goals:
         if not goal.startswith(("已完成", "已取消", "已暂缓")):
             return goal

@@ -57,7 +57,7 @@ python -m pytest tests/test_admin_services.py tests/test_admin_server.py -v
 python scripts/project_docs.py check
 ```
 
-重点验证 TODO 优先级、Bot 心跳降级、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。
+重点验证五层架构完整性、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。
 
 ### 1. 平台单元测试
 

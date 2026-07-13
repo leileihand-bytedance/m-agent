@@ -118,3 +118,50 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
     assert "底座" in html
     assert "写作" in html
     assert "审核" in html
+
+
+def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(tmp_path):
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+    todo_path = tmp_path / "docs" / "development" / "TODO.md"
+    todo_path.parent.mkdir(parents=True)
+    todo_path.write_text(
+        """### TODO-001：优化直报质量
+
+状态：进行中
+
+优先级：P2
+
+归属：直报
+
+目标：
+
+- 建立质量回归，拒绝 <script>alert(1)</script>。
+""",
+        encoding="utf-8",
+    )
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+            todo_path=todo_path,
+            heartbeat_dir=tmp_path / "heartbeats",
+        )
+    )
+
+    assert "整体架构与功能模块" in html
+    assert "用户入口" in html
+    assert "通用底座" in html
+    assert "工具与知识库" in html
+    assert "运维与数据" in html
+    assert 'data-capability-status="stable"' in html
+    assert 'data-capability-status="building"' in html
+    assert 'data-capability-filter="all"' in html
+    assert 'data-capability-filter="building"' in html
+    assert "稳定运行" in html
+    assert "建设中" in html
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
