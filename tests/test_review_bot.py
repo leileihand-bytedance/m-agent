@@ -41,6 +41,9 @@ from app.review.main import (  # noqa: E402
     RecentSubmissionTracker,
     archive_multi_file_review,
     build_multi_file_review_reply,
+    _build_file_ack,
+    _extract_primary_inference_texts,
+    _settle_auto_review_batch,
 )
 from app.review.document_type import DocumentType  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
@@ -423,6 +426,7 @@ def test_load_config_from_env_file():
                 "M_AGENT_REVIEWS_DIR=data/reviews",
                 f"M_AGENT_DATA_DIR={Path(tmpdir) / 'M-Agent-Files'}",
                 "M_AGENT_LOG_MAX_MB=8",
+                "M_AGENT_REVIEW_AUTO_BATCH_SECONDS=6.5",
                 "REVIEW_REPLY_ACK_TIMEOUT_SECONDS=45",
             ]),
             encoding="utf-8",
@@ -444,6 +448,7 @@ def test_load_config_from_env_file():
         assert config.reply_ack_timeout_seconds == 45.0
         assert config.log_max_bytes == 8 * 1024 * 1024
         assert config.direct_admin_notifications is False
+        assert config.auto_batch_seconds == 6.5
         print("✅ test_load_config_from_env_file: 配置加载正确")
 
 
@@ -472,6 +477,77 @@ def test_review_load_config_uses_single_external_data_root(tmp_path: Path):
     assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
     assert config.intake_dir == data_root / "runtime" / "intake" / "review"
     assert config.intake_ttl_seconds == 1800
+    assert config.auto_batch_seconds == 8.0
+
+
+def test_default_file_ack_is_immediate_and_does_not_emphasize_model_slowness():
+    reply = _build_file_ack(None)
+
+    assert "收到文件" in reply
+    assert "正在" in reply
+    assert "模型反应有点慢" not in reply
+
+
+def test_extract_primary_inference_texts_reads_each_real_docx(tmp_path: Path):
+    from docx import Document
+    from app.platform.models import UploadedFile
+
+    main_path = tmp_path / "材料甲.docx"
+    attachment_path = tmp_path / "材料乙.docx"
+    for path, paragraphs in (
+        (main_path, ["会议通知", "请填写附件1。"]),
+        (attachment_path, ["附件1", "议案意见反馈表"]),
+    ):
+        document = Document()
+        for paragraph in paragraphs:
+            document.add_paragraph(paragraph)
+        document.save(path)
+
+    texts = _extract_primary_inference_texts(
+        (
+            UploadedFile(filename=main_path.name, stored_path=str(main_path)),
+            UploadedFile(filename=attachment_path.name, stored_path=str(attachment_path)),
+        )
+    )
+
+    assert "请填写附件1" in texts[0]
+    assert texts[1].startswith("附件1")
+
+
+def test_settle_auto_review_batch_routes_multiple_files_without_user_text(tmp_path: Path):
+    import asyncio
+    from docx import Document
+    from app.platform.models import UploadedFile
+    from app.review.intake import ReviewIntakeStore
+
+    files: list[UploadedFile] = []
+    for filename, paragraphs in (
+        ("材料甲.docx", ["附件1", "议案意见反馈表"]),
+        ("材料乙.docx", ["会议通知", "请填写附件1。"]),
+    ):
+        path = tmp_path / filename
+        document = Document()
+        for paragraph in paragraphs:
+            document.add_paragraph(paragraph)
+        document.save(path)
+        files.append(UploadedFile(filename=filename, content=path.read_bytes()))
+
+    store = ReviewIntakeStore(storage_dir=tmp_path / "intake")
+    store.add_file(channel="wecom", sender_userid="user-1", file=files[0])
+    queued = store.add_file(channel="wecom", sender_userid="user-1", file=files[1])
+
+    decision = asyncio.run(
+        _settle_auto_review_batch(
+            store,
+            channel="wecom",
+            sender_userid="user-1",
+            expected_revision=queued.revision,
+            delay_seconds=0,
+        )
+    )
+
+    assert decision.action == "run_multi"
+    assert decision.primary_file_index == 1
 
 
 def test_configure_ws_client_timeouts_overrides_sdk_reply_ack_timeout():

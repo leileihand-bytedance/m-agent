@@ -35,6 +35,9 @@ _START_SIGNALS = {"开始", "开始审核", "开始审", "开始处理", "材料
 _CANCEL_SIGNALS = {"取消", "取消审核", "不要审核了", "不用审了", "清空文件", "重新开始"}
 _ATTACHMENT_FILENAME_RE = re.compile(r"(?:^|[-_（(\s])(?:附件|附表)\s*[一二三四五六七八九十0-9]+")
 _PRIMARY_FILENAME_HINT_RE = re.compile(r"正文|主文|主文件")
+_ATTACHMENT_NUMBER_RE = re.compile(r"(?:附件|附表)\s*([一二三四五六七八九十0-9]+)")
+_ATTACHMENT_HEADER_RE = re.compile(r"^\s*(?:附件|附表)\s*([一二三四五六七八九十0-9]+)(?:\s*[:：]|\s|$)")
+_REFERENCE_CONTEXT_RE = re.compile(r"(?:详见|参见|见|请填写|请参阅|随文).{0,10}(?:附件|附表)")
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class ReviewIntakeDecision:
     files: tuple[UploadedFile, ...] = ()
     instructions: tuple[str, ...] = ()
     primary_file_index: int | None = None
+    revision: int = 0
 
 
 @dataclass
@@ -53,6 +57,7 @@ class ReviewIntakeState:
     recent_file: UploadedFile | None = None
     instructions: list[str] = field(default_factory=list)
     awaiting_primary: bool = False
+    revision: int = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -83,8 +88,12 @@ def is_review_cancel_signal(text: str) -> bool:
     return _normalize_short_command(text) in _CANCEL_SIGNALS
 
 
-def infer_primary_file_index(files: list[UploadedFile]) -> int | None:
-    """只在文件名证据唯一时识别主文件，不使用发送顺序兜底。"""
+def infer_primary_file_index(
+    files: list[UploadedFile] | tuple[UploadedFile, ...],
+    *,
+    file_texts: tuple[str, ...] = (),
+) -> int | None:
+    """综合文件名和正文引用识别主文件，不使用发送顺序兜底。"""
     if not files:
         return None
     attachment_indexes = {
@@ -93,14 +102,54 @@ def infer_primary_file_index(files: list[UploadedFile]) -> int | None:
         if _ATTACHMENT_FILENAME_RE.search(Path(file.filename).stem)
     }
     non_attachment_indexes = [index for index in range(len(files)) if index not in attachment_indexes]
-    if len(non_attachment_indexes) == 1:
-        return non_attachment_indexes[0]
     hinted = [
         index
         for index in non_attachment_indexes
         if _PRIMARY_FILENAME_HINT_RE.search(Path(files[index].filename).stem)
     ]
-    return hinted[0] if len(hinted) == 1 else None
+    if len(hinted) == 1:
+        return hinted[0]
+    if attachment_indexes and len(non_attachment_indexes) == 1:
+        return non_attachment_indexes[0]
+
+    if len(file_texts) != len(files):
+        return None
+
+    content_attachment_indexes: set[int] = set()
+    attachment_numbers: set[str] = set()
+    own_numbers: dict[int, set[str]] = {}
+    for index, (file, text) in enumerate(zip(files, file_texts)):
+        numbers = set(_ATTACHMENT_NUMBER_RE.findall(Path(file.filename).stem))
+        header_match = _ATTACHMENT_HEADER_RE.search(text[:300])
+        if header_match:
+            numbers.add(header_match.group(1))
+            content_attachment_indexes.add(index)
+        if index in attachment_indexes:
+            content_attachment_indexes.add(index)
+        own_numbers[index] = numbers
+        attachment_numbers.update(numbers)
+
+    scores: dict[int, int] = {}
+    for index, text in enumerate(file_texts):
+        if index in content_attachment_indexes:
+            continue
+        references = set(_ATTACHMENT_NUMBER_RE.findall(text)) - own_numbers[index]
+        matching_references = references & attachment_numbers
+        score = len(matching_references) * 3
+        if references:
+            score += 1
+        if _REFERENCE_CONTEXT_RE.search(text):
+            score += 3
+        if _PRIMARY_FILENAME_HINT_RE.search(Path(files[index].filename).stem):
+            score += 4
+        if score > 0:
+            scores[index] = score
+
+    if not scores:
+        return None
+    best_score = max(scores.values())
+    best_indexes = [index for index, score in scores.items() if score == best_score]
+    return best_indexes[0] if len(best_indexes) == 1 else None
 
 
 def _parse_primary_selection(text: str, files: list[UploadedFile]) -> int | None:
@@ -171,12 +220,15 @@ class ReviewIntakeStore:
             return ReviewIntakeDecision(action="wait", reply="已取消本次审核并清空暂存文件。")
 
         if is_format_review_request(clean_text):
-            if state and state.mode == "multi" and len(state.files) > 1:
+            if state and state.mode in {"auto", "multi"} and len(state.files) > 1:
                 return ReviewIntakeDecision(
                     action="wait",
-                    reply="当前已有多份文件等待联合审核。请先回复“开始审核”或“取消审核”，格式审核暂不与联合审核混用。",
+                    reply=(
+                        "当前多份文件会自动进入联合审核，格式审核暂不与联合审核混用。"
+                        "如需改做格式审核，请先取消本次审核后重新发送。"
+                    ),
                 )
-            if state and state.mode == "multi" and state.files:
+            if state and state.mode in {"auto", "multi"} and state.files:
                 file = state.files[0]
                 return self._consume(key, state, action="run_format", files=(file,))
             if state and state.recent_file is not None:
@@ -194,7 +246,7 @@ class ReviewIntakeStore:
 
         if is_multi_file_review_request(clean_text):
             state = state or ReviewIntakeState()
-            seeded_recent = state.recent_file is not None
+            seeded_recent = state.recent_file is not None or bool(state.files)
             if state.mode != "multi":
                 state.mode = "multi"
                 if state.recent_file is not None:
@@ -208,24 +260,29 @@ class ReviewIntakeStore:
                     action="wait",
                     reply=(
                         "已把刚发的文件纳入联合审核，但不会默认把它认作正文。"
-                        "请继续发送其他文件，发完后回复“开始审核”。"
+                        "请继续发送其他文件，系统会自动开始。"
                     ),
                 )
             count = len(state.files)
             if count:
                 return ReviewIntakeDecision(
                     action="wait",
-                    reply=f"当前已收到 {count} 份文件。请继续发送其他文件，发完后回复“开始审核”。",
+                    reply=f"当前已收到 {count} 份文件。请继续发送其他文件，系统会自动开始。",
                 )
             return ReviewIntakeDecision(
                 action="wait",
-                reply="收到，准备联合审核。请发送需要一起核对的文件，发完后回复“开始审核”。",
+                reply="收到，准备联合审核。请发送需要一起核对的文件，系统会自动开始。",
             )
 
         if is_review_start_signal(clean_text):
-            if state is None or state.mode != "multi":
+            if state is None or state.mode not in {"auto", "multi"}:
                 return ReviewIntakeDecision(action="wait", reply="当前没有待联合审核的文件。")
             if len(state.files) < 2:
+                if state.mode == "auto":
+                    return ReviewIntakeDecision(
+                        action="wait",
+                        reply="文件已收到，正在审核，请稍等。",
+                    )
                 return ReviewIntakeDecision(
                     action="wait",
                     reply="联合审核至少需要 2 份文件，请至少再发送 1 份文件。",
@@ -271,7 +328,7 @@ class ReviewIntakeStore:
                 self._persist_state(key, state)
             return ReviewIntakeDecision(
                 action="wait",
-                reply="已记录补充要求。可以继续发送文件，发完后回复“开始审核”。",
+                reply="已记录补充要求。可以继续发送文件，系统会自动开始。",
             )
 
         return ReviewIntakeDecision(action="bypass")
@@ -286,35 +343,111 @@ class ReviewIntakeStore:
         key = (channel, sender_userid)
         state = self._get_state(key) or ReviewIntakeState()
 
-        if state.mode == "multi":
-            limit_message = self._file_limit_message(state.files, file.size_bytes)
-            if limit_message:
-                return ReviewIntakeDecision(action="wait", reply=limit_message)
-            stored = self._persist_uploaded_file(key, file)
-            state.files.append(stored)
-            state.updated_at = time.time()
-            self._states[key] = state
-            self._persist_state(key, state)
-            return ReviewIntakeDecision(
-                action="wait",
-                reply=(
-                    f"已收到第 {len(state.files)} 份文件。可以继续发送，"
-                    "发完后回复“开始审核”。"
-                ),
-            )
-
         if state.mode == "format":
             stored = self._persist_uploaded_file(key, file)
             state.files = [stored]
             return self._consume(key, state, action="run_format", files=(stored,))
 
-        if state.recent_file is not None:
-            self._delete_stored_file(state.recent_file)
-        state.recent_file = self._persist_uploaded_file(key, file)
-        state.updated_at = time.time()
-        self._states[key] = state
-        self._persist_state(key, state)
-        return ReviewIntakeDecision(action="bypass")
+        if state.mode in {None, "auto", "multi"}:
+            if state.mode is None:
+                if state.recent_file is not None:
+                    self._delete_stored_file(state.recent_file)
+                    state.recent_file = None
+                state.mode = "auto"
+            elif state.recent_file is not None:
+                state.files.append(state.recent_file)
+                state.recent_file = None
+            limit_message = self._file_limit_message(state.files, file.size_bytes)
+            if limit_message:
+                return ReviewIntakeDecision(action="wait", reply=limit_message)
+            stored = self._persist_uploaded_file(key, file)
+            state.files.append(stored)
+            state.awaiting_primary = False
+            state.revision += 1
+            state.updated_at = time.time()
+            self._states[key] = state
+            self._persist_state(key, state)
+            return ReviewIntakeDecision(
+                action="wait_auto",
+                files=tuple(state.files),
+                revision=state.revision,
+            )
+
+        raise ValueError(f"不支持的审核暂存模式: {state.mode}")
+
+    def auto_batch_snapshot(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        expected_revision: int,
+    ) -> ReviewIntakeDecision:
+        state = self._get_state((channel, sender_userid))
+        if (
+            state is None
+            or state.mode not in {"auto", "multi"}
+            or state.awaiting_primary
+            or state.revision != expected_revision
+        ):
+            return ReviewIntakeDecision(action="stale")
+        return ReviewIntakeDecision(
+            action="snapshot",
+            files=tuple(state.files),
+            revision=state.revision,
+        )
+
+    def finalize_auto_batch(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        expected_revision: int,
+        file_texts: tuple[str, ...] = (),
+    ) -> ReviewIntakeDecision:
+        key = (channel, sender_userid)
+        state = self._get_state(key)
+        if (
+            state is None
+            or state.mode not in {"auto", "multi"}
+            or state.awaiting_primary
+            or state.revision != expected_revision
+        ):
+            return ReviewIntakeDecision(action="stale")
+        if not state.files:
+            return ReviewIntakeDecision(action="stale")
+        if len(state.files) == 1:
+            if state.mode == "multi":
+                return ReviewIntakeDecision(
+                    action="wait",
+                    reply="联合审核至少需要 2 份文件，请继续发送其他文件。",
+                )
+            return self._remember_recent(
+                key,
+                state,
+                action="run_single",
+            )
+
+        primary_file_index = infer_primary_file_index(
+            state.files,
+            file_texts=file_texts,
+        )
+        if primary_file_index is None:
+            state.mode = "multi"
+            state.awaiting_primary = True
+            state.updated_at = time.time()
+            self._persist_state(key, state)
+            return ReviewIntakeDecision(
+                action="wait",
+                reply=_primary_selection_reply(state.files),
+            )
+        return self._consume(
+            key,
+            state,
+            action="run_multi",
+            files=tuple(state.files),
+            instructions=tuple(state.instructions),
+            primary_file_index=primary_file_index,
+        )
 
     def clear(self, *, channel: str, sender_userid: str) -> None:
         key = (channel, sender_userid)
@@ -351,11 +484,38 @@ class ReviewIntakeStore:
             files=files,
             instructions=instructions,
             primary_file_index=primary_file_index,
+            revision=state.revision,
+        )
+
+    def _remember_recent(
+        self,
+        key: tuple[str, str],
+        state: ReviewIntakeState,
+        *,
+        action: str,
+    ) -> ReviewIntakeDecision:
+        """单文件内容审核启动后保留原件，供 30 分钟内追加格式审核。"""
+        file = state.files[0]
+        state.mode = None
+        state.files = []
+        state.recent_file = file
+        state.instructions = []
+        state.awaiting_primary = False
+        state.updated_at = time.time()
+        self._states[key] = state
+        self._persist_state(key, state)
+        return ReviewIntakeDecision(
+            action=action,
+            files=(file,),
+            revision=state.revision,
         )
 
     def _file_limit_message(self, files: list[UploadedFile], incoming_size: int) -> str:
         if len(files) >= self._max_files:
-            return f"每次联合审核最多接收 {self._max_files} 个文件，请先回复“开始审核”。"
+            return (
+                f"每次联合审核最多接收 {self._max_files} 个文件；"
+                "已收到的文件会继续处理，本文件未纳入。"
+            )
         current_size = sum(file.size_bytes for file in files)
         if incoming_size < 0 or current_size + incoming_size > self._max_total_file_bytes:
             limit_mb = self._max_total_file_bytes / 1024 / 1024
@@ -404,6 +564,7 @@ class ReviewIntakeStore:
             "recent_file": _file_to_dict(state.recent_file) if state.recent_file else None,
             "instructions": list(state.instructions),
             "awaiting_primary": state.awaiting_primary,
+            "revision": state.revision,
             "created_at": state.created_at,
             "updated_at": state.updated_at,
         }
@@ -430,6 +591,7 @@ class ReviewIntakeStore:
                 recent_file=recent_file,
                 instructions=[str(item) for item in payload.get("instructions", [])],
                 awaiting_primary=bool(payload.get("awaiting_primary", False)),
+                revision=int(payload.get("revision", 0)),
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )

@@ -230,7 +230,7 @@ python -m pytest tests/test_platform_document_service.py tests/test_platform_fil
 python -m pytest tests/test_review_intake.py tests/test_review_multi_file.py tests/test_review_bot.py tests/test_error_marker.py tests/test_official_format_review.py -v
 ```
 
-重点确认：格式审核支持“指令在前”和“文件在前”；联合审核不按上传顺序默认正文，歧义时要求用户指定；待组装文件按入口和用户隔离并可在重启后恢复；跨文件模型意见必须同时命中两份文件的真实原文；任务归档、摘要和标注文档均保留已确认主文件信息。
+重点确认：格式审核支持“指令在前”和“文件在前”，且单文件内容审核启动后仍可追加格式审核；文件到达即确认，1 份自动走单文件、连续 2 至 5 份无需前后指令自动走联合审核；联合审核不按上传顺序默认正文，优先结合文件名和正文引用识别，歧义时要求用户指定；待组装文件按入口和用户隔离并可从磁盘恢复；跨文件模型意见必须同时命中两份文件的真实原文；任务归档、摘要和标注文档均保留已确认主文件信息。
 
 ### 修改 Pydantic AI 执行层
 

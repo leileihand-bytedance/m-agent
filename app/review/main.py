@@ -73,6 +73,7 @@ class ReviewConfig:
     user_registry_path: Path = _DEFAULT_DATA_PATHS.user_registry
     intake_dir: Path = _DEFAULT_DATA_PATHS.intake / "review"
     intake_ttl_seconds: int = 1800
+    auto_batch_seconds: float = 8.0
     log_max_bytes: int = 20 * 1024 * 1024
     max_file_size_mb: int = 10
     reply_ack_timeout_seconds: float = 30.0
@@ -167,6 +168,10 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
         user_registry_path=user_registry_path,
         intake_dir=intake_dir,
         intake_ttl_seconds=max(60, _env_int(values, "M_AGENT_REVIEW_INTAKE_TTL", 1800)),
+        auto_batch_seconds=max(
+            1.0,
+            _env_float(values, "M_AGENT_REVIEW_AUTO_BATCH_SECONDS", 8.0),
+        ),
         log_max_bytes=max(1, _env_int(values, "M_AGENT_LOG_MAX_MB", 20)) * 1024 * 1024,
         admin_user_id=values.get("REVIEW_ADMIN_USER_ID", "").strip(),
         admin_name=values.get("REVIEW_ADMIN_NAME", "").strip() or "管理员",
@@ -194,11 +199,77 @@ def is_docx_filename(filename: str | None) -> bool:
     return filename.lower().endswith(".docx")
 
 
+def _build_file_ack(pending_mode: str | None) -> str:
+    """文件到达后立即回复；自动归集等待不暴露给用户。"""
+    if pending_mode == "format":
+        return "收到文件啦，正在按公文模板检查实际格式，请稍等……"
+    if pending_mode == "multi":
+        return "收到文件，正在加入本次联合审核……"
+    return "收到文件啦，正在加紧审核，请稍等……"
+
+
 # ============================================================
 # .docx 解析(复用 app.review.parser,这里直接 import)
 # ============================================================
 
 from app.review.parser import parse_docx as _parse_docx  # noqa: E402
+
+
+def _extract_primary_inference_texts(
+    files: tuple[UploadedFile, ...],
+) -> tuple[str, ...]:
+    """读取本次暂存 Word 的文字，只用于判断主文件，不产生审核意见。"""
+    import tempfile
+
+    texts: list[str] = []
+    for file in files:
+        temporary_path: Path | None = None
+        try:
+            if file.stored_path and Path(file.stored_path).is_file():
+                path = Path(file.stored_path)
+            else:
+                with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as temporary:
+                    temporary.write(file.read_bytes())
+                    temporary_path = Path(temporary.name)
+                path = temporary_path
+            parsed = _parse_docx(path)
+            texts.append("\n".join(parsed.paragraphs))
+        except Exception as exc:
+            logger.warning("主文件内容识别读取失败: %s: %s", file.filename, exc)
+            texts.append("")
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+    return tuple(texts)
+
+
+async def _settle_auto_review_batch(
+    store: ReviewIntakeStore,
+    *,
+    channel: str,
+    sender_userid: str,
+    expected_revision: int,
+    delay_seconds: float,
+):
+    """等待短暂静默窗口；新文件到达后，旧版本自然失效。"""
+    await asyncio.sleep(delay_seconds)
+    snapshot = store.auto_batch_snapshot(
+        channel=channel,
+        sender_userid=sender_userid,
+        expected_revision=expected_revision,
+    )
+    if snapshot.action == "stale":
+        return snapshot
+    file_texts = await asyncio.to_thread(
+        _extract_primary_inference_texts,
+        snapshot.files,
+    )
+    return store.finalize_auto_batch(
+        channel=channel,
+        sender_userid=sender_userid,
+        expected_revision=expected_revision,
+        file_texts=file_texts,
+    )
 
 
 # ============================================================
@@ -1374,15 +1445,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         # 1. ACK（快速回复，不进队列）
         await ws_client.reply_stream(
             frame, stream_id,
-            (
-                "收到文件啦，正在按公文模板检查实际格式，请稍等……"
-                if pending_mode == "format"
-                else (
-                    "收到文件，正在加入本次联合审核……"
-                    if pending_mode == "multi"
-                    else "收到文件啦，正在加紧审核，请稍等（模型反应有点慢，你可以先干点别的，一会儿再来看）……"
-                )
-            ),
+            _build_file_ack(pending_mode),
             True,
         )
 
@@ -1456,6 +1519,37 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 True,
             )
             return
+        if intake_decision.action == "wait_auto":
+            intake_decision = await _settle_auto_review_batch(
+                review_intake_store,
+                channel="wecom",
+                sender_userid=sender,
+                expected_revision=intake_decision.revision,
+                delay_seconds=config.auto_batch_seconds,
+            )
+            if intake_decision.action == "stale":
+                logger.info(
+                    "检测到同一用户后续文件，当前文件并入最新自动审核批次: %s",
+                    sender,
+                    extra=extra,
+                )
+                return
+            if intake_decision.action == "wait":
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-intake"),
+                    intake_decision.reply,
+                    True,
+                )
+                return
+            if intake_decision.action == "run_multi":
+                await run_multi_file_decision(frame, sender, intake_decision)
+                return
+            if intake_decision.action != "run_single":
+                raise RuntimeError(f"未知的自动审核决策: {intake_decision.action}")
+            queued_file = intake_decision.files[0]
+            filename = queued_file.filename
+            buffer = queued_file.read_bytes()
         if intake_decision.action == "run_format":
             await run_official_format_decision(frame, sender, intake_decision)
             return
