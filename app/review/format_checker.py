@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from .toc_utils import find_toc_range
+
 if TYPE_CHECKING:
     from .reviewer import Finding
 
@@ -23,20 +25,7 @@ if TYPE_CHECKING:
 # ============================================================
 
 def _find_toc_range(paragraphs: list[str]) -> tuple[int, int]:
-    toc_start = -1
-    toc_end = len(paragraphs)
-
-    for i, p in enumerate(paragraphs):
-        stripped = p.strip()
-        if stripped == "目录":
-            toc_start = i + 1
-        elif toc_start >= 0 and ("主编" in stripped or "责编" in stripped):
-            toc_end = i
-            break
-
-    if toc_start < 0:
-        return 0, 0
-    return toc_start, toc_end
+    return find_toc_range(paragraphs)
 
 
 def _is_toc_entry(paragraphs: list[str], idx: int, toc_end: int) -> bool:
@@ -52,45 +41,77 @@ def check_quote_pair(paragraphs: list[str]) -> list["Finding"]:
     """检测引号不成对."""
     from .reviewer import Finding
     findings = []
-    # 追踪开引号
-    open_quotes: list[tuple[int, str]] = []  # (段号, 引号类型)
+    symmetric_quotes = {'"'}
+    paired_quotes = {
+        '《': '》',
+        '『': '』',
+        '「': '」',
+        '“': '”',
+        '‘': '’',
+    }
+    reverse_quotes = {close: open_ for open_, close in paired_quotes.items()}
 
-    QUOTE_PAIRS = [
-        ('"', '"'),
-        ('"', '"'),
-        ('《', '》'),
-        ('『', '』'),
-        ('「', '」'),
-    ]
+    def _build_target_text(
+        text: str,
+        quote_char: str,
+        pos: int,
+        is_opening: bool,
+        unmatched_count: int,
+    ) -> str:
+        total_count = text.count(quote_char)
+        if total_count <= 1 or total_count == unmatched_count:
+            return quote_char
+        if is_opening:
+            return text[pos:min(len(text), pos + 12)]
+        return text[max(0, pos - 11):pos + 1]
 
-    def check_paragraph(idx: int, text: str) -> list[tuple[int, str]]:
-        """返回这一段里所有未配对的开引号。"""
-        opens = []
-        i = 0
-        while i < len(text):
-            for open_q, close_q in QUOTE_PAIRS:
-                if text[i:i+len(open_q)] == open_q:
-                    opens.append((i, open_q))
-                    i += len(open_q)
-                    break
-                elif text[i:i+len(close_q)] == close_q:
-                    if opens and opens[-1][1] == open_q:
-                        opens.pop()
-                    i += len(close_q)
-                    break
-            else:
-                i += 1
-        return opens
+    def check_paragraph(text: str) -> list[tuple[str, int, bool]]:
+        """返回这一段里所有未配对的引号类型和位置。"""
+        stack: list[tuple[str, int]] = []
+        unmatched: list[tuple[str, int, bool]] = []
+
+        for idx, char in enumerate(text):
+            if char in symmetric_quotes:
+                if stack and stack[-1][0] == char:
+                    stack.pop()
+                else:
+                    stack.append((char, idx))
+                continue
+
+            if char in paired_quotes:
+                stack.append((char, idx))
+                continue
+
+            if char in reverse_quotes:
+                expected_open = reverse_quotes[char]
+                if stack and stack[-1][0] == expected_open:
+                    stack.pop()
+                else:
+                    unmatched.append((char, idx, False))
+
+        unmatched.extend((quote_char, pos, True) for quote_char, pos in stack)
+        return unmatched
 
     for idx, para in enumerate(paragraphs):
-        opens = check_paragraph(idx, para)
-        for _, qtype in opens:
+        unmatched = check_paragraph(para)
+        unmatched_counts: dict[str, int] = {}
+        for qtype, _, _ in unmatched:
+            unmatched_counts[qtype] = unmatched_counts.get(qtype, 0) + 1
+
+        for qtype, pos, is_opening in unmatched:
             findings.append(Finding(
                 rule_id="quote-pair",
                 paragraph_index=idx,
                 line_number=idx + 1,
                 original_text=para,
                 description=f"引号'{qtype}'只开不闭或只闭不开",
+                target_text=_build_target_text(
+                    para,
+                    qtype,
+                    pos,
+                    is_opening,
+                    unmatched_counts.get(qtype, 1),
+                ),
             ))
 
     return findings
@@ -131,6 +152,7 @@ def check_num_unit(paragraphs: list[str]) -> list["Finding"]:
                         line_number=idx + 1,
                         original_text=para,
                         description=f"数字'{num_part}'和中文单位'{unit}'之间有空格",
+                        target_text=f"{num_part}{space}{unit}",
                     ))
     return findings
 
@@ -153,6 +175,9 @@ def check_mixed_punct(paragraphs: list[str]) -> list["Finding"]:
         for m in _EN_PUNCT_RE.finditer(para):
             # 确认是中文句子里的英文标点(不是引号内的)
             pos = m.start()
+            if m.group().startswith(".") and re.search(r"\d+\s*$", para[:pos]):
+                # 问卷/列表编号允许“12.请说明”或“12 .请说明”。
+                continue
             # 检查前后是否是中文字符
             before = para[pos - 1] if pos > 0 else ''
             after = para[m.end()] if m.end() < len(para) else ''
@@ -164,6 +189,7 @@ def check_mixed_punct(paragraphs: list[str]) -> list["Finding"]:
                     line_number=idx + 1,
                     original_text=para,
                     description=f"中文句子里出现英文标点'{m.group()}'",
+                    target_text=para[pos:m.end()],
                 ))
     return findings
 
@@ -194,6 +220,7 @@ def check_consecutive_punct(paragraphs: list[str]) -> list["Finding"]:
                 line_number=idx + 1,
                 original_text=para,
                 description=f"连续相同标点: '{repeated}'",
+                target_text=repeated,
             ))
     return findings
 
@@ -205,7 +232,7 @@ def check_consecutive_punct(paragraphs: list[str]) -> list["Finding"]:
 _ORDINAL_RE = re.compile(r'^[一二三四五六七八九十]+[、.．]')
 
 # 正文区章节分类关键词(4字板块名)
-_SECTION_KEYWORDS = {"党政要闻", "监管动态", "市场观察", "前沿观点", "同业动向"}
+_SECTION_KEYWORDS = {"党政要闻", "监管动态", "市场观察", "前沿观点", "同业动向", "同业动态"}
 
 
 def check_toc_no_ordinal(paragraphs: list[str]) -> list["Finding"]:

@@ -10,6 +10,9 @@ from .rule_loader import load_rules
 from .reviewer import ReviewResult, Finding, review_text
 from .format_checker import check_all_format_rules
 from .output_formatter import format_review_result
+from .document_type import detect_document_type, DocumentType, document_type_label
+from .halfmonthly_reviewer import review_halfmonthly
+from .general_reviewer import review_general
 
 __all__ = [
     "parse_docx",
@@ -20,4 +23,9 @@ __all__ = [
     "review_text",
     "check_all_format_rules",
     "format_review_result",
+    "detect_document_type",
+    "DocumentType",
+    "document_type_label",
+    "review_halfmonthly",
+    "review_general",
 ]

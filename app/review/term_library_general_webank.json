@@ -1,0 +1,222 @@
+[
+  {
+    "term_id": "webank",
+    "category": "institution",
+    "standard": "微众银行",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "深圳前海微众银行股份有限公司的规范简称"
+  },
+  {
+    "term_id": "webank-full-shenzhen",
+    "category": "institution",
+    "standard": "深圳前海微众银行",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行全称的常用写法"
+  },
+  {
+    "term_id": "webank-full-legal",
+    "category": "institution",
+    "standard": "深圳前海微众银行股份有限公司",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行完整法定名称"
+  },
+  {
+    "term_id": "weilidai",
+    "category": "product",
+    "standard": "微粒贷",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行个人小额信用贷款产品"
+  },
+  {
+    "term_id": "weiyedai",
+    "category": "product",
+    "standard": "微业贷",
+    "allowed_aliases": [],
+    "forbidden_variants": ["微业代"],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行小微企业法人流动资金贷款产品"
+  },
+  {
+    "term_id": "weimaodai",
+    "category": "product",
+    "standard": "微贸贷",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行外贸小微企业信贷产品"
+  },
+  {
+    "term_id": "weichedai",
+    "category": "product",
+    "standard": "微车贷",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行汽车相关金融产品"
+  },
+  {
+    "term_id": "weishantie",
+    "category": "product",
+    "standard": "微闪贴",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行票据贴现产品"
+  },
+  {
+    "term_id": "webank-wealth-plus",
+    "category": "product",
+    "standard": "微众银行财富+",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行财富管理平台"
+  },
+  {
+    "term_id": "openhive",
+    "category": "platform",
+    "standard": "OpenHive",
+    "allowed_aliases": ["开放蜂巢", "Openhive"],
+    "forbidden_variants": ["OpenHiev"],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行数字银行底座相关术语"
+  },
+  {
+    "term_id": "fisco-bcos",
+    "category": "technology",
+    "standard": "FISCO BCOS",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行牵头研发的国产开源区块链底层平台"
+  },
+  {
+    "term_id": "ddtp",
+    "category": "technology",
+    "standard": "DDTP",
+    "allowed_aliases": ["分布式数据传输协议"],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行提出的分布式数据传输协议"
+  },
+  {
+    "term_id": "wenos",
+    "category": "platform",
+    "standard": "WeNOS",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行基于 SONiC 定制的网络操作系统"
+  },
+  {
+    "term_id": "wedatasphere",
+    "category": "platform",
+    "standard": "WeDataSphere",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行金融级一站式大数据平台"
+  },
+  {
+    "term_id": "link-slb",
+    "category": "technology",
+    "standard": "Link-SLB",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "微众银行自研链路级负载均衡组件"
+  },
+  {
+    "term_id": "sonic",
+    "category": "technology",
+    "standard": "SONiC",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "开源网络操作系统，WeNOS 基于其定制"
+  },
+  {
+    "term_id": "pboc",
+    "category": "external_org",
+    "standard": "中国人民银行",
+    "allowed_aliases": ["人民银行", "央行"],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "中国中央银行"
+  },
+  {
+    "term_id": "pboc-shenzhen-branch",
+    "category": "external_org",
+    "standard": "中国人民银行深圳市分行",
+    "allowed_aliases": [],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "中国人民银行深圳市分支机构"
+  },
+  {
+    "term_id": "nfrs",
+    "category": "external_org",
+    "standard": "国家金融监督管理总局",
+    "allowed_aliases": ["金融监管总局"],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "中国银行业保险业监管机构"
+  },
+  {
+    "term_id": "csrc",
+    "category": "external_org",
+    "standard": "中国证券监督管理委员会",
+    "allowed_aliases": ["证监会"],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "中国证券业监管机构"
+  },
+  {
+    "term_id": "safe",
+    "category": "external_org",
+    "standard": "国家外汇管理局",
+    "allowed_aliases": ["外汇管理局", "外汇局"],
+    "forbidden_variants": [],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "中国外汇管理机构"
+  },
+  {
+    "term_id": "iso-27701",
+    "category": "technology",
+    "standard": "ISO 27701",
+    "allowed_aliases": ["ISO/IEC 27701", "ISO27701"],
+    "forbidden_variants": ["IS027701"],
+    "doc_types": ["general"],
+    "severity": "error",
+    "notes": "隐私信息管理体系标准"
+  }
+]

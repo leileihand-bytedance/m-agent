@@ -1,0 +1,134 @@
+{
+  "version": "v1",
+  "created_at": "2026-07-07",
+  "purpose": "直报质量回归测试集。自动测试只覆盖稳定硬规则和样本契约；真实成稿质量由人工评测表判断。",
+  "cases": [
+    {
+      "case_id": "drq-001-baijiahao-20260707",
+      "url": "https://baijiahao.baidu.com/s?id=1869477855753615781&wfr=spider&for=pc",
+      "user_input": "请根据这个链接写一篇直报：https://baijiahao.baidu.com/s?id=1869477855753615781&wfr=spider&for=pc",
+      "material_type": "unknown_until_read",
+      "source_name": "百家号",
+      "expected_route": "direct_report",
+      "baseline_job_id": "20260707-180102-9778f9c6",
+      "baseline_status": "generated",
+      "known_risks": [
+        "平台转载内容可能有正文抽取噪音",
+        "标题和正文可能带有媒体化表达，需要改写为直报口吻"
+      ],
+      "manual_review": {
+        "usable": null,
+        "direct_report_style": null,
+        "subject_centered": null,
+        "policy_connection": null,
+        "fact_accuracy": null,
+        "revision_priority": null
+      }
+    },
+    {
+      "case_id": "drq-002-cs-20230614",
+      "url": "https://www.cs.com.cn/yh/04/202306/t20230614_6350212.html?bsh_bid=5960157538",
+      "user_input": "请根据这个链接写一篇直报：https://www.cs.com.cn/yh/04/202306/t20230614_6350212.html?bsh_bid=5960157538",
+      "material_type": "financial_service",
+      "source_name": "中国证券报",
+      "expected_route": "direct_report",
+      "baseline_job_id": "20260707-180134-c3100289",
+      "baseline_status": "generated",
+      "known_risks": [
+        "该站点曾出现 DNS 或网页读取失败，需要纳入链接读取兜底样本",
+        "如能读取正文，应重点检查微众银行是否为主体"
+      ],
+      "manual_review": {
+        "usable": null,
+        "direct_report_style": null,
+        "subject_centered": null,
+        "policy_connection": null,
+        "fact_accuracy": null,
+        "revision_priority": null
+      }
+    },
+    {
+      "case_id": "drq-003-yicai-20251118",
+      "url": "https://www.yicai.com/news/102917116.html",
+      "user_input": "请根据这个链接写一篇直报：https://www.yicai.com/news/102917116.html",
+      "material_type": "risk_governance",
+      "source_name": "第一财经",
+      "expected_route": "direct_report",
+      "baseline_job_id": "20260707-180204-0e47f9de",
+      "baseline_status": "generated",
+      "known_risks": [
+        "素材涉及打击金融黑灰产、商标侵权和消费者权益保护，容易写成新闻通稿",
+        "需要检查是否从个案判决上升到金融黑灰产治理机制",
+        "直报中主体必须直接写“微众银行”，不得使用全称或“以下简称”"
+      ],
+      "manual_review": {
+        "usable": null,
+        "direct_report_style": null,
+        "subject_centered": null,
+        "policy_connection": null,
+        "fact_accuracy": null,
+        "revision_priority": null
+      }
+    },
+    {
+      "case_id": "drq-004-10jqka-20250527",
+      "url": "http://news.10jqka.com.cn/20250527/c668479924.shtml",
+      "user_input": "请根据这个链接写一篇直报：http://news.10jqka.com.cn/20250527/c668479924.shtml",
+      "material_type": "unknown_until_read",
+      "source_name": "同花顺财经",
+      "expected_route": "direct_report",
+      "baseline_job_id": "20260707-180311-0c1b3f79",
+      "baseline_status": "generated",
+      "known_risks": [
+        "财经站点页面可能存在广告、行情和推荐阅读噪音",
+        "需要检查正文抽取是否准确，不能把页面附加内容写入直报"
+      ],
+      "manual_review": {
+        "usable": null,
+        "direct_report_style": null,
+        "subject_centered": null,
+        "policy_connection": null,
+        "fact_accuracy": null,
+        "revision_priority": null
+      }
+    }
+  ],
+  "bad_output_examples": [
+    {
+      "example_id": "bad-direct-report-subject-name",
+      "title": "微众银行完善金融黑灰产治理机制保护消费者权益",
+      "body": "深圳市微众银行股份有限公司（微众银行）围绕金融消费者权益保护持续完善综合治理机制，通过网络治理、民事诉讼、行政投诉、刑事打击等方式，推动金融黑灰产治理从个案处置转向常态化协同治理。",
+      "expected_rules": [
+        "direct-report-subject-name",
+        "body-length"
+      ]
+    },
+    {
+      "example_id": "bad-subheadings",
+      "title": "微众银行优化数字化服务提升小微企业融资可得性",
+      "body": "微众银行围绕小微企业融资需求完善数字化服务。\n一是优化线上服务流程。\n二是提升风险识别能力。",
+      "expected_rules": [
+        "no-subheadings",
+        "body-length"
+      ]
+    },
+    {
+      "example_id": "bad-title-subject",
+      "title": "数字化金融服务助力小微企业融资",
+      "body": "微众银行围绕小微企业融资需求持续完善数字化服务能力，通过线上化、数据化方式提升融资服务效率，推动普惠金融服务覆盖更多经营主体。",
+      "expected_rules": [
+        "title-format",
+        "body-length"
+      ]
+    },
+    {
+      "example_id": "bad-standalone-case",
+      "title": "微众银行数字化服务提升小微企业融资可得性",
+      "body": "微众银行围绕小微企业融资需求持续完善数字化服务能力。\n龙岗区一家电子消费品出口企业通过微众银行获批授信，及时补足备货资金。",
+      "expected_rules": [
+        "no-standalone-case-paragraph",
+        "body-length"
+      ]
+    }
+  ]
+}

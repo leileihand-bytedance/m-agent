@@ -1,0 +1,1 @@
+"""Direct report writing skill."""

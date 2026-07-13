@@ -1,0 +1,15 @@
+allow_unknown_users: false
+default_allowed_skills: []
+
+users:
+  user-001:
+    allowed_skills:
+      - direct_report
+      - writer1
+      - writer2
+      - rewrite
+  local-preview-user:
+    allowed_skills:
+      - direct_report
+      - writer1
+      - writer2

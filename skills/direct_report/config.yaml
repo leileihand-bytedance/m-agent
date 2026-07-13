@@ -1,0 +1,27 @@
+id: direct_report
+name: 直报写作
+description: 根据网页链接或用户材料生成信息直报初稿。
+enabled: true
+triggers:
+  - 直报
+  - 报送材料
+  - 国办
+  - 报送
+allowed_tools:
+  - web_reader
+  - policy_research
+  - policy_search
+  - search
+  - word_reader
+  - pdf_reader
+  - llm_writer
+workflow: skills.direct_report.workflow:run
+inputs:
+  - url
+  - file
+  - user_instruction
+outputs:
+  - title
+  - body
+  - sources
+supports_revision: true

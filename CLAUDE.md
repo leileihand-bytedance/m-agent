@@ -1,129 +1,89 @@
-# M-Agent 智能审核模块开发规范
+# M-Agent Claude Code 开发入口规范
 
-## 一、项目概述
+本文件给 Claude Code 使用。规则与 `AGENTS.md` 保持一致。
 
-M-Agent 智能审核模块，通过企业微信机器人为 `.docx` 文档提供自动审核服务。
+## 默认沟通方式
 
-### 功能定位
+- 默认使用简体中文。
+- 面向非技术用户时，用通俗方式解释。
+- 基于事实回答；不确定时先查代码、查文档或调研。
+- 任何开发完成前必须跑测试。
 
-- 接收企业微信 `.docx` 文件
-- 按规则审核，标出低级错误
-- 返回问题清单，按出现顺序呈现
+## 当前架构方向
 
-### 技术架构
+M-Agent 正在演进为：
 
-- 企业微信长连接 SDK（AiBotSDK）
-- 两层审核：格式类（正则）+ 语义类（LLM CoT + 3次取并集）
-- Markdown 文件存储审核结果
-
-## 二、目录结构
-
-```
-M-Agent/
-├── CLAUDE.md              ← 项目核心规范(本文件)
-├── STATUS-REPORT.md       ← 开发日志
-├── README.md
-├── .gitignore
-│
-├── app/
-│   ├── review/            ← 智能审核模块
-│   │   ├── __init__.py
-│   │   ├── main.py        # Bot 入口(独立进程)
-│   │   ├── reviewer.py    # LLM 调用
-│   │   ├── format_checker.py  # 格式类规则正则
-│   │   ├── parser.py      # .docx 解析
-│   │   ├── output_formatter.py
-│   │   ├── rule_loader.py
-│   │   └── config.example.env
-│   ├── data/
-│   │   └── rules.md      ← 审核规则库
-│   └── requirements.txt
-│
-├── tests/
-│   ├── test_reviewer.py
-│   └── test_review_bot.py
-│
-└── scripts/
-    ├── hook-test.sh       # 测试钩子
-    └── hook-test.py
+```text
+统一企业微信入口
+  -> app/platform/ 底座区
+  -> skills/ 功能区
+  -> Pydantic AI Agent
+  -> 受限工具层
 ```
 
-## 三、开发原则
+Claude Code 后续开发前先阅读：
 
-### 交付铁律
+1. `docs/development/README.md`
+2. `docs/development/architecture.md`
+3. `docs/development/codex-claude-workflow.md`
+4. `docs/development/TODO.md`
+5. `docs/agent-platform/README.md`
+6. `docs/capabilities/README.md`
 
-任何开发/修改，必须**跑过测试、确认通过**后才算完成。不能口头说"应该没问题"。
+## 开发边界
 
-### 两层审核架构
+- `app/platform/`：底座区，只写公共运行能力。
+- `app/admin/`：本机管理后台，只做配置和观察。
+- `skills/`：功能区，只写具体业务能力。
+- `app/writing/`：当前直报 Bot 入口适配层。
+- `app/review/`：旧审核 Bot，后续包装为 review skill。
+- `archive/inactive-2026-07-04/`：已归档停滞模块，不作为新开发入口。
 
-| 类型 | 规则 | 检测方式 |
-|------|------|----------|
-| 格式类 | `quote-pair`, `num-unit`, `mixed-punct`, `toc-no-ordinal`, `toc-seq-skip` | 正则代码 |
-| 语义类 | `title-truncated`, `content-mismatch`, `content-incomplete`, `toc-mismatch`, `content-out-of-scope`, `content-wrong-section`, `content-duplicate`, `content-outdated` | LLM CoT + 3次取并集 |
+## 安全底线
 
-### 设计原则
+- 外部用户只能调用已登记 skill。
+- skill 只能用 `config.yaml` 声明的工具。
+- 工具不能读本机任意目录。
+- 不允许泄露 `.env`、密钥、日志、历史材料。
+- 不要把 M-Agent 做成远程万能 Mac 助手。
 
-- 格式类规则：**必须代码化**，不用 LLM
-- 语义类规则：LLM Chain-of-Thought + 结构化 JSON 输出
-- 多次调用取并集去重，提高稳定性
-- 规则是给 **LLM 读的清单**，代码只负责 .docx 解析 + LLM 调用 + 格式化输出
+## 测试要求
 
-### 错误处理
-
-- Bot 收到非文件消息 → 回固定话术
-- LLM 超时(90s) → 记录,给用户提示,不卡死
-- 空 issues → 合法结果,不重试
-
-## 四、测试要求
-
-### 验证标准
-
-- 功能测试：能用企微 Bot 手动验证
-- 单元测试：核心逻辑有测试覆盖
-- 代码变更：改了什么 → 测什么
-
-### 测试命令
+新增或修改功能必须补测试。常用命令：
 
 ```bash
-python tests/test_reviewer.py
+pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
 python tests/test_review_bot.py
 ```
 
-## 五、安全要求
-
-1. Bot ID、Secret、API Key **不提交**到仓库
-2. `.env` 已纳入 `.gitignore`
-3. 日志不输出完整密钥和敏感正文
-4. 配置和密钥不得硬编码
-
-## 六、变更同步
-
-实现变更时同步更新：
-- `STATUS-REPORT.md`（做了什么）
-- 相关文档
-
-## 七、快速启动
+涉及审核 LLM 端到端时再运行：
 
 ```bash
-# 安装依赖
-pip install -r app/requirements.txt
-
-# 配置
-cp app/review/config.example.env .env
-
-# 检查配置
-python -m app.review.main --check-config
-
-# 启动 Bot
-python -m app.review.main
-
-# 测试
 python tests/test_reviewer.py
 ```
 
-## 八、废弃文档
+该命令依赖真实模型连接，失败时要区分网络/模型问题和代码问题。
 
-以下文档已废弃，不要参考：
-- `docs/wecom-sdk-selection.md`
-- `docs/wecom-learning-gateway-design.md`
-- `docs/multi-agent-writing-tool-product-plan-v0.1.md`
+## 测试代码管理
+
+- `tests/` 下的自动化测试要长期保留。
+- 一次性接口调试、模型连通性验证、临时数据检查脚本，完成后必须删除。
+- 不要在根目录或业务目录长期保留 `test_*.py`、`debug_*.py`、`tmp_*.py` 等临时脚本。
+- 测试缓存、`__pycache__`、`.pytest_cache`、临时输出和任务记录不得作为代码变更提交。
+- 临时验证逻辑如果有复用价值，应整理成 `tests/` 下的正式测试。
+
+## 核心文档同步闸门（强制）
+
+- 每个开发计划必须先列出受影响的核心文档，不能等用户提醒。
+- 底座、skill、入口、配置、路线或测试命令发生变化时，必须同步更新对应架构文档、模块 README、SKILL、TODO 或测试交付文档。
+- 完成后运行 `python scripts/project_docs.py check`；Git pre-commit hook 会基于暂存区版本按模块核对对应核心文档，并覆盖依赖和 hooks 变更。
+- 首次克隆后运行 `python scripts/project_docs.py install-hooks` 启用仓库内 hooks。
+- `STATUS-REPORT.md` 和含真实用户 ID 的 `config/platform-policy.yaml` 只在本机保留；前者由 post-commit hook 自动追加摘要，两者都不得暂存或提交。
+- 行为已变更但核心文档未同步，属于禁止交付情形。
+
+## Git 远端同步（强制）
+
+- 活跃开发达到可测试的逻辑节点后及时提交，任务结束前不得遗留应提交变更。
+- 推送前先 `git fetch origin`；远端分叉时禁止强推，应先安全合并或报告。
+- 用户已授权本项目保持远端同步：本地提交完成后及时推送 `main`，再运行 `python scripts/project_docs.py check-sync` 确认本地和远端差异为零。
+- post-commit 只告警未推送状态，pre-push 再检查核心文档；网络或权限失败必须如实报告。

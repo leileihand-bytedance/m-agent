@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from .reviewer import ReviewResult, Finding
+from .document_type import DocumentType, document_type_label
 
 # 敏感词列表（触发企业微信反垃圾检查的词）
 _SPAM_SENSITIVE_PATTERNS = [
@@ -21,7 +22,10 @@ _SPAM_SENSITIVE_PATTERNS = [
 
 
 def _sanitize_text(text: str) -> str:
-    """替换敏感词，避免触发企业微信反垃圾检查."""
+    """移除内部段号并替换敏感词，生成用户可理解的文本."""
+    text = re.sub(r"第\s*\d+\s*段", "文中另一处", text)
+    text = re.sub(r"段落\s*\d+", "文中另一处", text)
+    text = re.sub(r"paragraph\s*\d+", "文中另一处", text, flags=re.IGNORECASE)
     result = text
     for pattern in _SPAM_SENSITIVE_PATTERNS:
         result = pattern.sub("[敏感内容]", result)
@@ -32,12 +36,14 @@ def format_review_result(
     result: ReviewResult,
     filename: str,
     max_findings: int = 20,
+    doc_type: DocumentType = DocumentType.NEI_CAN,
 ) -> str:
     """将审核结果格式化为纯文本."""
     findings = result.findings
     total = len(findings)
+    type_label = document_type_label(doc_type)
 
-    lines = [f"📄《{filename}》审核完成", ""]
+    lines = [f"📄《{filename}》({type_label})审核完成", ""]
 
     if total == 0:
         lines.append("✅ 未发现低级错误。")
@@ -163,6 +169,25 @@ def _rule_label(rule_id: str) -> str:
         "content-wrong-section": "内容放错板块",
         "content-duplicate": "重复内容",
         "content-outdated": "过时信息",
+        "halfmonthly-date-mismatch": "半月报时间范围不符",
+        "halfmonthly-section-order": "半月报板块顺序",
+        "halfmonthly-section-mismatch": "半月报标题归属不符",
+        "halfmonthly-leader-title": "半月报领导职务规范",
+        "general-typo": "错别字",
+        "general-name-error": "名称错误",
+        "general-grammar": "语病",
+        "general-punctuation": "标点错误",
+        "general-incomplete": "内容不完整",
+        "general-duplicate": "重复内容",
+        "general-placeholder": "占位内容",
+        "general-heading-seq-skip": "标题编号跳号",
+        "general-heading-empty": "标题后无正文",
+        "general-reference-missing": "引用悬空",
+        "general-attachment-name-mismatch": "附件名称不一致",
+        "general-invalid-date": "日期常识错误",
+        "general-date-range-logic": "时间范围逻辑错误",
+        "general-logic-inconsistency": "前后逻辑不一致",
+        "general-term-variant": "术语写法",
     }
     return labels.get(rule_id, rule_id)
 

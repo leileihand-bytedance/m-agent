@@ -20,18 +20,37 @@ venv/
 *.log
 logs/
 tmp/
+/STATUS-REPORT.md
+/config/platform-policy.yaml
 
 # Root-level temp scripts (do not commit)
-test_*.py
-audit_*.py
-full_audit.py
-parse_result.py
-run_audit.py
-run_audit.sh
+/test_*.py
+/debug_*.py
+/tmp_*.py
+/temp_*.py
+/audit_*.py
+/full_audit.py
+/parse_result.py
+/run_audit.py
+/run_audit.sh
 
 # Raw user materials (sensitive)
 data/leaders/
 data/reviews/
+data/review_users.yaml
+data/platform/jobs/
+data/platform/conversations/
+data/platform/chat_logs/
+data/platform/ops_events/
+data/platform/ops_state.json
+data/platform/heartbeats/
+data/policy_knowledge/
+data/policy_wiki_vault/
+data/bank_knowledge/
+
+# Archived inactive data may contain historical materials
+archive/inactive-2026-07-04/data/
+archive/inactive-2026-07-04/app/data/
 
 # AI suggestions before user review
 data/leaders/*/suggestions/

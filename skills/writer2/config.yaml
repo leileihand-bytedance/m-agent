@@ -1,0 +1,28 @@
+id: writer2
+name: 简报写作（多素材）
+description: 面向政府、监管部门的多素材整合简报写作 skill。
+enabled: true
+triggers:
+  - 多素材简报
+  - 整合简报
+  - 多个素材写简报
+allowed_tools:
+  - web_reader
+  - bank_materials
+  - bank_search
+  - policy_research
+  - policy_materials
+  - policy_search
+  - word_reader
+  - pdf_reader
+  - llm_writer
+workflow: skills.writer2.workflow:run
+supports_revision: true
+inputs:
+  - text
+  - urls
+  - files
+outputs:
+  - title
+  - body
+  - sources

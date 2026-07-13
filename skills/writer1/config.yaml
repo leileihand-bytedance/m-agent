@@ -1,0 +1,28 @@
+id: writer1
+name: 简报写作（单素材）
+description: 面向政府、监管部门的单素材简报写作 skill。
+enabled: true
+triggers:
+  - 简报
+  - 写简报
+  - 单素材简报
+allowed_tools:
+  - web_reader
+  - bank_materials
+  - bank_search
+  - policy_research
+  - policy_materials
+  - policy_search
+  - word_reader
+  - pdf_reader
+  - llm_writer
+workflow: skills.writer1.workflow:run
+supports_revision: true
+inputs:
+  - text
+  - urls
+  - files
+outputs:
+  - title
+  - body
+  - sources

@@ -1,0 +1,239 @@
+# M-Agent 测试和交付规范
+
+## 基本原则
+
+任何开发或修改都必须经过测试验证。不能只说“应该可以”。
+
+核心文档与代码同属交付物。AI 工具必须在计划阶段列出文档影响，完成后运行：
+
+```bash
+python scripts/project_docs.py check
+```
+
+首次克隆运行 `python scripts/project_docs.py install-hooks`。提交前 hook 会读取暂存区版本，按模块检查代码、依赖、hooks、配置与对应核心文档；无关计划文档不能代替模块文档。`STATUS-REPORT.md` 由提交后 hook 写入本机，权限文件 `config/platform-policy.yaml` 同样只保留在本机，两者都不进入 Git。
+
+新建开发环境时安装：
+
+```bash
+python -m pip install -r app/requirements-dev.txt
+```
+
+`python-docx` 属于审核运行依赖，`pytest` 属于开发测试依赖，二者都必须由仓库依赖清单声明，不能依赖系统环境碰巧已安装。
+
+## Git 提交和远端同步
+
+活跃开发不能长期堆积在工作区，也不能在本地提交后就宣称交付完成：
+
+1. 每个可测试的逻辑节点及时提交。
+2. 推送前运行 `git fetch origin`，用 `python scripts/project_docs.py check-sync` 或 Git 状态确认是否领先、落后或分叉。
+3. 远端没有新提交时推送当前 `main`；禁止强推覆盖远端历史。
+4. 推送后再次运行 `python scripts/project_docs.py check-sync`，输出必须为“本地分支与远端已同步”。
+5. 网络、凭据或分叉阻塞时，在交付说明中明确写出，不得省略。
+
+post-commit hook 会在本地存在未推送提交时告警；pre-push hook 会执行核心文档检查。钩子不会自动强推或在后台静默访问网络。
+
+## 测试分层
+
+### 1. 平台单元测试
+
+验证底座区：
+
+```bash
+python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+```
+
+### 2. Skill 测试
+
+验证具体业务能力：
+
+```bash
+python -m pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+```
+
+后续新增 skill 后，新增对应测试。
+
+### 3. 旧功能保护测试
+
+验证旧审核 Bot 没被影响：
+
+```bash
+python tests/test_review_bot.py
+```
+
+### 4. LLM 端到端测试
+
+审核端到端测试：
+
+```bash
+python tests/test_reviewer.py
+```
+
+注意：这个命令依赖真实模型和网络，可能因为 `Connection error` 失败。报告时要说明失败原因。
+
+### 5. 真实 demo 测试
+
+验证本地真实链路：
+
+```bash
+python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+```
+
+需要：
+
+- `.env` 配置模型 API
+- 网络访问网页
+- 网络访问模型服务
+
+如果沙箱 DNS 失败，需要在允许的情况下提升权限运行。
+
+### 6. 直报 Bot 生产级测试
+
+当使用现有直报 Bot 作为入口、`direct_report` 作为 skill 时，按以下文档执行：
+
+```text
+docs/development/direct-report-production-test.md
+```
+
+自动化测试至少运行：
+
+```bash
+python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+python tests/test_review_bot.py
+```
+
+### 7. 运维 Bot 生产检查
+
+运维 Bot 是独立长期进程，用于异常通知和工作日日报。
+
+配置检查：
+
+```bash
+python -m app.platform.ops.bot --check-config
+```
+
+启动：
+
+```bash
+python -m app.platform.ops.bot
+```
+
+相关自动化测试：
+
+```bash
+python -m pytest tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_notification.py -v
+```
+
+## 每类变更要跑什么
+
+### 修改 skill 文档或 prompt
+
+至少跑：
+
+```bash
+python -m pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_platform_pydantic_runtime.py -v
+```
+
+如果影响真实效果，再跑 demo。
+
+### 修改直报质量规则或回归样本
+
+至少跑：
+
+```bash
+python -m pytest tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_direct_report_workflow.py -v
+```
+
+如果是为了评估真实成稿质量，还要按 `docs/development/direct-report-quality-regression-v1.md` 跑固定样本，并把 `job_id` 和人工观察写回文档。
+
+直报质量规则里有两类测试：
+
+- 自动化测试：检查称谓、标题、字数、小标题、政策挂接闸门等稳定规则。
+- 人工回归：用固定 4 个链接看初稿是否像直报、政策是否自然、案件细节是否压缩得当。
+
+只改 prompt 或规则时，可以先跑离线自动化测试，不需要每次都连接企业微信 Bot。准备上线前再做真实 Bot 手动验证。
+
+### 修改路由
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_router.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_app.py -v
+```
+
+### 修改多轮改稿或会话状态
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_router.py tests/test_writing_platform_bot.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+```
+
+重点确认：
+
+- 直报、单素材简报、多素材简报共用底座会话能力。
+- 用户换说法仍能改当前稿。
+- 中间一次追问或失败不会覆盖当前稿。
+- 用户发新链接、新文件或明确要求新写时，不会误入改稿。
+- 用户说“回到上一版”“按第一版再改”时，能从版本链选择正确稿件。
+- 每轮写作对话能落入开发期日志，异常失败也能记录错误摘要。
+
+### 修改工具授权
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py -v
+```
+
+### 修改 Pydantic AI 执行层
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_pydantic_runtime.py tests/test_platform_demo.py -v
+```
+
+### 修改企业微信入口
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_user_registry.py tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
+python tests/test_review_bot.py
+```
+
+并进行企业微信手动验证。
+
+如果只改了 `app/platform/gateway/wecom.py` 这种纯消息处理核心，还没有接真实 SDK，先跑单元测试即可；接入真实 SDK 后再进行企业微信手动验证。
+
+## 命令说明
+
+优先使用：
+
+```bash
+python -m pytest ...
+```
+
+不要默认直接用系统 `pytest`。本机可能同时存在多套 Python，直接用 `pytest` 有可能落到另一套解释器，导致依赖明明装了却提示缺包。
+
+## 交付说明必须包含
+
+每次完成后，回复用户时至少说明：
+
+1. 改了什么。
+2. 没改什么。
+3. 跑了哪些测试。
+4. 哪些测试失败以及原因。
+5. 下一步建议。
+
+## 不允许交付的情况
+
+- 新代码没有测试。
+- 没跑相关测试。
+- 改动绕过 `ToolGateway`。
+- skill 直接读取 `.env`。
+- 新增功能影响旧 Bot 但未说明。
+- 真实密钥、用户材料、日志被写入仓库。
+- 行为代码或配置已变化，但对应架构、模块、skill、TODO 或测试文档没有同步。
+- `python scripts/project_docs.py check` 未通过。
+- `STATUS-REPORT.md`、真实用户 ID 或本机绝对路径进入暂存区。

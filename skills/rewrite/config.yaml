@@ -1,0 +1,20 @@
+id: rewrite
+name: 材料润色
+description: 根据用户要求对直接粘贴的文字做润色修改，并支持继续对话式调整。
+enabled: true
+triggers:
+  - 润色
+  - 材料润色
+  - 润色一下
+  - 改写这段
+  - 优化这段文字
+allowed_tools:
+  - llm_writer
+workflow: skills.rewrite.workflow:run
+supports_revision: true
+inputs:
+  - text
+  - material_text
+outputs:
+  - body
+  - revision_note

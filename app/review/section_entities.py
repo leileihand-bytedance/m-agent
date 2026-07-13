@@ -3,7 +3,7 @@
 用于 content-wrong-section 的代码化检测。
 一行一局一会 → 监管动态
 党和国家领导人 + 国务院各部委 → 党政要闻
-民营/数字银行 → 同业动向
+民营/数字银行 → 同业动向/同业动态
 """
 
 from __future__ import annotations

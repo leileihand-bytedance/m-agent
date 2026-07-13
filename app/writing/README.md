@@ -1,0 +1,83 @@
+# app/writing
+
+当前企业微信写作 Bot 的入口适配层。
+
+## 当前身份
+
+这里负责连接企业微信写作 Bot，并把文本、Word/PDF 文件消息和本机素材页提交交给新底座 `PlatformApp`。
+
+当前链路：
+
+```text
+企业微信写作 Bot
+  -> app/writing/bot.py
+  -> app/writing/portal.py      # 结构化素材页与本地预览入口
+  -> app/platform/app.py
+  -> skills/direct_report/、skills/writer1/、skills/writer2/ 或 skills/rewrite/
+```
+
+当前入口形态：
+
+- 企业微信会话欢迎语当前默认引导用户直接发送链接，并说明是写简报还是写直报。
+- 用户可直接粘贴文字并选择润色；`rewrite` 当前不接收文件或链接。
+- 如果用户手里有多个素材文档，欢迎语会提示先整合成一个文档再发送，减少处理歧义。
+- 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报分别使用不同话术。
+- 开发者可在本机素材页一次性上传多个 Word/PDF、粘贴链接、补充要求或文字素材。
+- 服务端会拒绝非 `.docx` / `.pdf` 文件，避免“上传成功但实际无法解析”。
+- 提交后结果直接返回企业微信对话。
+- 素材入口默认只监听 `127.0.0.1`，企业微信欢迎语不发送入口链接。本地 preview 仅允许回环地址访问；单次请求和企业微信单文件上限均为 20MB。
+- 本地预览可直接打开：
+
+```text
+http://127.0.0.1:8790/compose/brief?preview=1
+http://127.0.0.1:8790/compose/direct_report?preview=1
+```
+
+## 不再负责
+
+这里不再维护直报写作规则、网页读取逻辑或模型 prompt。
+
+直报业务规则唯一来源：
+
+```text
+skills/direct_report/
+```
+
+## 注意
+
+不要改动原审核 Bot。
+
+写作 Bot 使用：
+
+```text
+WRITING_BOT_ID
+WRITING_BOT_SECRET
+M_AGENT_PORTAL_BASE_URL
+```
+
+如果后续需要重新启用跨设备素材入口：
+
+```text
+M_AGENT_PORTAL_HOST=0.0.0.0
+M_AGENT_PORTAL_PORT=8790
+M_AGENT_PORTAL_BASE_URL=http://你的电脑局域网IP:8790
+```
+
+例如：
+
+```text
+M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
+```
+
+程序不会自动把素材页链接发给企业微信用户。若显式开放局域网访问，必须同时评估鉴权、网络边界和运维风险；不要把 `preview=1` 当作远程入口。
+
+本地预览调试如果走 `local-preview-user`，也需要在 `config/platform-policy.yaml` 中给它授权 `direct_report`、`writer1`、`writer2`。
+
+审核 Bot 使用 `app/review/` 的独立配置。
+
+## 测试
+
+```bash
+python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
+python -m app.writing.bot --check-config
+```

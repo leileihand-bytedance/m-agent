@@ -1,212 +1,89 @@
-# app
+# app 目录身份说明
 
-`app` 是第一阶段唯一的程序目录。
+`app/` 存放 M-Agent 的运行代码。当前项目已经从早期单一 Bot 原型，演进为“新底座 + skills 功能区 + 过渡入口”的结构。
 
-第一阶段目标是实现一个简单闭环：
-
-```text
-企业微信机器人收到材料
-程序保存并解析材料
-AI 生成领导风格提炼建议
-企业微信返回给用户确认
-用户确认后更新 data/leaders/某领导/profile.md
-```
-
-## 文件说明
+## 当前主线
 
 ```text
-main.py
+app/platform/  # 新底座区
+skills/        # 正式业务能力区
+app/writing/   # 当前直报 Bot 入口适配层
+app/admin/     # 本机管理后台
 ```
 
-程序入口。当前已用于企业微信长连接、文本收发、文件接收保存和基础文件解析。
+后续新增能力时，优先新增或修改 `skills/<skill_id>/`，不要把业务规则写进 `app/platform/` 或入口 Bot。
+
+## 目录说明
+
+### `app/platform/`
+
+M-Agent 新底座。负责：
+
+- 路由用户意图。
+- 加载 skill。
+- 检查用户权限。
+- 创建任务目录。
+- 控制工具调用权限。
+- 调用 Pydantic AI 运行层。
+
+### `app/admin/`
+
+本机管理后台。负责：
+
+- 开关 skill。
+- 配置用户可用 skill。
+- 查看最近任务记录。
+
+它不是业务能力区，不写写作、审核规则。
+
+### `app/writing/`
+
+当前直报企业微信 Bot 的入口适配层。它负责连接企业微信和调用新底座。
+
+直报写作规则不在这里，唯一来源是：
 
 ```text
-config.example.env
+skills/direct_report/
 ```
 
-配置示例。真实密钥应放在本地 `.env`，不要提交到仓库。
+### `app/review/`
+
+旧审核 Bot。当前继续独立运行，后续包装为：
 
 ```text
-prompts/style_extraction.md
+skills/review/
 ```
 
-领导风格提炼提示词。它同时承担“经验沉淀 Agent 定义”和“输出模板”的作用。
+迁移前不要大改。
 
-## 第一版暂不做
+### 已归档停滞模块
 
-1. 完整写稿流程。
-2. 网页后台。
-3. 数据库。
-4. 复杂多 Agent 框架。
-5. 未经用户确认自动写入长期档案。
+早期统一 agent、领导风格沉淀 Bot、旧 prompt、领导风格历史材料和一次性诊断脚本已移出 `app/` 主线目录，统一归档到：
 
-## 手动检查
+```text
+archive/inactive-2026-07-04/
+```
 
-可以先运行：
+这些内容不作为当前开发入口。
+
+新底座入口优先使用：
 
 ```bash
-python app/main.py --check-config
+python -m app.platform.cli --check-config
+python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+python -m app.writing.bot --check-config
 ```
 
-预期输出：显示配置检查通过、模型名和数据目录。
+## 常用验证
 
-## 安装依赖
-
-第一阶段文本收发依赖企业微信智能机器人长连接 SDK：
+平台和直报入口：
 
 ```bash
-python -m pip install -r app/requirements.txt
+python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
 ```
 
-## 启动企业微信文本收发
-
-配置 `.env` 后运行：
+旧审核入口保护：
 
 ```bash
-python app/main.py
+python tests/test_review_bot.py
 ```
-
-启动后，在企业微信里给机器人发送：
-
-```text
-测试
-```
-
-预期机器人回复：
-
-```text
-M-Agent 已收到：测试
-```
-
-也可以直接发送领导名，为下一份材料指定归属：
-
-```text
-黄总
-```
-
-预期机器人回复：接下来请发送要提炼到“黄总”的文件或文字材料。
-
-## 文件接收与解析测试
-
-当前阶段会保存原始文件，并判断它是否能作为后续 AI 提炼材料。
-
-测试步骤：
-
-1. 启动程序：
-
-```bash
-python app/main.py
-```
-
-2. 在企业微信中发送领导名：
-
-```text
-黄总
-```
-
-3. 再发送一个文件或一段文字材料。
-
-也可以直接发送一条完整消息：
-
-```text
-把这段提炼到黄总：今天会上强调服务小微
-```
-
-如果只发送文件或文字材料，没有说明领导，机器人会追问：
-
-```text
-这份材料要提炼到哪位领导？请直接回复：黄总
-```
-
-预期结果：
-
-1. 机器人回复材料已保存。
-2. 文件保存到：
-
-```text
-data/leaders/张总/source/
-```
-
-3. 同目录生成一份 `meta.md`，记录发送人、消息 ID、原始文件名和保存时间。
-4. 如果文件需要转换，同目录生成：
-
-```text
-原文件名.parsed.md
-```
-
-5. 如果原文件已经是 `.md`，不重复生成 `.parsed.md`，后续直接读取原文件。
-
-当前支持解析：
-
-1. `.md`：直接作为可提炼材料。
-2. `.txt`：转换为 `.parsed.md`。
-3. `.docx`：提取正文并转换为 `.parsed.md`。
-
-当前 PDF 处理方式：
-
-1. 如果本机安装了 PDF 解析库，程序会尝试解析。
-2. 如果缺少解析库，机器人会返回清楚提示，不会中断文件保存。
-
-领导名只对下一份材料有效，用完即清空，不会长期沿用上一次领导。
-
-## 企业微信配置
-
-你已经在企业微信后台创建长连接机器人后，请在本机执行以下准备：
-
-1. 复制配置示例：
-
-```bash
-cp app/config.example.env .env
-```
-
-2. 打开 `.env`，填写：
-
-```text
-WECOM_BOT_ID=你的 Bot ID
-WECOM_BOT_SECRET=你的 Secret
-```
-
-不要把 `.env` 发给 AI，也不要提交到 Git。
-
-第一阶段推荐先用 Python 的 `wecom-aibot-sdk` 验证文本收发；如果文件消息或下载解密能力验证不稳定，再切换到 Node.js 的 `@wecom/aibot-node-sdk`。
-
-## 开始提炼测试
-
-当已经收集了材料后，发送：
-
-```
-开始提炼
-```
-
-预期结果：
-1. 机器人回复"正在分析本次材料"
-2. AI 生成风格提炼建议
-3. 机器人返回建议摘要，包含编号列表
-4. 等待用户确认
-
-## 确认入库测试
-
-收到建议后，发送：
-
-```
-确认全部
-```
-
-或：
-
-```
-确认 1、3
-```
-
-预期结果：
-1. 机器人回复"已更新X总领导风格卡"
-2. `data/leaders/某领导/profile.md` 追加新内容
-3. `data/leaders/某领导/update-log.md` 追加更新记录
-
-也可以发送：
-
-```
-不入库
-```
-
-预期结果：不修改任何文件，但材料已保存。

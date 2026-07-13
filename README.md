@@ -1,68 +1,101 @@
-# M-Agent 智能审核模块
+# M-Agent
 
-企业微信机器人自动审核 `.docx` 文档，标出低级错误。
+M-Agent 当前正在从多个独立企业微信 Bot，演进为：
 
-## 功能
+```text
+统一企业微信入口
+  -> app/platform/ 新底座
+  -> skills/ 功能区
+  -> 受限工具层
+  -> 企业微信返回
+```
 
-- 接收企业微信文件消息（`.docx`）
-- 两层审核架构：
-  - **格式类规则** → 代码正则检测（稳定）
-  - **语义类规则** → LLM CoT + 3次取并集
-- 按出现顺序输出问题清单
-- 审核结果存档到 `data/reviews/`
+## 当前状态
 
-## 快速开始
+已经具备：
+
+- 新底座：`app/platform/`
+- 本机管理后台：`app/admin/`
+- 直报 Bot 入口适配层：`app/writing/`
+- 直报 skill：`skills/direct_report/`
+- 简报 skill：`skills/writer1/`、`skills/writer2/`
+- 旧审核 Bot：`app/review/`
+
+## 目录身份
+
+```text
+app/platform/  # 新底座区，当前主线
+app/admin/     # 本机管理后台
+app/writing/   # 当前直报 Bot 入口适配层
+app/review/    # 旧审核 Bot，后续包装为 review skill
+skills/        # 正式业务能力区
+docs/archive/  # 历史方案，不作为新开发依据
+archive/inactive-2026-07-04/ # 已归档停滞模块，不作为开发入口
+```
+
+## 常用入口
+
+检查新底座配置：
 
 ```bash
-# 安装依赖
-pip install -r app/requirements.txt
+python -m app.platform.cli --check-config
+```
 
-# 配置（复制示例并填入 Bot ID/Secret）
-cp app/review/config.example.env .env
+本地测试一条消息：
 
-# 检查配置
+```bash
+python -m app.platform.demo "帮我根据这个链接写直报：https://example.com"
+```
+
+检查直报 Bot 配置：
+
+```bash
+python -m app.writing.bot --check-config
+```
+
+启动本机管理后台：
+
+```bash
+python -m app.admin.server --port 8787
+```
+
+旧审核 Bot：
+
+```bash
 python -m app.review.main --check-config
-
-# 启动 Bot
 python -m app.review.main
 ```
 
-## 审核规则
+## 开发前阅读
 
-| 类型 | 规则 | 检测方式 |
-|------|------|----------|
-| 格式 | `quote-pair` | 正则代码 |
-| 格式 | `num-unit` | 正则代码 |
-| 格式 | `mixed-punct` | 正则代码 |
-| 格式 | `toc-no-ordinal` | 正则代码 |
-| 格式 | `toc-seq-skip` | 正则代码 |
-| 语义 | `title-truncated` | LLM CoT |
-| 语义 | `content-mismatch` | LLM CoT |
-| 语义 | `content-incomplete` | LLM CoT |
-| 语义 | `toc-mismatch` | LLM CoT |
-| 语义 | `content-out-of-scope` | LLM CoT |
-| 语义 | `content-wrong-section` | LLM CoT |
-| 语义 | `content-duplicate` | LLM CoT |
-| 语义 | `content-outdated` | LLM CoT |
-
-## 目录结构
-
-```
-app/review/           # 审核模块核心代码
-  ├── main.py         # Bot 入口（独立进程）
-  ├── reviewer.py     # LLM 调用 + 语义审核
-  ├── format_checker.py  # 格式类规则正则检测
-  ├── parser.py       # .docx 解析
-  ├── output_formatter.py  # 审核意见格式化
-  └── rule_loader.py  # 规则库加载
-
-app/data/rules.md     # 审核规则库
-tests/                # 单元测试
-```
+1. `AGENTS.md` 或 `CLAUDE.md`
+2. `docs/development/README.md`
+3. `docs/development/architecture.md`
+4. `docs/development/directory-standard.md`
+5. `docs/capabilities/README.md`
 
 ## 测试
 
+平台和直报入口：
+
 ```bash
-python tests/test_reviewer.py
+python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
+```
+
+管理后台：
+
+```bash
+python -m pytest tests/test_admin_services.py tests/test_admin_server.py -v
+```
+
+旧审核入口保护：
+
+```bash
 python tests/test_review_bot.py
+```
+
+全仓回归：
+
+```bash
+python -m pytest tests -q
 ```

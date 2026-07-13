@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -20,7 +21,14 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from app.review import load_rules, review_text, parse_docx  # noqa: E402
-from app.review.reviewer import Finding, ReviewResult, _parse_llm_output  # noqa: E402
+from app.review.reviewer import (  # noqa: E402
+    Finding,
+    ReviewResult,
+    _build_review_document,
+    _check_weekly_body_format,
+    _parse_llm_output,
+    check_section_mismatch,
+)
 from app.review.output_formatter import format_review_result  # noqa: E402
 
 
@@ -41,6 +49,36 @@ def _load_env():
 
 
 _load_env()
+
+def _make_synthetic_weekly_format_doc(path: Path) -> None:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Pt
+
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = "宋体"
+    normal._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+    normal.font.size = Pt(12)
+    normal.paragraph_format.line_spacing = 1.15
+    normal.paragraph_format.first_line_indent = Cm(0.85)
+
+    for text in ("内部资料", "示例周报", "第1期", "主编：测试用户"):
+        doc.add_paragraph(text)
+
+    section = doc.add_paragraph("党政要闻")
+    section.paragraph_format.line_spacing = 1.15
+    section_run = section.runs[0]
+    section_run.font.name = "黑体"
+    section_run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "黑体")
+    section_run.font.size = Pt(18)
+
+    title = doc.add_paragraph("示例政策会议召开", style="Heading 3")
+    title_run = title.runs[0]
+    title_run.font.name = "黑体"
+    title_run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "黑体")
+    doc.add_paragraph("会议部署年度重点工作，并提出后续安排。")
+    doc.save(path)
 
 
 # ============================================================
@@ -272,6 +310,84 @@ def test_load_rules_returns_text():
     print(f"✅ test_load_rules_returns_text: 加载了 {len(text)} 字规则文本")
 
 
+def test_weekly_body_format_ignores_cover_paragraphs_when_doc_has_no_toc():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "示例周报.docx"
+        _make_synthetic_weekly_format_doc(path)
+        parsed = parse_docx(path)
+
+        findings = _check_weekly_body_format(parsed.paragraphs, path)
+
+    cover_findings = [
+        f for f in findings
+        if f.paragraph_index in {0, 1, 2, 3}
+    ]
+    assert not cover_findings, (
+        "无目录的内参周报，格式审核不应把封面/期号/主编信息当成正文范围。\n"
+        f"实际命中: {[(f.paragraph_index, f.description) for f in cover_findings]}"
+    )
+
+
+def test_weekly_body_format_accepts_template_body_indent():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "示例周报.docx"
+        _make_synthetic_weekly_format_doc(path)
+        parsed = parse_docx(path)
+
+        findings = _check_weekly_body_format(parsed.paragraphs, path)
+
+    indent_findings = [
+        f for f in findings
+        if "正文首行缩进" in f.description
+    ]
+    assert not indent_findings, (
+        "合成模板里的正文首行缩进应视为正确格式，不应整批误报。\n"
+        f"实际命中: {[(f.paragraph_index, f.description) for f in indent_findings[:5]]}"
+    )
+
+
+def test_build_review_document_groups_prompt_line_into_previous_entry():
+    paragraphs = [
+        "目录",
+        "市场观察2",
+        "前沿观点3",
+        "市场观察",
+        "示例市场标题",
+        "示例市场正文。",
+        "前沿观点",
+        "示例观点标题",
+        "观点背景说明。",
+        "原文：以下为补充材料",
+        "补充材料正文。",
+    ]
+
+    document = _build_review_document(paragraphs)
+
+    titles = [entry.title_text for entry in document.entries]
+    assert "原文：以下为补充材料" not in titles, (
+        "“原文：”提示行应并入上一条正文，不应被当成独立新闻标题。"
+    )
+
+    entry = next(item for item in document.entries if item.title_text == "示例观点标题")
+    assert "原文：以下为补充材料" in entry.body_paragraphs
+
+
+def test_check_section_mismatch_accepts_tongye_dongtai_variant():
+    paragraphs = ["同业动态", "某商业银行推出示例产品", "该产品用于验证板块识别。"]
+
+    findings = check_section_mismatch(paragraphs)
+
+    wrong_bank_findings = [
+        f for f in findings
+        if f.original_text.startswith("某商业银行推出示例产品")
+    ]
+    assert not wrong_bank_findings, (
+        "“同业动态”应视为“同业动向”的合法板块名，"
+        "不应把民营银行条目误报为放错板块。\n"
+        f"实际命中: {[(f.paragraph_index, f.description) for f in wrong_bank_findings]}"
+    )
+
+
 # ============================================================
 # 测试 4: 端到端(构造一个明显有错的 .docx,跑真 LLM)
 # 注:这个测试需要 LLM API,可能慢或被 rate-limit
@@ -287,7 +403,19 @@ def _make_fake_docx(path, paragraphs: list[str]):
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>{paras_xml}</w:body>
 </w:document>'''
+    content_types_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>'''
+    rels_xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>'''
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", content_types_xml)
+        z.writestr("_rels/.rels", rels_xml)
         z.writestr("word/document.xml", document_xml)
 
 
@@ -339,17 +467,17 @@ def test_end_to_end_with_no_errors():
 
 
 def test_end_to_end_content_mismatch():
-    """端到端:用户提供的真实错例——标题说人事任命,正文讲档案管理."""
+    """端到端：合成标题讲人事、正文讲档案管理的错配样例。"""
     test_path = "/tmp/test_llm_content_mismatch.docx"
     _make_fake_docx(test_path, [
         # 标题段(短)
-        "丁向群同志任国家金融监督管理总局党委书记",
+        "示例机构任命新负责人",
         # 正文段
-        "近日，中国人民银行、国家档案局联合发布《中国人民银行档案管理规定》《规定》明确了中国人民银行系统档案管理机制、监督指导关系、档案资源归属流向等方面内容。要求各单位加强对档案工作的组织领导、统筹协调，强化资源保障，确保档案工作依法有序开展。要依法集中、统一管理档案，建立健全档案管理体制，明确档案工作任务，加强档案基础设施建设，落实档案管理要求，维护档案安全与完整。加强金融业重大政策等关键性文件材料的收集、整理和归档工作，加强档案信息化建设，积极推进档案利用开发工作，充分发挥档案资源价值。",
+        "示例部门发布档案管理办法，正文介绍归档范围、保管期限、信息化建设和安全管理要求，与负责人任命无关。",
     ])
     parsed = parse_docx(Path(test_path))
     rules_text = load_rules(Path("app/data/rules.md"))
-    result = review_text(parsed.paragraphs, rules_text, "丁向群.docx")
+    result = review_text(parsed.paragraphs, rules_text, "synthetic_mismatch.docx")
 
     # LLM 应该识别 content-mismatch
     hit_rule_ids = {f.rule_id for f in result.findings if not f.rule_id.startswith("__")}
@@ -364,8 +492,8 @@ def test_end_to_end_content_match():
     """反例:标题和正文一致,LLM 不应报 content-mismatch."""
     test_path = "/tmp/test_llm_content_match.docx"
     _make_fake_docx(test_path, [
-        "中国人民银行发布档案管理规定",
-        "近日，中国人民银行、国家档案局联合发布《中国人民银行档案管理规定》，《规定》明确了中国人民银行系统档案管理机制、监督指导关系、档案资源归属流向等方面内容。要求各单位加强对档案工作的组织领导、统筹协调，强化资源保障，确保档案工作依法有序开展。",
+        "示例部门发布档案管理办法",
+        "示例部门发布档案管理办法，正文介绍归档范围、保管期限和安全管理要求。",
     ])
     parsed = parse_docx(Path(test_path))
     rules_text = load_rules(Path("app/data/rules.md"))
@@ -382,23 +510,23 @@ def test_end_to_end_content_match():
 def test_end_to_end_multiple_content_mismatches():
     """端到端:多组标题-正文错配,LLM 应识别多条 content-mismatch.
 
-    这是真实文档里反复出现的问题(标题和正文被混搭了)。
+    这是用于验证多组标题和正文被混搭的合成场景。
     """
     import time
     test_path = "/tmp/test_llm_multiple_mismatch.docx"
     _make_fake_docx(test_path, [
         # 段 0: 标题 A
-        "丁向群同志任国家金融监督管理总局党委书记",
+        "示例机构任命新负责人",
         # 段 1: 正文却是 B(错配 1)
-        "近日，中国人民银行、国家档案局联合发布《中国人民银行档案管理规定》",
+        "示例部门发布档案管理办法",
         # 段 2: 标题 C
-        "何立峰会见德国联邦经济和能源部部长赖歇一行",
+        "示例代表团举行合作会谈",
         # 段 3: 正文却是 D(错配 2)
-        "上周美股三大指数集体上涨，道琼斯指数一周涨幅为0.90%",
+        "上周示例指数小幅上涨，市场交易保持平稳。",
         # 段 4: 标题 E
-        "潘功胜会见法国央行行长德加洛",
+        "示例机构负责人会见合作方代表",
         # 段 5: 正文讲的是会见议题(匹配,不报)
-        "5月25日，中国人民银行行长潘功胜会见法国央行行长德加洛，双方就中法金融合作等议题交换意见。",
+        "示例机构负责人会见合作方代表，双方就后续合作安排交换意见。",
     ])
     parsed = parse_docx(Path(test_path))
     rules_text = load_rules(Path("app/data/rules.md"))
@@ -483,25 +611,21 @@ def test_end_to_end_no_false_positive_on_toc():
     print(f"✅ test_end_to_end_no_false_positive_on_toc: 目录项无误报 ({len(findings)} 条发现均为真问题)")
 
 
-def test_end_to_end_real_user_mismatches():
-    """端到端:用户最新提供的 2 个真实错例.
-
-    1. 标题"国务院政策例行吹风会..."+ 正文求是杂志文章 → content-mismatch
-    2. 正文"...推动多渠道" 戛然而止 → content-incomplete
-    """
+def test_end_to_end_synthetic_mismatches():
+    """端到端：合成标题正文错配和正文截断样例。"""
     import time
-    test_path = "/tmp/test_llm_real_user_mismatches.docx"
+    test_path = "/tmp/test_llm_synthetic_mismatches.docx"
     _make_fake_docx(test_path, [
         # 段 0: 真新闻标题 1
-        "国务院政策例行吹风会介绍推进城市更新工作有关情况",
-        # 段 1: 正文却是求是杂志文章(错配 1)
-        "6月1日出版的第11期《求是》杂志将发表习近平总书记重要文章《前瞻布局和发展未来产业》。文章明确,培育发展未来产业,是抢占科技与产业制高点、培育新质生产力、构建现代化产业体系的关键举措,同时对改善民生、推动社会全面进步、助力强国建设和民族复兴具有深远战略意义。",
+        "示例项目召开年度推进会",
+        # 段 1: 正文却是产品发布说明(错配 1)
+        "示例机构发布一项测试产品，正文主要介绍产品功能、使用对象和操作流程，与年度推进会无关。",
         # 段 2: 真新闻标题 2
-        "金融监管总局党委召开扩大会议,研究部署近期重点工作",
+        "示例机构部署下一阶段工作",
         # 段 3: 正文戛然而止(截断 1)
-        "6月5日,金融监管总局党委召开扩大会议,传达学习习近平总书记重要指示批示精神,研究贯彻落实举措,部署近期重点工作。会议强调,要着力推动行业高质量发展,大力推动各类机构错位发展、优势互补、各展所长,坚定推进中小金融机构减量提质,深入整治金融领域无序竞争,推动多渠道。",
+        "会议部署了流程优化、协同管理和服务提升等任务，并强调下一阶段将。",
         # 段 4: 一个完整句子的对照(不应报截断)
-        "市场观察方面,本周A股震荡偏弱,投资者情绪谨慎。",
+        "市场观察方面，本周示例指数小幅波动，参与者保持谨慎。",
     ])
     parsed = parse_docx(Path(test_path))
     rules_text = load_rules(Path("app/data/rules.md"))
@@ -509,7 +633,7 @@ def test_end_to_end_real_user_mismatches():
     # 重试 2 次
     findings = []
     for attempt in range(2):
-        result = review_text(parsed.paragraphs, rules_text, "user_mismatches.docx")
+        result = review_text(parsed.paragraphs, rules_text, "synthetic_mismatches.docx")
         findings = result.findings
         content_mismatch = [f for f in findings if f.rule_id == "content-mismatch"]
         content_incomplete = [f for f in findings if f.rule_id == "content-incomplete"]
@@ -524,7 +648,7 @@ def test_end_to_end_real_user_mismatches():
         if f.rule_id == "content-mismatch" and f.paragraph_index == 0
     ]
     assert mismatch_on_title, (
-        f"段 0 标题应报 content-mismatch(标题讲吹风会,正文讲求是文章),实际没报。\n"
+        f"段 0 标题应报 content-mismatch(标题讲推进会,正文讲产品),实际没报。\n"
         f"所有发现:{[(f.paragraph_index, f.rule_id, f.description[:60]) for f in findings]}"
     )
 
@@ -548,15 +672,15 @@ def test_end_to_end_real_user_mismatches():
         f"{[f.description[:80] for f in incomplete_on_complete]}"
     )
 
-    print(f"✅ test_end_to_end_real_user_mismatches: LLM 识别 {len(mismatch_on_title)} 错配 + {len(incomplete_on_truncated)} 截断 (重试 {attempt+1} 次)")
+    print(f"✅ test_end_to_end_synthetic_mismatches: LLM 识别 {len(mismatch_on_title)} 错配 + {len(incomplete_on_truncated)} 截断 (重试 {attempt+1} 次)")
 
 
 def test_end_to_end_title_truncated():
-    """端到端:用户提供的真实标题截断错例.
+    """端到端：合成标题截断样例。
 
     验证 LLM 能识别 3 种标题截断场景:
-    1. 后面紧跟完全无关的段(像真实文档里的章节分类)
-    2. 后面是长段正文(像真实新闻)
+    1. 后面紧跟完全无关的段
+    2. 后面是长段正文
     3. 单段标题,后面是页脚
 
     注:测试用例不要把"截断版"和"完整版"挨着放,LLM 会困惑。
@@ -565,22 +689,22 @@ def test_end_to_end_title_truncated():
     test_path = "/tmp/test_llm_title_truncated.docx"
     _make_fake_docx(test_path, [
         # 段 0: 完整标题 + 对应长正文(对照:不应报截断)
-        "习近平同塞尔维亚总统武契奇会谈",
-        "5月25日,国家主席习近平在北京同来华国事访问的塞尔维亚总统武契奇举行会谈,双方就中塞关系深入交换意见。会谈在亲切友好的气氛中进行,两国元首一致同意深化传统友谊,加强各领域合作。",
+        "示例机构与合作方举行年度会谈",
+        "双方围绕年度合作计划、项目推进和后续安排深入交换意见，并明确了下一阶段工作重点。",
         # 段 2: 截断标题 + 紧跟长正文(真截断:应报)
-        "习近平同塞尔维亚总",
-        "5月25日,国家主席习近平在北京同来华国事访问的塞尔维亚总统武契奇举行会谈,双方就中塞关系深入交换意见。会谈在亲切友好的气氛中进行,两国元首一致同意深化传统友谊,加强各领域合作。",
+        "示例机构与合作方举",
+        "双方围绕年度合作计划、项目推进和后续安排深入交换意见，并明确了下一阶段工作重点。",
         # 段 4: 完整标题 + 对应正文(对照:不应报)
-        "4月银行理财市场规模显著回暖",
-        "数据显示,截至4月末,银行理财市场规模达34.5万亿元,较3月增加2.6万亿元。",
+        "四月示例市场规模明显回升",
+        "数据显示，截至四月末，示例市场规模较上月有所增加。",
         # 段 6: 截断标题 + 紧跟正文(真截断:应报)
-        "4月银行理财市场规模显著暖",
-        "数据显示,截至4月末,银行理财市场规模达34.5万亿元,较3月增加2.6万亿元。",
+        "四月示例市场规模明显回",
+        "数据显示，截至四月末，示例市场规模较上月有所增加。",
         # 段 8: 章节分类(对照:不报)
         "市场观察",
         # 段 9: 截断标题 + 紧跟另一章节(真截断:应报)
-        "中东局势骤然升级,国际油",
-        "市场观察方面,本周A股震荡偏弱。",
+        "示例市场波动加剧，相关指",
+        "市场观察方面，本周示例指数小幅波动。",
     ])
     parsed = parse_docx(Path(test_path))
     rules_text = load_rules(Path("app/data/rules.md"))
@@ -622,9 +746,9 @@ def test_end_to_end_title_truncated():
 
 
 def test_end_to_end_toc_with_number():
-    """端到端:目录项不应该带"一、二、三"序号(用户反馈的真实错例).
+    """端到端：合成目录项不应带“一、二、三”序号的样例。
 
-    第 23 期周报目录项出现:
+    示例周报目录项出现:
       - "一、党政要闻2"
       - "三、市场观察3"(跳号)
       - "四、前沿观点4"
@@ -719,6 +843,12 @@ def test_phase2_rules_only():
     assert "title-truncated" not in PHASE2_RULES
 
 
+def test_is_news_title_allows_question_style_headline():
+    from app.review.reviewer import _is_news_title
+
+    assert _is_news_title('国内距离“零利率”还有多远？')
+
+
 # ============================================================
 # 主入口
 # ============================================================
@@ -745,6 +875,9 @@ if __name__ == "__main__":
         test_formatter_llm_error,
         test_formatter_more_than_10_issues,
         test_load_rules_returns_text,
+        test_weekly_body_format_ignores_cover_paragraphs_when_doc_has_no_toc,
+        test_weekly_body_format_accepts_template_body_indent,
+        test_is_news_title_allows_question_style_headline,
     ]
 
     # 端到端测试(可能需要 LLM)
@@ -755,7 +888,7 @@ if __name__ == "__main__":
         test_end_to_end_content_match,
         test_end_to_end_multiple_content_mismatches,
         test_end_to_end_no_false_positive_on_toc,
-        test_end_to_end_real_user_mismatches,
+        test_end_to_end_synthetic_mismatches,
         test_end_to_end_title_truncated,
         test_end_to_end_toc_with_number,
     ]

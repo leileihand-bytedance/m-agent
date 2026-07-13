@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
+import logging
 import re
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
+from time import perf_counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,8 +27,26 @@ from typing import Mapping
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
+from app.review.bot_logging import setup_logging, redirect_stdout_to_logging, log_extra
+from app.review.notification import AdminNotifier, NotificationConfig
+from app.review.user_registry import UserRegistry, RegistrationFlow, DEFAULT_REGISTRY_PATH
 from app.review import load_rules, format_review_result  # noqa: E402
-from app.review.reviewer import ReviewResult  # noqa: E402
+from app.review.reviewer import ReviewResult, Finding  # noqa: E402
+from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
+from app.platform.ops.events import OpsEventLogger  # noqa: E402
+from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
+
+
+# 全局 logger,在 main() 中初始化
+logger = logging.getLogger("review_bot")
+
+_FOLLOWUP_REVIEW_REQUEST_RE = re.compile(
+    r"^(?:请|麻烦)?(?:帮我)?(?:(?:审(?:核)?|看)(?:一下|下)?(?:这个|这份|该)?(?:材料|文件|文档|附件)?|"
+    r"看看(?:(?:这个|这份|该)?(?:材料|文件|文档|附件))?(?:有无|有没有)?问题|"
+    r"看(?:(?:这个|这份|该)?(?:材料|文件|文档|附件))?(?:有无|有没有)?问题)$"
+)
+_ACK_SMALLTALK_RE = re.compile(r"^(?:好|好的|收到|知道了|明白了|行|行的|ok|okay|ok了|嗯|嗯嗯)$", re.IGNORECASE)
+_THANKS_SMALLTALK_RE = re.compile(r"^(?:谢谢|谢谢你|谢谢啦|谢谢哈|多谢|辛苦了)$")
 
 
 # ============================================================
@@ -38,7 +59,16 @@ class ReviewConfig:
     wecom_bot_secret: str
     rules_path: Path
     reviews_dir: Path
+    logs_dir: Path
+    admin_user_id: str
+    admin_name: str
+    notification_cooldown: int
+    direct_admin_notifications: bool
+    require_registration: bool
+    ops_events_dir: Path = _ROOT / "data/platform/ops_events"
+    ops_heartbeat_dir: Path = _ROOT / "data/platform/heartbeats"
     max_file_size_mb: int = 10
+    reply_ack_timeout_seconds: float = 30.0
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -61,21 +91,72 @@ def require_value(values: Mapping[str, str], key: str) -> str:
     return value
 
 
+def _env_int(values: Mapping[str, str], key: str, default: int) -> int:
+    """读取整数环境变量,失败返回默认值."""
+    try:
+        return int(values.get(key, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _env_float(values: Mapping[str, str], key: str, default: float) -> float:
+    """读取浮点数环境变量,失败返回默认值."""
+    try:
+        return float(values.get(key, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _env_bool(values: Mapping[str, str], key: str, default: bool) -> bool:
+    """读取布尔环境变量."""
+    value = (values.get(key, "").strip()).lower()
+    if value in ("true", "1", "yes", "on"):
+        return True
+    if value in ("false", "0", "no", "off", ""):
+        return default
+    return default
+
+
 def load_config(env_path: Path | None = None) -> ReviewConfig:
     if env_path is None:
         env_path = _ROOT / ".env"
     values = parse_env_file(env_path)
+
     rules_path = Path(values.get("M_AGENT_REVIEW_RULES", "app/data/rules.md") or "app/data/rules.md")
     if not rules_path.is_absolute():
         rules_path = _ROOT / rules_path
+
     reviews_dir = Path(values.get("M_AGENT_REVIEWS_DIR", "data/reviews") or "data/reviews")
     if not reviews_dir.is_absolute():
         reviews_dir = _ROOT / reviews_dir
+
+    logs_dir = Path(values.get("M_AGENT_LOGS_DIR", "data/logs") or "data/logs")
+    if not logs_dir.is_absolute():
+        logs_dir = _ROOT / logs_dir
+    ops_events_dir = Path(values.get("M_AGENT_OPS_EVENTS_DIR", "data/platform/ops_events") or "data/platform/ops_events")
+    if not ops_events_dir.is_absolute():
+        ops_events_dir = _ROOT / ops_events_dir
+    ops_heartbeat_dir = Path(values.get("M_AGENT_OPS_HEARTBEAT_DIR", "data/platform/heartbeats") or "data/platform/heartbeats")
+    if not ops_heartbeat_dir.is_absolute():
+        ops_heartbeat_dir = _ROOT / ops_heartbeat_dir
+
     return ReviewConfig(
         wecom_bot_id=require_value(values, "WECOM_REVIEW_BOT_ID"),
         wecom_bot_secret=require_value(values, "WECOM_REVIEW_BOT_SECRET"),
         rules_path=rules_path,
         reviews_dir=reviews_dir,
+        logs_dir=logs_dir,
+        ops_events_dir=ops_events_dir,
+        ops_heartbeat_dir=ops_heartbeat_dir,
+        admin_user_id=values.get("REVIEW_ADMIN_USER_ID", "").strip(),
+        admin_name=values.get("REVIEW_ADMIN_NAME", "").strip() or "管理员",
+        notification_cooldown=_env_int(values, "REVIEW_NOTIFICATION_COOLDOWN", 300),
+        direct_admin_notifications=_env_bool(values, "REVIEW_DIRECT_ADMIN_NOTIFY", False),
+        require_registration=_env_bool(values, "REVIEW_REQUIRE_REGISTRATION", False),
+        reply_ack_timeout_seconds=max(
+            5.0,
+            _env_float(values, "REVIEW_REPLY_ACK_TIMEOUT_SECONDS", 30.0),
+        ),
     )
 
 
@@ -83,7 +164,7 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
 # 拒接非审核消息
 # ============================================================
 
-REJECT_MESSAGE = "本入口仅接收审核文档(.docx),请直接发送文件"
+REJECT_MESSAGE = "本入口接收 .docx 文件或直接发送文字，请发送需要审核的内容"
 
 
 def is_docx_filename(filename: str | None) -> bool:
@@ -113,21 +194,35 @@ def _next_review_index(reviews_dir: Path, date_str: str) -> int:
     return len(existing) + 1
 
 
+def _safe_source_name(original_filename: str) -> str:
+    """把原始文件名清洗成可安全存入 source/ 目录的文件名."""
+    original = original_filename or "uploaded.docx"
+    path = Path(original)
+    stem = path.stem or "uploaded"
+    ext = path.suffix or ".docx"
+    if not re.fullmatch(r"\.[A-Za-z0-9]+", ext):
+        ext = ".docx"
+    safe_stem = re.sub(r'[^\w一-鿿\-_]', '_', stem)
+    return safe_stem + ext
+
+
 def save_review(
     *,
     reviews_dir: Path,
-    file_bytes: bytes,
+    file_bytes: bytes | None,
     original_filename: str,
     sender: str,
     msgid: str,
     result: ReviewResult,
     parsed_paragraphs: list[str],
+    text_content: str | None = None,
+    doc_type: DocumentType = DocumentType.NEI_CAN,
 ) -> Path:
     """保存审核记录到 data/reviews/<日期-序号>/.
 
     目录结构:
       data/reviews/2026-06-13-001/
-        source/原文件名.docx
+        source/原文件
         report.md            (审核意见)
         meta.md              (时间 / Bot ID / 触发用户)
     """
@@ -138,24 +233,17 @@ def save_review(
     source_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 保存原始文件
-    original = original_filename or "uploaded.docx"
-    # 先剥离扩展名(只允许 .docx)
-    if original.lower().endswith(".docx"):
-        stem = original[:-5]  # 去掉 .docx
-        ext = ".docx"
-    else:
-        stem = Path(original).stem  # 拿无扩展名部分
-        ext = ".docx"  # 强制 .docx
-    # 清洗 stem:剥离所有 . 和 / 和 \
-    safe_stem = re.sub(r'[^\w\u4e00-\u9fff\-_]', '_', stem)
-    safe_name = safe_stem + ext
+    safe_name = _safe_source_name(original_filename)
     source_path = source_dir / safe_name
-    source_path.write_bytes(file_bytes)
+    if file_bytes is not None:
+        source_path.write_bytes(file_bytes)
+    else:
+        source_path.write_text(text_content or "", encoding="utf-8")
 
     # 2. 保存 report.md
     report_path = review_dir / "report.md"
     report_path.write_text(
-        format_review_result(result, original_filename),
+        format_review_result(result, original_filename, doc_type=doc_type),
         encoding="utf-8",
     )
 
@@ -201,6 +289,23 @@ def get_sender_id(frame: Mapping[str, object]) -> str:
     return "unknown"
 
 
+def get_message_id(frame: Mapping[str, object]) -> str:
+    body = frame.get("body")
+    headers = frame.get("headers")
+    top_level_msgid = frame.get("msgid")
+    if isinstance(top_level_msgid, str) and top_level_msgid.strip():
+        return top_level_msgid.strip()
+    if isinstance(body, Mapping):
+        value = body.get("msgid")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if isinstance(headers, Mapping):
+        value = headers.get("req_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def get_string_value(values: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
     for key in keys:
         value = values.get(key)
@@ -226,6 +331,39 @@ class FilePayload:
     filename: str | None
 
 
+@dataclass(frozen=True)
+class RecentSubmission:
+    kind: str
+    created_at: float
+
+
+class RecentSubmissionTracker:
+    """记录用户刚提交过待审核内容，用于忽略紧随其后的催审短句。"""
+
+    def __init__(self, *, ttl_seconds: float = 90.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._entries: dict[str, RecentSubmission] = {}
+
+    def remember(self, userid: str, kind: str, *, now: float | None = None) -> None:
+        self._entries[userid] = RecentSubmission(kind=kind, created_at=now or perf_counter())
+
+    def forget(self, userid: str) -> None:
+        self._entries.pop(userid, None)
+
+    def has_recent_submission(self, userid: str, *, now: float | None = None) -> bool:
+        entry = self._entries.get(userid)
+        if entry is None:
+            return False
+        current = now or perf_counter()
+        if current - entry.created_at > self.ttl_seconds:
+            self._entries.pop(userid, None)
+            return False
+        return True
+
+    def should_ignore_text_review(self, userid: str, text: str, *, now: float | None = None) -> bool:
+        return self.has_recent_submission(userid, now=now) and _is_followup_review_request_text(text)
+
+
 def extract_file_payload(frame: Mapping[str, object]) -> FilePayload | None:
     file_info = get_file_info(frame)
     if file_info is None:
@@ -236,6 +374,243 @@ def extract_file_payload(frame: Mapping[str, object]) -> FilePayload | None:
     aes_key = get_string_value(file_info, ("aeskey", "aes_key", "aesKey"))
     filename = get_string_value(file_info, ("filename", "file_name", "fileName", "name"))
     return FilePayload(url=url, aes_key=aes_key, filename=filename)
+
+
+def extract_text_content(frame: Mapping[str, object]) -> str | None:
+    """从文本消息中提取 content."""
+    body = frame.get("body")
+    if not isinstance(body, Mapping):
+        return None
+    text_info = body.get("text")
+    if not isinstance(text_info, Mapping):
+        return None
+    return get_string_value(text_info, ("content",))
+
+
+def _is_followup_review_request_text(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text.strip())
+    if not normalized:
+        return False
+    return _FOLLOWUP_REVIEW_REQUEST_RE.fullmatch(normalized) is not None
+
+
+def _resolve_smalltalk_text_reply(text: str) -> str | None:
+    normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text.strip())
+    if not normalized:
+        return None
+    if _THANKS_SMALLTALK_RE.fullmatch(normalized):
+        return "不客气。"
+    if _ACK_SMALLTALK_RE.fullmatch(normalized):
+        return "收到。"
+    return None
+
+
+def _resolve_instruction_only_text_reply(
+    recent_submission_tracker: RecentSubmissionTracker,
+    userid: str,
+    text: str,
+    *,
+    now: float | None = None,
+) -> str | None:
+    if not _is_followup_review_request_text(text):
+        return None
+    if recent_submission_tracker.has_recent_submission(userid, now=now):
+        return "收到，我会按你刚发的内容继续审核，请稍等……"
+    return "收到，请把需要审核的文字或.docx发给我，我来帮你看。"
+
+
+def _resolve_text_registration_reply(
+    registration_flow: RegistrationFlow,
+    userid: str,
+    text: str,
+) -> tuple[bool, str]:
+    """判断文字消息是否应先被注册流程接管."""
+    is_registration, reply = registration_flow.handle_name_message(userid, text)
+    if is_registration:
+        return True, reply
+    if registration_flow.should_ask_name(userid):
+        return True, registration_flow.ask_name_message()
+    return False, ""
+
+
+def _build_enter_welcome_text(
+    registration_flow: RegistrationFlow,
+    userid: str,
+) -> str:
+    """构造用户进入会话时的欢迎语."""
+    if registration_flow.should_ask_name(userid):
+        return registration_flow.ask_name_message()
+    return "你好，需要我帮你审核什么呢？请直接发送 .docx 文档或直接发送文字,我会认真审核。"
+
+
+def _split_text_into_paragraphs(text: str) -> list[str]:
+    """把用户输入的文本拆成段落.
+
+    每个手工换行都视为独立段落,过滤纯空段.
+
+    企业微信文字可能只用一个空行分隔正文和附件清单。如果先按空行
+    切分,附件清单里的多行会被错误合成一个大段,导致跨行规则漏判。
+    """
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def build_user_review_reply(
+    result: ReviewResult,
+    filename: str,
+    *,
+    doc_type: DocumentType,
+) -> str | None:
+    """生成发给用户的文字回复.
+
+    - 有问题: 不再重复发错误列表文字，改为只回标注文档
+    - 无问题: 发简短通过话术
+    """
+    if result.findings:
+        return None
+    return "没有发现问题，可以走审批了。"
+
+
+def _prepare_review_reply_file(
+    review_dir: Path | None,
+    original_filename: str,
+    findings: list[Finding],
+) -> Path | None:
+    """准备回传给用户的审核文档.
+
+    - 有问题: 基于 source/ 原文生成 `marked_原文件名.docx`
+    - 无问题: 不回传文档
+    """
+    if review_dir is None:
+        return None
+
+    source_name = _safe_source_name(original_filename)
+    source_path = review_dir / "source" / source_name
+    if not source_path.exists():
+        return None
+
+    if not findings:
+        return None
+
+    from app.review.error_marker import mark_errors_in_docx  # noqa: E402
+
+    source_path_obj = Path(source_name)
+    marked_path = review_dir / "source" / f"marked_{source_path_obj.stem}{source_path_obj.suffix}"
+    mark_errors_in_docx(source_path, marked_path, findings)
+    return marked_path
+
+
+async def _review_text(
+    text: str,
+    config: ReviewConfig,
+) -> str:
+    """对纯文字做通用审核,返回格式化文本结果."""
+    result, _ = await _review_text_result(text, config)
+    if result.findings and result.findings[0].rule_id == "__empty_text__":
+        return "❌ 发送的内容为空,无法审核。"
+
+    from app.review.document_type import DocumentType  # noqa: E402
+    from app.review.output_formatter import format_review_result  # noqa: E402
+
+    return format_review_result(result, "文字消息", doc_type=DocumentType.GENERAL)
+
+
+async def _review_text_result(
+    text: str,
+    config: ReviewConfig,
+) -> tuple[ReviewResult, list[str]]:
+    """对纯文字做通用审核,返回结构化结果和段落."""
+    from app.review.general_reviewer import review_general  # noqa: E402
+
+    paragraphs = _split_text_into_paragraphs(text)
+    if not paragraphs:
+        return (
+            ReviewResult(
+                findings=[
+                    Finding(
+                        rule_id="__empty_text__",
+                        paragraph_index=0,
+                        line_number=1,
+                        original_text="",
+                        description="发送的内容为空,无法审核。",
+                        target_text="",
+                    )
+                ],
+                total_rules=0,
+                passed_rules=0,
+                filename="文字消息",
+            ),
+            [],
+        )
+
+    general_rules_text = load_rules("app/review/rules_general.md")
+    result = await review_general(paragraphs, general_rules_text, "文字消息")
+    return result, paragraphs
+
+
+async def _start_neican_review(
+    *,
+    phase1_runner,
+    phase2_runner,
+    paragraphs: list[str],
+    rules_text: str,
+    filename: str,
+    file_path: Path | None,
+) -> tuple[ReviewResult, asyncio.Task[tuple[ReviewResult, float]], dict[str, float]]:
+    """启动内参两阶段审核。
+
+    返回：
+    1. 第一阶段结果（用于尽快反馈给用户）
+    2. 后台进行中的第二阶段任务
+    3. 当前已知耗时数据
+    """
+    wall_start = perf_counter()
+
+    def _runner_accepts_file_path(runner) -> bool:
+        try:
+            return "file_path" in inspect.signature(runner).parameters
+        except (TypeError, ValueError):
+            return False
+
+    async def _timed_phase2() -> tuple[ReviewResult, float]:
+        phase2_started_at = perf_counter()
+        if _runner_accepts_file_path(phase2_runner):
+            result = await phase2_runner(
+                paragraphs,
+                rules_text,
+                filename,
+                file_path=file_path,
+            )
+        else:
+            result = await phase2_runner(paragraphs, rules_text, filename)
+        return result, (perf_counter() - phase2_started_at) * 1000
+
+    phase2_task = asyncio.create_task(_timed_phase2(), name="review-neican-phase2")
+    await asyncio.sleep(0)
+
+    phase1_started_at = perf_counter()
+    try:
+        if _runner_accepts_file_path(phase1_runner):
+            phase1_result = await phase1_runner(
+                paragraphs,
+                rules_text,
+                filename,
+                file_path=file_path,
+            )
+        else:
+            phase1_result = await phase1_runner(paragraphs, rules_text, filename)
+    except Exception:
+        phase2_task.cancel()
+        await asyncio.gather(phase2_task, return_exceptions=True)
+        raise
+
+    return (
+        phase1_result,
+        phase2_task,
+        {
+            "wall_start": wall_start,
+            "phase1_ms": (perf_counter() - phase1_started_at) * 1000,
+        },
+    )
 
 
 # ============================================================
@@ -285,6 +660,85 @@ class PendingReplyQueue:
 _pending_queue: PendingReplyQueue | None = None
 
 
+def _configure_ws_client_timeouts(ws_client: object, *, reply_ack_timeout_seconds: float) -> None:
+    """覆盖 SDK 内部回复回执等待时间.
+
+    wecom-aibot-sdk 1.0.7 内部默认只等 5 秒；大文件分片上传在企业微信侧
+    回执可能超过 5 秒，导致实际成功回执被当成 unknown frame。
+    """
+    manager = getattr(ws_client, "_ws_manager", None)
+    if manager is None or not hasattr(manager, "_reply_ack_timeout"):
+        logger.warning(
+            "未找到企业微信 SDK 回执超时配置入口,保留 SDK 默认值。",
+            extra=log_extra("system", "system"),
+        )
+        return
+    setattr(manager, "_reply_ack_timeout", reply_ack_timeout_seconds)
+    logger.info(
+        "企业微信回复回执等待时间已设置为 %.1f 秒。",
+        reply_ack_timeout_seconds,
+        extra=log_extra("system", "system"),
+    )
+
+
+def _summarize_delivery_error(exc: BaseException) -> str:
+    """给用户看的发送失败摘要，避免暴露 req_id 等底层细节。"""
+    message = str(exc)
+    if isinstance(exc, asyncio.TimeoutError) or "Reply ack timeout" in message:
+        return "企业微信上传回执超时"
+    if "Upload failed" in message or "upload failed" in message:
+        return "企业微信文件上传失败"
+    if "reply" in message.lower() or "send" in message.lower():
+        return "企业微信消息发送失败"
+    return "企业微信发送异常"
+
+
+def _build_processing_failure_user_reply(stage: str, exc: BaseException) -> str:
+    """生成固定安全话术；原异常仅进入日志和运维事件。"""
+    _ = exc
+    return f"{stage}失败，已经提醒管理员排查。请稍后重试。"
+
+
+def _build_delivery_failure_user_reply(msg_type: str, exc: BaseException) -> str:
+    reason = _summarize_delivery_error(exc)
+    return (
+        f"审核已经完成，但{msg_type}发送失败（{reason}）。"
+        "我已经把详细错误提醒给管理员处理，请稍后再试或联系管理员。"
+    )
+
+
+async def _reply_delivery_failure_to_user(
+    ws_client: object,
+    frame: object,
+    req_id: str,
+    msg_type: str,
+    exc: BaseException,
+) -> None:
+    """附件/结果发送失败时给用户简短说明；详细错误走运维 Bot。"""
+    try:
+        await ws_client.reply_stream(
+            frame,
+            req_id,
+            _build_delivery_failure_user_reply(msg_type, exc),
+            True,
+        )
+    except Exception as reply_exc:
+        logger.warning(
+            "发送用户失败说明失败: %s",
+            reply_exc,
+            extra=log_extra("system", "system"),
+        )
+
+
+async def _heartbeat_loop(root_dir: Path, service: str) -> None:
+    while True:
+        try:
+            write_heartbeat(root_dir, service)
+        except Exception as exc:
+            logger.warning("审核心跳写入失败: %s", exc, extra=log_extra("system", "system"))
+        await asyncio.sleep(30)
+
+
 # ============================================================
 # 主流程
 # ============================================================
@@ -301,36 +755,256 @@ async def run_review_bot(config: ReviewConfig) -> None:
     _pending_queue = PendingReplyQueue()
 
     config.reviews_dir.mkdir(parents=True, exist_ok=True)
+    config.logs_dir.mkdir(parents=True, exist_ok=True)
     if not config.rules_path.exists():
         raise RuntimeError(f"规则库文件不存在: {config.rules_path}")
 
     rules_text = load_rules(str(config.rules_path))
-    print(f"✅ 规则库已加载: {len(rules_text)} 字符 (来源: {config.rules_path})", flush=True)
-    print(f"✅ 审核存档目录: {config.reviews_dir}", flush=True)
+    logger.info(
+        "规则库已加载: %d 字符 (来源: %s)",
+        len(rules_text),
+        config.rules_path,
+        extra=log_extra("system", "system"),
+    )
+    logger.info(
+        "审核存档目录: %s", config.reviews_dir, extra=log_extra("system", "system")
+    )
+    logger.info(
+        "日志目录: %s", config.logs_dir, extra=log_extra("system", "system")
+    )
+
+    registry = UserRegistry(DEFAULT_REGISTRY_PATH)
+    registration_flow = RegistrationFlow(
+        registry, require_registration=config.require_registration
+    )
+    recent_submission_tracker = RecentSubmissionTracker()
 
     ws_client = WSClient(
         bot_id=config.wecom_bot_id,
         secret=config.wecom_bot_secret,
     )
+    _configure_ws_client_timeouts(
+        ws_client,
+        reply_ack_timeout_seconds=config.reply_ack_timeout_seconds,
+    )
+    ops_event_logger = OpsEventLogger(config.ops_events_dir)
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(config.ops_heartbeat_dir, "review_bot"),
+        name="review-bot-heartbeat",
+    )
 
-    ws_client.on("connected", lambda: print("企业微信长连接已建立。", flush=True))
-    ws_client.on("authenticated", lambda: print("企业微信审核 Bot 认证成功,等待文件消息。", flush=True))
-    ws_client.on("disconnected", lambda reason: print(f"企业微信连接已断开:{reason}", flush=True))
-    ws_client.on("reconnecting", lambda attempt: print(f"企业微信正在重连,第 {attempt} 次。", flush=True))
-    ws_client.on("error", lambda error: print(f"企业微信连接错误:{error}", flush=True))
+    notifier = AdminNotifier(
+        ws_client,
+        NotificationConfig(
+            admin_user_id=config.admin_user_id,
+            admin_name=config.admin_name,
+            cooldown_seconds=config.notification_cooldown,
+            direct_message_enabled=config.direct_admin_notifications,
+        ),
+        event_logger=ops_event_logger,
+        source="review_bot",
+    )
+
+    ws_client.on(
+        "connected",
+        lambda: logger.info("企业微信长连接已建立。", extra=log_extra("system", "system")),
+    )
+    ws_client.on(
+        "authenticated",
+        lambda: logger.info(
+            "企业微信审核 Bot 认证成功,等待文件消息。",
+            extra=log_extra("system", "system"),
+        ),
+    )
+    ws_client.on(
+        "disconnected",
+        lambda reason: (
+            logger.warning(
+                "企业微信连接已断开: %s", reason, extra=log_extra("system", "system")
+            ),
+            ops_event_logger.record(
+                source="review_bot",
+                severity="error",
+                subject="审核 Bot 连接断开",
+                detail=str(reason),
+            ),
+        ),
+    )
+    ws_client.on(
+        "reconnecting",
+        lambda attempt: logger.info(
+            "企业微信正在重连,第 %s 次。", attempt, extra=log_extra("system", "system")
+        ),
+    )
+    ws_client.on(
+        "error",
+        lambda error: (
+            logger.error(
+                "企业微信连接错误: %s", error, extra=log_extra("system", "system")
+            ),
+            ops_event_logger.record(
+                source="review_bot",
+                severity="error",
+                subject="审核 Bot 连接错误",
+                detail=str(error),
+            ),
+        ),
+    )
 
     async def on_text(frame):
-        """文本消息一律拒绝(本入口只接文件)."""
-        stream_id = generate_req_id("review-reject")
-        await ws_client.reply_stream(frame, stream_id, REJECT_MESSAGE, True)
-        print(f"拒接文本消息:{get_sender_id(frame)}", flush=True)
+        """文本消息走通用审核(不生成 marked 文档)."""
+        sender = get_sender_id(frame)
+        english_name = registry.get_name(sender) or sender
+        extra = log_extra(sender, english_name)
+        stream_id = generate_req_id("review-text")
+
+        content = extract_text_content(frame)
+        if not content:
+            logger.warning("收到空文字消息 from %s", sender, extra=extra)
+            await ws_client.reply_stream(
+                frame, stream_id,
+                "没有收到文字内容,请直接发送需要审核的文字。", True,
+            )
+            return
+
+        was_registered = registry.is_registered(sender)
+        is_registration, reg_reply = _resolve_text_registration_reply(
+            registration_flow,
+            sender,
+            content,
+        )
+        if is_registration:
+            if not was_registered and registry.is_registered(sender):
+                registered_name = registry.get_name(sender) or content.strip()
+                logger.info(
+                    "用户 %s 注册英文名: %s",
+                    sender,
+                    registered_name,
+                    extra=log_extra(sender, registered_name),
+                )
+            elif not was_registered:
+                logger.info("新用户 %s 首次使用,等待有效英文名", sender, extra=extra)
+            await ws_client.reply_stream(frame, stream_id, reg_reply, True)
+            return
+
+        instruction_only_reply = _resolve_instruction_only_text_reply(
+            recent_submission_tracker,
+            sender,
+            content,
+        )
+        smalltalk_reply = _resolve_smalltalk_text_reply(content)
+        if smalltalk_reply is not None:
+            logger.info("忽略闲聊短句 from %s: %s", sender, content[:80], extra=extra)
+            await ws_client.reply_stream(
+                frame,
+                stream_id,
+                smalltalk_reply,
+                True,
+            )
+            return
+        if instruction_only_reply is not None:
+            logger.info("忽略独立审核指令 from %s: %s", sender, content[:80], extra=extra)
+            await ws_client.reply_stream(
+                frame,
+                stream_id,
+                instruction_only_reply,
+                True,
+            )
+            return
+
+        recent_submission_tracker.remember(sender, "text")
+
+        # ACK
+        await ws_client.reply_stream(
+            frame, stream_id,
+            "收到文字啦，正在加紧审核，请稍等……", True,
+        )
+
+        logger.info("收到文字消息 from %s: %s...", sender, content[:80], extra=extra)
+
+        try:
+            result, paragraphs = await _review_text_result(content, config)
+            if result.findings and result.findings[0].rule_id == "__empty_text__":
+                reply = "❌ 发送的内容为空,无法审核。"
+            else:
+                reply = format_review_result(
+                    result, "文字消息", doc_type=DocumentType.GENERAL
+                )
+                try:
+                    review_dir = save_review(
+                        reviews_dir=config.reviews_dir,
+                        file_bytes=None,
+                        original_filename="文字消息.txt",
+                        sender=sender,
+                        msgid=get_message_id(frame),
+                        result=result,
+                        parsed_paragraphs=paragraphs,
+                        text_content=content,
+                        doc_type=DocumentType.GENERAL,
+                    )
+                    logger.info("文字审核已存档: %s", review_dir, extra=extra)
+                except Exception as archive_exc:
+                    logger.exception("文字审核存档失败 from %s", sender, exc_info=archive_exc, extra=extra)
+        except Exception as exc:
+            logger.exception("文字审核失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_text_review_error(sender, exc)
+            await ws_client.reply_stream(
+                frame, generate_req_id("review-err"),
+                _build_processing_failure_user_reply("文字审核", exc), True,
+            )
+            return
+
+        done_id = generate_req_id("review-text-done")
+        sent = False
+        for retry in range(3):
+            try:
+                await asyncio.wait_for(
+                    ws_client.reply_stream(frame, done_id, reply, True),
+                    timeout=30.0,
+                )
+                logger.info("文字审核结果已发送 to %s", sender, extra=extra)
+                sent = True
+                break
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "文字审核结果发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra
+                )
+            except Exception as exc:
+                logger.warning(
+                    "文字审核结果发送失败 to %s: %s, 第 %d 次重试",
+                    sender,
+                    exc,
+                    retry + 1,
+                    extra=extra,
+                )
+            if retry < 2:
+                await asyncio.sleep(2 * (retry + 1))
+
+        if not sent:
+            logger.error("文字审核结果发送失败（已重试3次） to %s", sender, extra=extra)
+            await notifier.notify_send_failure(sender, "text", Exception("发送失败（已重试3次）"))
 
     async def on_file(frame):
         sender = get_sender_id(frame)
+        english_name = registry.get_name(sender) or sender
+        extra = log_extra(sender, english_name)
         stream_id = generate_req_id("review-file")
+
+        # 注册流程:未注册用户先要求发送英文名
+        if registration_flow.should_ask_name(sender):
+            logger.info("新用户 %s 首次使用,索要英文名", sender, extra=extra)
+            await ws_client.reply_stream(
+                frame, stream_id,
+                registration_flow.ask_name_message(), True,
+            )
+            return
+
+        recent_submission_tracker.remember(sender, "file")
 
         payload = extract_file_payload(frame)
         if payload is None:
+            recent_submission_tracker.forget(sender)
+            logger.warning("文件消息格式异常 from %s", sender, extra=extra)
             await ws_client.reply_stream(
                 frame, stream_id,
                 "文件消息格式异常(找不到下载地址)。", True,
@@ -347,73 +1021,378 @@ async def run_review_bot(config: ReviewConfig) -> None:
         try:
             result = await ws_client.download_file(payload.url, payload.aes_key)
         except Exception as exc:
+            recent_submission_tracker.forget(sender)
+            logger.exception("下载文件失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, payload.filename or "unknown", "下载", exc)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
-                f"下载文件失败:{exc}", True,
+                _build_processing_failure_user_reply("下载文件", exc), True,
             )
             return
 
         buffer = result.get("buffer", b"")
         filename = result.get("filename") or "unknown.docx"
-        print(f"📄 下载完成:filename={filename},size={len(buffer)} 字节", flush=True)
+        logger.info("下载完成: filename=%s, size=%d 字节 from %s", filename, len(buffer), sender, extra=extra)
 
         # 3. 检查后缀(用下载回来的真实文件名)
         if not is_docx_filename(filename):
+            recent_submission_tracker.forget(sender)
+            logger.info("拒接非 .docx 文件 from %s: %s", sender, filename, extra=extra)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-reject"),
                 f"❌ 本入口仅接收 .docx 文件,你发的是: {filename}", True,
             )
-            print(f"拒接非 .docx 文件:{filename}", flush=True)
             return
 
         # 4. 文件大小检查
         size_mb = len(buffer) / 1024 / 1024
         if size_mb > config.max_file_size_mb:
+            recent_submission_tracker.forget(sender)
+            logger.warning(
+                "文件过大 from %s: %.1fMB, 上限 %dMB", sender, size_mb, config.max_file_size_mb, extra=extra
+            )
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
                 f"文件过大({size_mb:.1f}MB,上限 {config.max_file_size_mb}MB),暂不支持。", True,
             )
             return
 
-        # 5. 解析
+        # 5. 解析（保留临时文件供后续格式检查使用）
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
                 tmp.write(buffer)
                 tmp_path = Path(tmp.name)
             parsed = _parse_docx(tmp_path)
-            tmp_path.unlink()
+            # 保留 tmp_path 供半月报正文格式检查使用，在审核完成后删除
         except Exception as exc:
+            recent_submission_tracker.forget(sender)
+            logger.exception("文件解析失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, filename, "解析", exc)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
-                f"文件解析失败:{exc}", True,
+                _build_processing_failure_user_reply("文件解析", exc), True,
             )
             return
 
-        # 6. 第一阶段审核（格式正则 + 基础内容 LLM）
+        # 6. 识别文档类型并分发到对应审核引擎
+        doc_type = detect_document_type(filename, parsed.paragraphs)
+        logger.info(
+            "文档类型识别: %s (%s) from %s",
+            document_type_label(doc_type),
+            filename,
+            sender,
+            extra=extra,
+        )
+
+        if doc_type == DocumentType.HALF_MONTHLY:
+            from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
+            halfmonthly_rules_text = load_rules("app/review/rules_halfmonthly.md")
+            try:
+                combined_result = await review_halfmonthly(
+                    parsed.paragraphs, halfmonthly_rules_text, filename,
+                    numbering=parsed.numbering,
+                    file_path=tmp_path,
+                )
+            except Exception as exc:
+                logger.exception("半月报审核失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "半月报审核", exc)
+                await ws_client.reply_stream(
+                    frame, generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("半月报审核", exc), True,
+                )
+                return
+
+            msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
+            review_dir = None
+            try:
+                review_dir = save_review(
+                    reviews_dir=config.reviews_dir,
+                    file_bytes=buffer,
+                    original_filename=filename,
+                    sender=sender,
+                    msgid=msgid,
+                    result=combined_result,
+                    parsed_paragraphs=parsed.paragraphs,
+                )
+                logger.info(
+                    "半月报审核完成: %s (%d 个问题), 存档: %s",
+                    filename,
+                    len(combined_result.findings),
+                    review_dir,
+                    extra=extra,
+                )
+            except Exception as exc:
+                logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "存档", exc)
+            finally:
+                # 清理临时文件（半月报格式检查用完后释放）
+                tmp_path.unlink(missing_ok=True)
+
+            reply = build_user_review_reply(combined_result, filename, doc_type=doc_type)
+            reply_file_path: Path | None = None
+            try:
+                reply_file_path = _prepare_review_reply_file(
+                    review_dir,
+                    filename,
+                    combined_result.findings,
+                )
+                if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
+                    logger.info("半月报标注文档已生成: %s", reply_file_path, extra=extra)
+            except Exception as exc:
+                logger.exception("生成半月报标注文档失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "半月报标注文档生成", exc)
+                reply_file_path = None
+
+            if reply is not None:
+                done_id = generate_req_id("review-halfmonthly")
+                text_sent = False
+                for retry in range(3):
+                    try:
+                        await asyncio.wait_for(
+                            ws_client.reply_stream(frame, done_id, reply, True),
+                            timeout=30.0,
+                        )
+                        logger.info("半月报审核结果已发送 to %s", sender, extra=extra)
+                        text_sent = True
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning("半月报结果发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                    except Exception as exc:
+                        logger.warning(
+                            "半月报结果发送失败 to %s: %s, 第 %d 次重试",
+                            sender,
+                            exc,
+                            retry + 1,
+                            extra=extra,
+                        )
+                    if retry < 2:
+                        await asyncio.sleep(2 * (retry + 1))
+                if not text_sent:
+                    logger.error("半月报结果发送失败（已重试3次） to %s", sender, extra=extra)
+                    await notifier.notify_send_failure(sender, "半月报结果", Exception("发送失败（已重试3次）"))
+
+            if reply_file_path is not None:
+                file_sent = False
+                last_send_error: BaseException | None = None
+                for retry in range(3):
+                    try:
+                        file_bytes = reply_file_path.read_bytes()
+                        upload_result = await asyncio.wait_for(
+                            ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
+                            timeout=60.0,
+                        )
+                        media_id = upload_result["media_id"]
+                        await asyncio.wait_for(
+                            ws_client.reply_media(frame, "file", media_id),
+                            timeout=30.0,
+                        )
+                        logger.info("半月报文档已发送: %s", reply_file_path.name, extra=extra)
+                        file_sent = True
+                        break
+                    except asyncio.TimeoutError as exc:
+                        last_send_error = exc
+                        logger.warning("半月报文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                    except Exception as exc:
+                        last_send_error = exc
+                        logger.warning(
+                            "半月报文档发送失败 to %s: %s, 第 %d 次重试",
+                            sender,
+                            exc,
+                            retry + 1,
+                            extra=extra,
+                        )
+                    if retry < 2:
+                        await asyncio.sleep(2 * (retry + 1))
+                if not file_sent:
+                    logger.error("半月报文档发送失败（已重试3次） to %s", sender, extra=extra)
+                    send_error = last_send_error or Exception("发送失败（已重试3次）")
+                    await notifier.notify_send_failure(sender, "半月报文档", send_error)
+                    await _reply_delivery_failure_to_user(
+                        ws_client,
+                        frame,
+                        generate_req_id("review-send-failed"),
+                        "半月报文档",
+                        send_error,
+                    )
+            return
+
+        if doc_type == DocumentType.GENERAL:
+            from app.review.general_reviewer import review_general  # noqa: E402
+            general_rules_text = load_rules("app/review/rules_general.md")
+            try:
+                combined_result = await review_general(
+                    parsed.paragraphs, general_rules_text, filename
+                )
+            except Exception as exc:
+                logger.exception("通用审核失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "通用审核", exc)
+                await ws_client.reply_stream(
+                    frame, generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("通用审核", exc), True,
+                )
+                return
+
+            msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
+            review_dir = None
+            try:
+                review_dir = save_review(
+                    reviews_dir=config.reviews_dir,
+                    file_bytes=buffer,
+                    original_filename=filename,
+                    sender=sender,
+                    msgid=msgid,
+                    result=combined_result,
+                    parsed_paragraphs=parsed.paragraphs,
+                    doc_type=DocumentType.GENERAL,
+                )
+                logger.info(
+                    "通用审核完成: %s (%d 个问题), 存档: %s",
+                    filename,
+                    len(combined_result.findings),
+                    review_dir,
+                    extra=extra,
+                )
+            except Exception as exc:
+                logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "存档", exc)
+
+            reply = build_user_review_reply(combined_result, filename, doc_type=doc_type)
+            reply_file_path: Path | None = None
+            try:
+                reply_file_path = _prepare_review_reply_file(
+                    review_dir,
+                    filename,
+                    combined_result.findings,
+                )
+                if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
+                    logger.info("标注文档已生成: %s", reply_file_path, extra=extra)
+            except Exception as exc:
+                logger.exception("生成标注文档失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "标注文档生成", exc)
+                reply_file_path = None
+
+            if reply is not None:
+                text_id = generate_req_id("review-general-text")
+                text_sent = False
+                for retry in range(3):
+                    try:
+                        await asyncio.wait_for(
+                            ws_client.reply_stream(frame, text_id, reply, True),
+                            timeout=30.0,
+                        )
+                        logger.info("通用审核文本提示已发送 to %s", sender, extra=extra)
+                        text_sent = True
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning("通用审核文本发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                    except Exception as exc:
+                        logger.warning(
+                            "通用审核文本发送失败 to %s: %s, 第 %d 次重试",
+                            sender,
+                            exc,
+                            retry + 1,
+                            extra=extra,
+                        )
+                    if retry < 2:
+                        await asyncio.sleep(2 * (retry + 1))
+                if not text_sent:
+                    logger.error("通用审核文本发送失败（已重试3次） to %s", sender, extra=extra)
+                    await notifier.notify_send_failure(sender, "通用审核结果", Exception("发送失败（已重试3次）"))
+
+            if reply_file_path is not None:
+                file_sent = False
+                last_send_error: BaseException | None = None
+                for retry in range(3):
+                    try:
+                        file_bytes = reply_file_path.read_bytes()
+                        upload_result = await asyncio.wait_for(
+                            ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
+                            timeout=60.0,
+                        )
+                        media_id = upload_result["media_id"]
+                        await asyncio.wait_for(
+                            ws_client.reply_media(frame, "file", media_id),
+                            timeout=30.0,
+                        )
+                        logger.info("标注文档已发送: %s", reply_file_path.name, extra=extra)
+                        file_sent = True
+                        break
+                    except asyncio.TimeoutError as exc:
+                        last_send_error = exc
+                        logger.warning("标注文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                    except Exception as exc:
+                        last_send_error = exc
+                        logger.warning(
+                            "标注文档发送失败 to %s: %s, 第 %d 次重试",
+                            sender,
+                            exc,
+                            retry + 1,
+                            extra=extra,
+                        )
+                    if retry < 2:
+                        await asyncio.sleep(2 * (retry + 1))
+                if not file_sent:
+                    logger.error("标注文档发送失败（已重试3次） to %s", sender, extra=extra)
+                    send_error = last_send_error or Exception("发送失败（已重试3次）")
+                    await notifier.notify_send_failure(sender, "标注文档", send_error)
+                    await _reply_delivery_failure_to_user(
+                        ws_client,
+                        frame,
+                        generate_req_id("review-send-failed"),
+                        "标注文档",
+                        send_error,
+                    )
+
+            return
+
+        # 7. 内参周报:第一阶段审核（格式正则 + 基础内容 LLM）
         from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
-        from app.review.output_formatter import format_phase1_result, format_phase2_result  # noqa: E402
 
-        phase1_result = await review_phase1(parsed.paragraphs, rules_text, filename)
-
-        # 立即发第一阶段结果
-        phase1_reply = format_phase1_result(phase1_result)
-        done_id_1 = generate_req_id("review-p1")
         try:
-            await asyncio.wait_for(
-                ws_client.reply_stream(frame, done_id_1, phase1_reply, True),
-                timeout=30.0,
+            phase1_result, phase2_task, neican_timings = await _start_neican_review(
+                phase1_runner=review_phase1,
+                phase2_runner=review_phase2,
+                paragraphs=parsed.paragraphs,
+                rules_text=rules_text,
+                filename=filename,
+                file_path=tmp_path,
             )
-            print(f"✅ 第一阶段结果已发送", flush=True)
-        except asyncio.TimeoutError:
-            print(f"⚠️ 第一阶段发送超时", flush=True)
+            logger.info(
+                "内参阶段耗时: phase1=%.1fms（phase2 已后台启动） from %s",
+                neican_timings["phase1_ms"],
+                sender,
+                extra=extra,
+            )
         except Exception as exc:
-            print(f"⚠️ 第一阶段发送失败:{exc}", flush=True)
+            logger.exception("内参第一阶段审核失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, filename, "内参第一阶段审核", exc)
+            await ws_client.reply_stream(
+                frame, generate_req_id("review-err"),
+                _build_processing_failure_user_reply("内参第一阶段审核", exc), True,
+            )
+            return
 
-        # 7. 第二阶段审核（深度内容 LLM）
-        phase2_result = await review_phase2(parsed.paragraphs, rules_text, filename)
+        # 8. 第二阶段审核（深度内容 LLM）
+        try:
+            phase2_result, phase2_ms = await phase2_task
+            neican_timings["phase2_ms"] = phase2_ms
+            neican_timings["wall_ms"] = (perf_counter() - neican_timings["wall_start"]) * 1000
+            logger.info(
+                "内参阶段耗时: phase1=%.1fms phase2=%.1fms total=%.1fms from %s",
+                neican_timings["phase1_ms"],
+                neican_timings["phase2_ms"],
+                neican_timings["wall_ms"],
+                sender,
+                extra=extra,
+            )
+        except Exception as exc:
+            logger.exception("内参第二阶段审核失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, filename, "内参第二阶段审核", exc)
+            tmp_path.unlink(missing_ok=True)
+            return
 
-        # 8. 合并两个阶段的 findings，存档用完整结果
+        # 9. 合并两个阶段的 findings，存档用完整结果
         from app.review.reviewer import ReviewResult
         all_findings = list(phase1_result.findings)
         all_findings.extend(phase2_result.findings)
@@ -436,40 +1415,117 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 msgid=msgid,
                 result=combined_result,
                 parsed_paragraphs=parsed.paragraphs,
+                doc_type=DocumentType.NEI_CAN,
             )
-            print(f"✅ 审核完成:{filename} ({len(combined_result.findings)} 个问题),存档:{review_dir}", flush=True)
+            logger.info(
+                "内参审核完成: %s (%d 个问题), 存档: %s",
+                filename,
+                len(combined_result.findings),
+                review_dir,
+                extra=extra,
+            )
         except Exception as exc:
-            print(f"⚠️ 存档失败:{exc}", flush=True)
+            logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, filename, "存档", exc)
 
-        # 9. 追加发送第二阶段结果（带重试）
-        phase2_reply = format_phase2_result(phase2_result)
-        done_id_2 = generate_req_id("review-p2")
-        phase2_sent = False
-        for retry in range(3):
-            try:
-                await asyncio.wait_for(
-                    ws_client.reply_stream(frame, done_id_2, phase2_reply, True),
-                    timeout=30.0,
+        reply_file_path: Path | None = None
+        try:
+            reply_file_path = _prepare_review_reply_file(
+                review_dir,
+                filename,
+                combined_result.findings,
+            )
+            if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
+                logger.info("内参标注文档已生成: %s", reply_file_path, extra=extra)
+        except Exception as exc:
+            logger.exception("生成内参标注文档失败 from %s", sender, exc_info=exc, extra=extra)
+            await notifier.notify_file_review_error(sender, filename, "内参标注文档生成", exc)
+            reply_file_path = None
+
+        reply = build_user_review_reply(combined_result, filename, doc_type=DocumentType.NEI_CAN)
+        if reply is not None:
+            done_id = generate_req_id("review-neican-pass")
+            text_sent = False
+            for retry in range(3):
+                try:
+                    await asyncio.wait_for(
+                        ws_client.reply_stream(frame, done_id, reply, True),
+                        timeout=30.0,
+                    )
+                    logger.info("内参审核通过提示已发送 to %s", sender, extra=extra)
+                    text_sent = True
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning("内参通过提示发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                except Exception as exc:
+                    logger.warning(
+                        "内参通过提示发送失败 to %s: %s, 第 %d 次重试",
+                        sender,
+                        exc,
+                        retry + 1,
+                        extra=extra,
+                    )
+                if retry < 2:
+                    await asyncio.sleep(2 * (retry + 1))
+            if not text_sent:
+                logger.error("内参通过提示发送失败（已重试3次） to %s", sender, extra=extra)
+                await notifier.notify_send_failure(sender, "内参审核通过提示", Exception("发送失败（已重试3次）"))
+
+        if reply_file_path is not None:
+            file_sent = False
+            last_send_error: BaseException | None = None
+            for retry in range(3):
+                try:
+                    file_bytes = reply_file_path.read_bytes()
+                    upload_result = await asyncio.wait_for(
+                        ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
+                        timeout=60.0,
+                    )
+                    media_id = upload_result["media_id"]
+                    await asyncio.wait_for(
+                        ws_client.reply_media(frame, "file", media_id),
+                        timeout=30.0,
+                    )
+                    logger.info("内参审核文档已发送: %s", reply_file_path.name, extra=extra)
+                    file_sent = True
+                    break
+                except asyncio.TimeoutError as exc:
+                    last_send_error = exc
+                    logger.warning("内参审核文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                except Exception as exc:
+                    last_send_error = exc
+                    logger.warning(
+                        "内参审核文档发送失败 to %s: %s, 第 %d 次重试",
+                        sender,
+                        exc,
+                        retry + 1,
+                        extra=extra,
+                    )
+                if retry < 2:
+                    await asyncio.sleep(2 * (retry + 1))
+            if not file_sent:
+                logger.error("内参审核文档发送失败（已重试3次） to %s", sender, extra=extra)
+                send_error = last_send_error or Exception("发送失败（已重试3次）")
+                await notifier.notify_send_failure(sender, "内参审核文档", send_error)
+                await _reply_delivery_failure_to_user(
+                    ws_client,
+                    frame,
+                    generate_req_id("review-send-failed"),
+                    "内参审核文档",
+                    send_error,
                 )
-                print(f"✅ 第二阶段结果已发送", flush=True)
-                phase2_sent = True
-                break
-            except asyncio.TimeoutError:
-                print(f"⚠️ 第二阶段发送超时，第 {retry+1} 次重试...", flush=True)
-            except Exception as exc:
-                print(f"⚠️ 第二阶段发送失败:{exc}，第 {retry+1} 次重试...", flush=True)
-            if retry < 2:
-                await asyncio.sleep(2 * (retry + 1))  # 2s, 4s backoff
-        if not phase2_sent:
-            print(f"⚠️ 第二阶段结果发送失败（已重试3次），存档已保存:{review_dir}/report.md", flush=True)
+
+        # 清理临时文件（内参正文格式检查用完后释放）
+        tmp_path.unlink(missing_ok=True)
 
     async def on_enter(frame):
+        sender = get_sender_id(frame)
         await ws_client.reply_welcome(
             frame,
             {
                 "msgtype": "text",
                 "text": {
-                    "content": "您好,我是 M-Agent 智能审核 Bot。请直接发送 .docx 文档,我会按规则标出低级错误。"
+                    "content": _build_enter_welcome_text(registration_flow, sender)
                 },
             },
         )
@@ -483,30 +1539,40 @@ async def run_review_bot(config: ReviewConfig) -> None:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         await ws_client.disconnect()
+    finally:
+        heartbeat_task.cancel()
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="M-Agent 智能审核 Bot")
     parser.add_argument("--check-config", action="store_true", help="只检查本地配置")
-    parser.add_argument("--log-file", type=str, default=None, help="日志文件路径(便于后台调试)")
+    parser.add_argument(
+        "--console",
+        action="store_true",
+        help="同时输出日志到控制台(默认只写文件)",
+    )
     args = parser.parse_args(argv)
 
-    # 如果指定了 --log-file,所有 stdout 重定向到该文件
-    if args.log_file:
-        log_file = open(args.log_file, "a", buffering=1, encoding="utf-8")  # 行缓冲
-        import sys as _sys
-        _sys.stdout = log_file
-        _sys.stderr = log_file
-
     config = load_config()
+
+    # 配置结构化日志
+    setup_logging(config.logs_dir, console_output=args.console)
+    redirect_stdout_to_logging(logger)
+
     if args.check_config:
-        print("配置检查通过。")
-        print(f"Bot ID: {config.wecom_bot_id[:8]}...")
-        print(f"规则库: {config.rules_path}")
-        print(f"存档目录: {config.reviews_dir}")
+        logger.info("配置检查通过。", extra=log_extra("system", "system"))
+        logger.info("Bot ID: %s...", config.wecom_bot_id[:8], extra=log_extra("system", "system"))
+        logger.info("规则库: %s", config.rules_path, extra=log_extra("system", "system"))
+        logger.info("存档目录: %s", config.reviews_dir, extra=log_extra("system", "system"))
+        logger.info("日志目录: %s", config.logs_dir, extra=log_extra("system", "system"))
+        if config.admin_user_id:
+            logger.info(
+                "管理员: %s (%s)", config.admin_name, config.admin_user_id,
+                extra=log_extra("system", "system"),
+            )
         return
 
-    print("正在连接企业微信审核 Bot。按 Ctrl+C 可停止。", flush=True)
+    logger.info("正在连接企业微信审核 Bot。按 Ctrl+C 可停止。", extra=log_extra("system", "system"))
     asyncio.run(run_review_bot(config))
 
 
