@@ -2,20 +2,27 @@
 
 特性:
   - 使用 Python 标准 logging 模块
-  - 公共日志: M-Agent-Files/runtime/logs/review-bot-YYYY-MM.log
-  - 用户日志: M-Agent-Files/runtime/logs/users/<userid>/YYYY-MM.log
-  - 按月自动切分
+  - 公共日志: M-Agent-Files/runtime/logs/review-bot-YYYY-MM-DD.log
+  - 用户日志: M-Agent-Files/runtime/logs/users/<userid>/YYYY-MM-DD.log
+  - 按天切分，单文件超限后继续生成 part-002、part-003
+  - system 日志只写公共日志，不在 users/system 下重复保存
   - 日志格式包含时间、级别、用户名(userid/english_name)
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import MutableMapping
+from typing import Callable
+
+
+DEFAULT_LOG_MAX_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_OPEN_USER_HANDLERS = 64
 
 
 @dataclass(frozen=True)
@@ -26,78 +33,138 @@ class LogConfig:
     console_output: bool = False
 
 
-class _MonthlyFileHandler(logging.FileHandler):
-    """按月切换文件名的 Handler.
+class _DailySizeFileHandler(logging.FileHandler):
+    """按天切换，并在单文件超限后继续分片的 Handler。"""
 
-    文件名模板支持 {year} 和 {month:02d} 占位符.
-    """
-
-    def __init__(self, logs_dir: Path, filename_template: str) -> None:
+    def __init__(
+        self,
+        logs_dir: Path,
+        filename_template: str,
+        *,
+        max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+        now_provider: Callable[[], datetime] | None = None,
+    ) -> None:
         self.logs_dir = logs_dir
         self.filename_template = filename_template
-        self._current_path = self._compute_path()
+        self.max_bytes = max(1, int(max_bytes))
+        self._now_provider = now_provider or datetime.now
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        now = self._now_provider()
+        self._current_day = now.date()
+        self._current_part, self._current_path = self._select_current_path(now)
         super().__init__(self._current_path, encoding="utf-8")
 
-    def _compute_path(self) -> Path:
-        now = datetime.now()
-        filename = self.filename_template.format(year=now.year, month=now.month)
+    def _compute_base_path(self, now: datetime) -> Path:
+        filename = self.filename_template.format(
+            year=now.year,
+            month=now.month,
+            day=now.day,
+        )
         path = self.logs_dir / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _check_rotation(self) -> None:
-        expected = self._compute_path()
-        if self._current_path != expected:
-            self._current_path = expected
-            self.close()
-            self.baseFilename = str(expected)
-            self.stream = self._open()
+    @staticmethod
+    def _part_path(base_path: Path, part: int) -> Path:
+        if part <= 1:
+            return base_path
+        return base_path.with_name(f"{base_path.stem}.part-{part:03d}{base_path.suffix}")
+
+    def _select_current_path(self, now: datetime) -> tuple[int, Path]:
+        base_path = self._compute_base_path(now)
+        candidates: list[tuple[int, Path]] = []
+        if base_path.exists():
+            candidates.append((1, base_path))
+        part_pattern = re.compile(
+            rf"^{re.escape(base_path.stem)}\.part-(\d{{3}}){re.escape(base_path.suffix)}$"
+        )
+        for path in base_path.parent.glob(f"{base_path.stem}.part-*{base_path.suffix}"):
+            match = part_pattern.match(path.name)
+            if match:
+                candidates.append((int(match.group(1)), path))
+        if not candidates:
+            return 1, base_path
+        part, path = max(candidates, key=lambda item: item[0])
+        if path.stat().st_size >= self.max_bytes:
+            part += 1
+            path = self._part_path(base_path, part)
+        return part, path
+
+    def _switch_to(self, path: Path) -> None:
+        if self.stream is not None:
+            self.stream.flush()
+            self.stream.close()
+        self._current_path = path
+        self.baseFilename = str(path.resolve(strict=False))
+        self.stream = self._open()
+
+    def _check_rotation(self, record: logging.LogRecord) -> None:
+        now = self._now_provider()
+        if self._current_day != now.date():
+            self._current_day = now.date()
+            self._current_part, path = self._select_current_path(now)
+            self._switch_to(path)
+
+        message_bytes = len((self.format(record) + self.terminator).encode("utf-8"))
+        current_size = self._current_path.stat().st_size if self._current_path.exists() else 0
+        if current_size > 0 and current_size + message_bytes > self.max_bytes:
+            self._current_part += 1
+            base_path = self._compute_base_path(now)
+            self._switch_to(self._part_path(base_path, self._current_part))
 
     def emit(self, record: logging.LogRecord) -> None:
-        self._check_rotation()
+        self._check_rotation(record)
         super().emit(record)
 
 
-class _UserMonthlyFileHandler(logging.Handler):
-    """按用户 + 按月分文件的 Handler.
+class _UserDailySizeFileHandler(logging.Handler):
+    """按用户、按天和大小分片，并限制同时打开的文件数量。"""
 
-    每个 userid 每个月一个日志文件.
-    """
-
-    def __init__(self, logs_dir: Path) -> None:
+    def __init__(
+        self,
+        logs_dir: Path,
+        *,
+        max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+        max_open_handlers: int = DEFAULT_MAX_OPEN_USER_HANDLERS,
+        now_provider: Callable[[], datetime] | None = None,
+    ) -> None:
         super().__init__()
         self.logs_dir = logs_dir
-        self._handlers: dict[tuple[str, int, int], logging.FileHandler] = {}
+        self.max_bytes = max(1, int(max_bytes))
+        self.max_open_handlers = max(1, int(max_open_handlers))
+        self._now_provider = now_provider or datetime.now
+        self._handlers: OrderedDict[str, _DailySizeFileHandler] = OrderedDict()
 
-    def _get_handler(self, record: logging.LogRecord) -> logging.FileHandler:
+    @property
+    def open_handler_count(self) -> int:
+        return len(self._handlers)
+
+    def _get_handler(self, record: logging.LogRecord) -> _DailySizeFileHandler:
         userid = str(getattr(record, "userid", "unknown") or "unknown")
-        now = datetime.now()
-        key = (userid, now.year, now.month)
-
-        handler = self._handlers.get(key)
+        safe_userid = _safe_user_dir_name(userid)
+        handler = self._handlers.get(safe_userid)
         if handler is not None:
-            # 检查是否需要切月
-            current_path = self._compute_path(userid, now)
-            if Path(handler.baseFilename) != current_path:
-                handler.close()
-                handler = None
-                self._handlers.pop(key, None)
+            self._handlers.move_to_end(safe_userid)
+            return handler
 
-        if handler is None:
-            current_path = self._compute_path(userid, now)
-            handler = logging.FileHandler(current_path, encoding="utf-8")
-            handler.setFormatter(self.formatter)
-            self._handlers[key] = handler
+        user_dir = self.logs_dir / "users" / safe_userid
+        handler = _DailySizeFileHandler(
+            user_dir,
+            "{year}-{month:02d}-{day:02d}.log",
+            max_bytes=self.max_bytes,
+            now_provider=self._now_provider,
+        )
+        handler.setFormatter(self.formatter)
+        self._handlers[safe_userid] = handler
+        while len(self._handlers) > self.max_open_handlers:
+            _, oldest = self._handlers.popitem(last=False)
+            oldest.close()
 
         return handler
 
-    def _compute_path(self, userid: str, now: datetime) -> Path:
-        user_dir = self.logs_dir / "users" / userid
-        user_dir.mkdir(parents=True, exist_ok=True)
-        return user_dir / f"{now.year}-{now.month:02d}.log"
-
     def emit(self, record: logging.LogRecord) -> None:
+        if str(getattr(record, "userid", "system") or "system") == "system":
+            return
         handler = self._get_handler(record)
         handler.emit(record)
 
@@ -106,6 +173,13 @@ class _UserMonthlyFileHandler(logging.Handler):
             handler.close()
         self._handlers.clear()
         super().close()
+
+
+def _safe_user_dir_name(userid: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(userid or "unknown")).strip(".")
+    if not cleaned or cleaned in {".", ".."}:
+        return "unknown"
+    return cleaned[:128]
 
 
 class _UserContextFilter(logging.Filter):
@@ -130,7 +204,12 @@ def _make_formatter() -> logging.Formatter:
     )
 
 
-def setup_logging(logs_dir: Path, *, console_output: bool = False) -> logging.Logger:
+def setup_logging(
+    logs_dir: Path,
+    *,
+    console_output: bool = False,
+    max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+) -> logging.Logger:
     """配置并返回审核 Bot 的根 logger.
 
     Args:
@@ -144,8 +223,9 @@ def setup_logging(logs_dir: Path, *, console_output: bool = False) -> logging.Lo
     logger.setLevel(logging.DEBUG)
 
     # 避免重复配置
-    if logger.handlers:
-        logger.handlers.clear()
+    for handler in logger.handlers:
+        handler.close()
+    logger.handlers.clear()
 
     # 补齐 user 字段
     logger.addFilter(_UserContextFilter())
@@ -153,12 +233,16 @@ def setup_logging(logs_dir: Path, *, console_output: bool = False) -> logging.Lo
     formatter = _make_formatter()
 
     # 1. 公共日志: 所有日志都进这里
-    main_handler = _MonthlyFileHandler(logs_dir, "review-bot-{year}-{month:02d}.log")
+    main_handler = _DailySizeFileHandler(
+        logs_dir,
+        "review-bot-{year}-{month:02d}-{day:02d}.log",
+        max_bytes=max_bytes,
+    )
     main_handler.setFormatter(formatter)
     logger.addHandler(main_handler)
 
     # 2. 用户日志: 按用户分文件
-    user_handler = _UserMonthlyFileHandler(logs_dir)
+    user_handler = _UserDailySizeFileHandler(logs_dir, max_bytes=max_bytes)
     user_handler.setFormatter(formatter)
     logger.addHandler(user_handler)
 

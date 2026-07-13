@@ -71,6 +71,7 @@ class ReviewConfig:
     ops_events_dir: Path = _DEFAULT_DATA_PATHS.ops_events
     ops_heartbeat_dir: Path = _DEFAULT_DATA_PATHS.heartbeats
     user_registry_path: Path = _DEFAULT_DATA_PATHS.user_registry
+    log_max_bytes: int = 20 * 1024 * 1024
     max_file_size_mb: int = 10
     reply_ack_timeout_seconds: float = 30.0
 
@@ -156,6 +157,7 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
         ops_events_dir=ops_events_dir,
         ops_heartbeat_dir=ops_heartbeat_dir,
         user_registry_path=user_registry_path,
+        log_max_bytes=max(1, _env_int(values, "M_AGENT_LOG_MAX_MB", 20)) * 1024 * 1024,
         admin_user_id=values.get("REVIEW_ADMIN_USER_ID", "").strip(),
         admin_name=values.get("REVIEW_ADMIN_NAME", "").strip() or "管理员",
         notification_cooldown=_env_int(values, "REVIEW_NOTIFICATION_COOLDOWN", 300),
@@ -1568,7 +1570,11 @@ def main(argv: list[str] | None = None) -> None:
     config = load_config()
 
     # 配置结构化日志
-    setup_logging(config.logs_dir, console_output=args.console)
+    setup_logging(
+        config.logs_dir,
+        console_output=args.console,
+        max_bytes=config.log_max_bytes,
+    )
     redirect_stdout_to_logging(logger)
 
     if args.check_config:
@@ -1577,6 +1583,11 @@ def main(argv: list[str] | None = None) -> None:
         logger.info("规则库: %s", config.rules_path, extra=log_extra("system", "system"))
         logger.info("存档目录: %s", config.reviews_dir, extra=log_extra("system", "system"))
         logger.info("日志目录: %s", config.logs_dir, extra=log_extra("system", "system"))
+        logger.info(
+            "单个日志文件上限: %d MB",
+            config.log_max_bytes // 1024 // 1024,
+            extra=log_extra("system", "system"),
+        )
         if config.admin_user_id:
             logger.info(
                 "管理员: %s (%s)", config.admin_name, config.admin_user_id,

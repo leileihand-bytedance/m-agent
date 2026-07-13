@@ -298,6 +298,7 @@ def test_load_config_from_env_file():
                 "M_AGENT_REVIEW_RULES=app/data/rules.md",
                 "M_AGENT_REVIEWS_DIR=data/reviews",
                 f"M_AGENT_DATA_DIR={Path(tmpdir) / 'M-Agent-Files'}",
+                "M_AGENT_LOG_MAX_MB=8",
                 "REVIEW_REPLY_ACK_TIMEOUT_SECONDS=45",
             ]),
             encoding="utf-8",
@@ -317,6 +318,7 @@ def test_load_config_from_env_file():
         ).resolve()
         assert config.max_file_size_mb == 10  # 默认值
         assert config.reply_ack_timeout_seconds == 45.0
+        assert config.log_max_bytes == 8 * 1024 * 1024
         assert config.direct_admin_notifications is False
         print("✅ test_load_config_from_env_file: 配置加载正确")
 

@@ -440,20 +440,25 @@ pytest tests/test_error_marker.py tests/test_review_general.py tests/test_review
 
 ## 日志系统
 
-Bot 使用 Python `logging` 模块,支持按月切分和按用户分文件.
+Bot 使用 Python `logging` 模块，公共日志和用户日志都按天记录，并在单个文件达到上限后继续分片。
 
 ```text
 ../M-Agent-Files/runtime/logs/
-├── review-bot-2026-07.log          # 公共日志(所有请求 + SDK 日志)
+├── review-bot-2026-07-13.log          # 当天公共日志
+├── review-bot-2026-07-13.part-002.log # 当天超过阈值后的分片
 └── users/
     └── user-001/
-        └── 2026-07.log             # 该用户的操作日志
+        └── 2026-07-13.log             # 该用户当天操作日志
 ```
 
 配置项:
 
 - `M_AGENT_LOGS_DIR`: 特殊部署时覆盖日志目录；默认由 `M_AGENT_DATA_DIR` 派生
+- `M_AGENT_LOG_MAX_MB`: 单个日志文件上限，默认 `20MB`
 - 每条日志都带 `user=<english_name>|userid=<userid>` 字段
+- `system`、SDK 心跳等系统日志只进入公共日志，不再重复写入 `users/system/`
+- 用户日志处理器最多同时保持 `64` 个文件句柄，超过后关闭最久未使用的句柄
+- 旧的月度日志保留原文件，不重命名、不删除；新规则从 Bot 重启后生效
 - 用户名映射实现已迁移到 `app/platform/user_registry.py`，审核模块原导入路径保留兼容。
 
 ## 异常通知和运维告警
@@ -497,7 +502,7 @@ REVIEW_REPLY_ACK_TIMEOUT_SECONDS=30
 说明：
 
 - 审核 Bot 启动时会覆盖 SDK 内部回执等待时间，默认 `30` 秒。
-- 如果后续仍出现大文件上传回执超时，可先查看 `../M-Agent-Files/runtime/logs/review-bot-YYYY-MM.log` 中实际回执延迟，再谨慎调大该值。
+- 如果后续仍出现大文件上传回执超时，可先查看 `../M-Agent-Files/runtime/logs/review-bot-YYYY-MM-DD.log` 及其分片中的实际回执延迟，再谨慎调大该值。
 - 该配置只影响审核 Bot 的企业微信回复/上传等待，不改变审核模型、规则或写作 Bot。
 
 ## 用户注册（已启用）

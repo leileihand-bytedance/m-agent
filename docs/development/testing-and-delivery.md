@@ -42,6 +42,14 @@ python -m pytest tests/test_platform_data_paths.py tests/test_runtime_data_migra
 
 真实迁移必须先运行 `python scripts/migrate_runtime_data.py` 预演，再加 `--apply` 执行；迁移工具只复制和校验，不自动删除旧数据。
 
+修改审核日志切分、文件命名或日志配置时，至少运行：
+
+```bash
+python -m pytest tests/test_bot_logging.py tests/test_review_bot.py -v
+```
+
+重点验证按天切换、单文件大小分片、系统日志去重和用户文件句柄上限。
+
 ### 1. 平台单元测试
 
 验证底座区：
