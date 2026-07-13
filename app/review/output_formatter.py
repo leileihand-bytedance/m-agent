@@ -194,6 +194,11 @@ def _rule_label(rule_id: str) -> str:
         "official-format-heading2": "公文二级标题格式",
         "official-format-heading3": "公文三级标题格式",
         "official-format-body": "公文正文格式",
+        "multi-file-reference-missing": "联合审核附件缺失",
+        "multi-file-attachment-unreferenced": "联合审核附件未引用",
+        "multi-file-attachment-duplicate": "联合审核附件重复",
+        "multi-file-attachment-name-mismatch": "联合审核附件名称不一致",
+        "multi-file-logic-inconsistency": "跨文件逻辑不一致",
     }
     return labels.get(rule_id, rule_id)
 

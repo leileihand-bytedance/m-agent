@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -38,10 +39,16 @@ from app.review.main import (  # noqa: E402
     _build_processing_failure_user_reply,
     _summarize_delivery_error,
     RecentSubmissionTracker,
-    PendingReviewModeTracker,
+    archive_multi_file_review,
+    build_multi_file_review_reply,
 )
 from app.review.document_type import DocumentType  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
+from app.review.multi_file_reviewer import (  # noqa: E402
+    MultiFileReviewBundle,
+    MultiFileReviewedDocument,
+    MultiFileSource,
+)
 from app.platform.user_registry import RegistrationFlow, UserRegistry  # noqa: E402
 
 
@@ -75,26 +82,115 @@ def test_official_format_review_request_requires_explicit_format_wording():
     assert _is_official_format_review_request_text("只审核内容，格式不用看") is False
 
 
-def test_pending_review_mode_applies_only_to_next_valid_file():
-    tracker = PendingReviewModeTracker(ttl_seconds=60)
-
-    tracker.request_official_format("user-1", now=10)
-
-    assert tracker.has_official_format("user-1", now=20) is True
-    assert tracker.consume_official_format("user-1", now=20) is True
-    assert tracker.consume_official_format("user-1", now=21) is False
-
-
-def test_pending_review_mode_expires():
-    tracker = PendingReviewModeTracker(ttl_seconds=60)
-    tracker.request_official_format("user-1", now=10)
-
-    assert tracker.has_official_format("user-1", now=71) is False
-
-
 # ============================================================
 # 测试 2: 存档到 data/reviews/
 # ============================================================
+
+
+def test_archive_multi_file_review_creates_one_task_and_marked_outputs(tmp_path: Path):
+    from docx import Document
+
+    main_path = tmp_path / "正文.docx"
+    attachment_path = tmp_path / "附件1.docx"
+    for path, text in ((main_path, "详见附件1。"), (attachment_path, "附件1：名单")):
+        document = Document()
+        document.add_paragraph(text)
+        document.save(path)
+    finding = Finding(
+        rule_id="multi-file-reference-missing",
+        paragraph_index=0,
+        line_number=1,
+        original_text="详见附件1。",
+        description="示例跨文件问题",
+        target_text="附件1",
+    )
+    bundle = MultiFileReviewBundle(
+        documents=(
+            MultiFileReviewedDocument(
+                source=MultiFileSource(0, "正文.docx", main_path, ("详见附件1。",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([finding], 10, 9, "正文.docx"),
+            ),
+            MultiFileReviewedDocument(
+                source=MultiFileSource(1, "附件1.docx", attachment_path, ("附件1：名单",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([], 10, 10, "附件1.docx"),
+            ),
+        ),
+        cross_file_finding_count=1,
+        primary_file_index=0,
+    )
+
+    task_dir, marked_paths = archive_multi_file_review(
+        reviews_dir=tmp_path / "reviews",
+        sender="user-1",
+        msgid="message-1",
+        bundle=bundle,
+    )
+
+    assert len(list((task_dir / "input").glob("*.docx"))) == 2
+    assert len(marked_paths) == 1
+    assert marked_paths[0].exists()
+    assert "正文.docx" in (task_dir / "output" / "report.md").read_text(encoding="utf-8")
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["document_type"] == "multi_file"
+    assert meta["cross_file_finding_count"] == 1
+    assert meta["primary_file_index"] == 0
+    assert meta["files"][0]["is_primary"] is True
+    assert meta["files"][1]["is_primary"] is False
+    report = (task_dir / "output" / "report.md").read_text(encoding="utf-8")
+    assert "主文件：正文.docx" in report
+
+
+def test_build_multi_file_review_reply_only_summarizes_counts():
+    bundle = MultiFileReviewBundle(
+        documents=(
+            MultiFileReviewedDocument(
+                source=MultiFileSource(0, "正文.docx", Path("正文.docx"), ("正文",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([], 10, 10, "正文.docx"),
+            ),
+            MultiFileReviewedDocument(
+                source=MultiFileSource(1, "附件1.docx", Path("附件1.docx"), ("附件",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([], 10, 10, "附件1.docx"),
+            ),
+        ),
+        cross_file_finding_count=0,
+        primary_file_index=0,
+    )
+
+    reply = build_multi_file_review_reply(bundle, marked_file_count=0)
+
+    assert "2 份文件" in reply
+    assert "主文件：正文.docx" in reply
+    assert "正文.docx：0 处" in reply
+    assert "跨文件问题：0 处" in reply
+    assert "错误1" not in reply
+
+
+def test_build_multi_file_review_reply_does_not_claim_files_were_already_sent():
+    bundle = MultiFileReviewBundle(
+        documents=(
+            MultiFileReviewedDocument(
+                source=MultiFileSource(0, "正文.docx", Path("正文.docx"), ("正文",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([], 10, 10, "正文.docx"),
+            ),
+            MultiFileReviewedDocument(
+                source=MultiFileSource(1, "附件1.docx", Path("附件1.docx"), ("附件",)),
+                doc_type=DocumentType.GENERAL,
+                result=ReviewResult([], 10, 10, "附件1.docx"),
+            ),
+        ),
+        cross_file_finding_count=1,
+        primary_file_index=0,
+    )
+
+    reply = build_multi_file_review_reply(bundle, marked_file_count=2)
+
+    assert "共生成 2 份带批注的文档，将继续发送" in reply
+    assert "已返回" not in reply
 
 def _make_fake_docx_bytes() -> bytes:
     """构造一个最小的 .docx 文件,返回字节."""
@@ -374,6 +470,8 @@ def test_review_load_config_uses_single_external_data_root(tmp_path: Path):
     assert config.ops_events_dir == data_root / "runtime" / "ops" / "events"
     assert config.ops_heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"
     assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
+    assert config.intake_dir == data_root / "runtime" / "intake" / "review"
+    assert config.intake_ttl_seconds == 1800
 
 
 def test_configure_ws_client_timeouts_overrides_sdk_reply_ack_timeout():

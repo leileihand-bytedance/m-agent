@@ -126,6 +126,26 @@ def test_mark_errors_highlights_exact_target_for_typo(tmp_path: Path):
     assert marked == ["布署"]
 
 
+def test_mark_errors_highlights_exact_target_for_multi_file_issue(tmp_path: Path):
+    input_path = tmp_path / "input.docx"
+    output_path = tmp_path / "output.docx"
+    _make_minimal_docx(input_path, ["请填写附件1《议案意见反馈表》。"])
+    findings = [
+        Finding(
+            rule_id="multi-file-attachment-name-mismatch",
+            paragraph_index=0,
+            line_number=1,
+            original_text="请填写附件1《议案意见反馈表》。",
+            description="实际上传的附件1标题不一致",
+            target_text="附件1",
+        )
+    ]
+
+    mark_errors_in_docx(input_path, output_path, findings)
+
+    assert _marked_texts(output_path) == ["附件1"]
+
+
 def test_mark_errors_highlights_exact_target_for_punctuation(tmp_path: Path):
     """标点错误只标红错误标点."""
     input_path = tmp_path / "input.docx"
