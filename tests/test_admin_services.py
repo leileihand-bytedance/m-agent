@@ -388,3 +388,42 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["attachment_delivery"].status == "planned"
     assert overview.capability_status_counts["building"] >= 1
     assert overview.capability_status_counts["stable"] >= 1
+
+
+def test_project_overview_architecture_relations_only_reference_known_capabilities(tmp_path):
+    project_root = tmp_path / "project"
+    skills_dir = project_root / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+
+    overview = build_project_overview(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=project_root / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=project_root,
+            todo_path=project_root / "docs" / "development" / "TODO.md",
+        )
+    )
+
+    capability_ids = {
+        capability.id
+        for layer in overview.architecture_layers
+        for capability in layer.capabilities
+    }
+    assert len(overview.architecture_relations) >= 20
+    assert all(
+        relation.source_id in capability_ids and relation.target_id in capability_ids
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "writing_bot"
+        and relation.target_id == "task_intake"
+        and relation.label == "组装请求"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "policy_knowledge"
+        and relation.target_id == "direct_report"
+        and relation.label == "提供背景"
+        for relation in overview.architecture_relations
+    )

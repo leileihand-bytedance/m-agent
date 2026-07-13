@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.admin.server import AdminPaths, render_dashboard  # noqa: E402
+from app.admin.server import AdminPaths, VIS_NETWORK_ASSET, render_dashboard  # noqa: E402
 
 
 def _write_skill(root: Path, skill_id: str, *, enabled: bool) -> None:
@@ -165,3 +165,36 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert "建设中" in html
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_render_dashboard_includes_local_interactive_architecture_graph(tmp_path):
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+        )
+    )
+
+    assert 'id="architecture-network"' in html
+    assert 'id="architecture-graph-data"' in html
+    assert 'data-architecture-view="graph"' in html
+    assert 'data-architecture-view="list"' in html
+    assert "关系图" in html
+    assert "状态清单" in html
+    assert '<script src="/static/vendor/vis-network.min.js"></script>' in html
+    assert "unpkg.com" not in html
+    assert '"source_id":"writing_bot"' in html
+
+
+def test_interactive_graph_dependency_is_vendored_with_license_files():
+    vendor_dir = VIS_NETWORK_ASSET.parent
+
+    assert VIS_NETWORK_ASSET.is_file()
+    assert "@version 10.1.0" in VIS_NETWORK_ASSET.read_text(encoding="utf-8")[:500]
+    assert (vendor_dir / "LICENSE-vis-network-MIT.txt").is_file()
+    assert (vendor_dir / "LICENSE-vis-network-APACHE-2.0.txt").is_file()

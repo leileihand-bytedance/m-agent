@@ -57,7 +57,7 @@ python -m pytest tests/test_admin_services.py tests/test_admin_server.py -v
 python scripts/project_docs.py check
 ```
 
-重点验证五层架构完整性、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。
+重点验证五层架构完整性、关系端点全部属于已登记能力、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
 
 ### 1. 平台单元测试
 

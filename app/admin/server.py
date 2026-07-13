@@ -4,6 +4,7 @@ import argparse
 from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
 import re
 from typing import Callable
@@ -24,6 +25,8 @@ from app.platform.data_paths import DataPaths, configured_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ADMIN_STATIC_ROOT = Path(__file__).resolve().parent / "static"
+VIS_NETWORK_ASSET = ADMIN_STATIC_ROOT / "vendor" / "vis-network.min.js"
 _ENV_VALUES = parse_env_file(DEFAULT_ENV_PATH)
 _DATA_PATHS = DataPaths.from_values(_ENV_VALUES, project_root=PROJECT_ROOT)
 DEFAULT_PATHS = AdminPaths(
@@ -184,6 +187,79 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     }}
     .capability-filter:last-child {{ border-right: 0; }}
     .capability-filter.is-active {{ background: #17202a; color: #fff; }}
+    .architecture-viewbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin: 14px 0 10px;
+    }}
+    .architecture-view-switch {{
+      display: inline-flex;
+      border: 1px solid #b8c2d6;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #fff;
+    }}
+    .architecture-view-button {{
+      border: 0;
+      border-right: 1px solid #d9dee7;
+      border-radius: 0;
+      min-width: 86px;
+    }}
+    .architecture-view-button:last-child {{ border-right: 0; }}
+    .architecture-view-button.is-active {{ background: #17202a; color: #fff; }}
+    .architecture-graph-panel[hidden], .architecture-list-panel[hidden] {{ display: none; }}
+    .architecture-graph-layout {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 284px;
+      min-height: 650px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }}
+    .architecture-network-wrap {{ position: relative; min-width: 0; background: #f9fafb; }}
+    #architecture-network {{ width: 100%; height: 650px; }}
+    .architecture-graph-fallback {{
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+      background: #f9fafb;
+    }}
+    .architecture-graph-fallback[hidden] {{ display: none; }}
+    .architecture-detail {{
+      padding: 18px;
+      border-left: 1px solid var(--line);
+      background: #fff;
+    }}
+    .architecture-detail-kicker {{ color: var(--muted); font-size: 11px; font-weight: 700; }}
+    .architecture-detail h3 {{ margin: 6px 0 0; font-size: 17px; }}
+    .architecture-detail p {{ margin: 10px 0 0; color: #344054; font-size: 13px; }}
+    .architecture-detail-row {{ margin-top: 14px; }}
+    .architecture-detail-label {{ display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }}
+    .architecture-detail-value {{ color: #344054; font-size: 12px; word-break: break-word; }}
+    .architecture-graph-meta {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 11px;
+    }}
+    .architecture-layer-key {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .architecture-layer-key span {{
+      padding: 3px 6px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+      white-space: nowrap;
+    }}
     .architecture-flow {{ position: relative; }}
     .architecture-layer {{
       position: relative;
@@ -361,6 +437,13 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
       .metric-value {{ font-size: 21px; }}
       .architecture-toolbar {{ display: block; }}
       .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
+      .architecture-viewbar {{ align-items: stretch; flex-direction: column; }}
+      .architecture-view-switch {{ width: 100%; }}
+      .architecture-view-button {{ flex: 1 1 50%; }}
+      .architecture-graph-layout {{ grid-template-columns: 1fr; min-height: 0; }}
+      #architecture-network {{ height: 520px; }}
+      .architecture-detail {{ border-left: 0; border-top: 1px solid var(--line); }}
+      .architecture-graph-meta {{ align-items: flex-start; flex-direction: column; }}
       .architecture-layer {{ grid-template-columns: 1fr; gap: 12px; }}
       .architecture-layer::before {{ left: 12px; }}
       .capability-grid {{ grid-template-columns: 1fr; }}
@@ -408,23 +491,193 @@ def render_dashboard(paths: AdminPaths = DEFAULT_PATHS) -> str:
     {_render_users_section(users)}
     {_render_jobs_section(jobs)}
   </main>
+  <script src="/static/vendor/vis-network.min.js"></script>
   <script>
     (() => {{
       const filters = Array.from(document.querySelectorAll("[data-capability-filter]"));
-      const nodes = Array.from(document.querySelectorAll("[data-capability-status]"));
+      const listNodes = Array.from(document.querySelectorAll("[data-capability-status]"));
       const layers = Array.from(document.querySelectorAll("[data-architecture-layer]"));
+      const viewButtons = Array.from(document.querySelectorAll("[data-architecture-view]"));
+      const viewPanels = Array.from(document.querySelectorAll("[data-architecture-panel]"));
+      const fitButton = document.getElementById("architecture-fit");
+      const graphElement = document.getElementById("architecture-network");
+      const graphFallback = document.getElementById("architecture-graph-fallback");
+      const graphDataElement = document.getElementById("architecture-graph-data");
+      let selectedStatus = "all";
+      let network = null;
+      let graphNodeData = null;
+      let graphEdgeData = null;
+      let graphRecords = [];
+      let graphEdges = [];
+
+      const palette = {{
+        stable: {{ background: "#ecfdf3", border: "#0f8a56", highlight: {{ background: "#d1fadf", border: "#087443" }} }},
+        optimizing: {{ background: "#eff6ff", border: "#2563eb", highlight: {{ background: "#dbeafe", border: "#1d4ed8" }} }},
+        building: {{ background: "#fff7ed", border: "#b45309", highlight: {{ background: "#ffedd5", border: "#92400e" }} }},
+        planned: {{ background: "#f2f4f7", border: "#667085", highlight: {{ background: "#e4e7ec", border: "#475467" }} }},
+        paused: {{ background: "#fff8eb", border: "#7f5632", highlight: {{ background: "#fef0c7", border: "#69421f" }} }},
+        disabled: {{ background: "#f9fafb", border: "#98a2b3", highlight: {{ background: "#f2f4f7", border: "#667085" }} }},
+      }};
+
+      const toGraphNode = (record) => ({{
+        id: record.id,
+        label: record.name,
+        level: record.level,
+        group: record.status,
+      }});
+
+      const toGraphEdge = (record, index) => ({{
+        id: record.source_id + "-" + record.target_id + "-" + index,
+        from: record.source_id,
+        to: record.target_id,
+        label: record.label,
+      }});
+
+      const showNodeDetail = (nodeId) => {{
+        const record = graphRecords.find((item) => item.id === nodeId);
+        if (!record) return;
+        document.getElementById("architecture-detail-layer").textContent = record.layer_order + " · " + record.layer_name;
+        document.getElementById("architecture-detail-name").textContent = record.name;
+        document.getElementById("architecture-detail-description").textContent = record.description;
+        document.getElementById("architecture-detail-status").textContent = record.status_label;
+        document.getElementById("architecture-detail-runtime").textContent = record.runtime_label || "不适用";
+        document.getElementById("architecture-detail-evidence").textContent = record.evidence;
+        const nextText = record.todo_id && record.next_action
+          ? record.todo_id + "：" + record.next_action
+          : "暂无开放待办";
+        document.getElementById("architecture-detail-next").textContent = nextText;
+      }};
+
+      const fitGraph = () => {{
+        if (!network) return;
+        network.fit({{ animation: {{ duration: 320, easingFunction: "easeInOutQuad" }} }});
+      }};
+
+      const applyGraphFilter = () => {{
+        if (!network || !graphNodeData || !graphEdgeData) return;
+        const visibleRecords = graphRecords.filter(
+          (record) => selectedStatus === "all" || record.status === selectedStatus
+        );
+        const visibleIds = new Set(visibleRecords.map((record) => record.id));
+        graphNodeData.clear();
+        graphNodeData.add(visibleRecords.map(toGraphNode));
+        graphEdgeData.clear();
+        graphEdgeData.add(
+          graphEdges
+            .filter((edge) => visibleIds.has(edge.source_id) && visibleIds.has(edge.target_id))
+            .map(toGraphEdge)
+        );
+        const firstRecord = visibleRecords[0];
+        if (firstRecord) {{
+          network.selectNodes([firstRecord.id]);
+          showNodeDetail(firstRecord.id);
+        }}
+        window.setTimeout(fitGraph, 60);
+      }};
+
+      const setView = (view) => {{
+        if (view === "graph" && !network) return;
+        for (const button of viewButtons) {{
+          const active = button.dataset.architectureView === view;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-selected", active ? "true" : "false");
+        }}
+        for (const panel of viewPanels) panel.hidden = panel.dataset.architecturePanel !== view;
+        fitButton.hidden = view !== "graph";
+        if (view === "graph") window.setTimeout(fitGraph, 60);
+      }};
+
+      const initializeGraph = () => {{
+        if (!window.vis || !window.vis.Network || !window.vis.DataSet || !graphDataElement) {{
+          if (graphFallback) graphFallback.hidden = false;
+          return;
+        }}
+        try {{
+          const graphData = JSON.parse(graphDataElement.textContent || "{{}}");
+          graphRecords = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+          graphEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
+          graphNodeData = new window.vis.DataSet(graphRecords.map(toGraphNode));
+          graphEdgeData = new window.vis.DataSet(graphEdges.map(toGraphEdge));
+          network = new window.vis.Network(
+            graphElement,
+            {{ nodes: graphNodeData, edges: graphEdgeData }},
+            {{
+              autoResize: true,
+              groups: Object.fromEntries(
+                Object.entries(palette).map(([status, color]) => [status, {{ color }}])
+              ),
+              nodes: {{
+                shape: "box",
+                borderWidth: 1.5,
+                borderWidthSelected: 2.5,
+                margin: {{ top: 10, right: 12, bottom: 10, left: 12 }},
+                widthConstraint: {{ minimum: 118, maximum: 168 }},
+                font: {{ color: "#17202a", size: 12, face: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" }},
+              }},
+              edges: {{
+                arrows: {{ to: {{ enabled: true, scaleFactor: 0.55 }} }},
+                color: {{ color: "#98a2b3", highlight: "#2563eb", hover: "#667085" }},
+                width: 1,
+                selectionWidth: 1.5,
+                font: {{ size: 9, color: "#667085", background: "rgba(249,250,251,0.9)", strokeWidth: 0, align: "horizontal" }},
+                smooth: {{ enabled: true, type: "cubicBezier", forceDirection: "vertical", roundness: 0.35 }},
+              }},
+              layout: {{
+                hierarchical: {{
+                  enabled: true,
+                  direction: "UD",
+                  sortMethod: "directed",
+                  levelSeparation: 175,
+                  nodeSpacing: 170,
+                  treeSpacing: 220,
+                  blockShifting: true,
+                  edgeMinimization: true,
+                  parentCentralization: true,
+                }},
+              }},
+              physics: false,
+              interaction: {{ hover: true, keyboard: true, multiselect: false, tooltipDelay: 200 }},
+            }}
+          );
+          network.on("beforeDrawing", (context) => {{
+            context.save();
+            context.setTransform(1, 0, 0, 1, 0, 0);
+            context.fillStyle = "#f9fafb";
+            context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+            context.restore();
+          }});
+          network.on("click", (params) => {{
+            if (params.nodes.length) showNodeDetail(params.nodes[0]);
+          }});
+          if (graphRecords.length) {{
+            network.selectNodes([graphRecords[0].id]);
+            showNodeDetail(graphRecords[0].id);
+          }}
+          setView("graph");
+        }} catch (error) {{
+          network = null;
+          if (graphFallback) graphFallback.hidden = false;
+        }}
+      }};
+
+      for (const button of viewButtons) {{
+        button.addEventListener("click", () => setView(button.dataset.architectureView));
+      }}
+      fitButton.addEventListener("click", fitGraph);
       for (const filter of filters) {{
         filter.addEventListener("click", () => {{
-          const selected = filter.dataset.capabilityFilter;
+          selectedStatus = filter.dataset.capabilityFilter;
           for (const item of filters) item.classList.toggle("is-active", item === filter);
-          for (const node of nodes) {{
-            node.hidden = selected !== "all" && node.dataset.capabilityStatus !== selected;
+          for (const node of listNodes) {{
+            node.hidden = selectedStatus !== "all" && node.dataset.capabilityStatus !== selectedStatus;
           }}
           for (const layer of layers) {{
             layer.hidden = !Array.from(layer.querySelectorAll("[data-capability-status]")).some(node => !node.hidden);
           }}
+          applyGraphFilter();
         }});
       }}
+      initializeGraph();
     }})();
   </script>
 </body>
@@ -436,6 +689,9 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
         server_version = "MAgentAdmin/0.1"
 
         def do_GET(self) -> None:
+            if self.path == "/static/vendor/vis-network.min.js":
+                self._send_javascript(VIS_NETWORK_ASSET)
+                return
             if self.path not in {"/", "/index.html"}:
                 self._send_text("Not found", HTTPStatus.NOT_FOUND)
                 return
@@ -486,6 +742,18 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
             data = html.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_javascript(self, asset_path: Path) -> None:
+            if not asset_path.is_file():
+                self._send_text("Not found", HTTPStatus.NOT_FOUND)
+                return
+            data = asset_path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "public, max-age=86400")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -564,6 +832,11 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
         for status, label, count in filters
     )
     layers = "\n".join(_render_architecture_layer(layer) for layer in overview.architecture_layers)
+    layer_key = "".join(
+        f'<span>{escape(layer.order)} {escape(layer.name)}</span>'
+        for layer in overview.architecture_layers
+    )
+    graph_data = _architecture_graph_json(overview)
     return f"""<section id="architecture" class="architecture-section">
   <div class="architecture-toolbar">
     <div>
@@ -574,8 +847,93 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
       {filter_html}
     </div>
   </div>
-  <div class="architecture-flow">{layers}</div>
+  <div class="architecture-viewbar">
+    <div class="architecture-view-switch" role="tablist" aria-label="架构展示方式">
+      <button type="button" class="architecture-view-button" data-architecture-view="graph" role="tab" aria-selected="false">关系图</button>
+      <button type="button" class="architecture-view-button is-active" data-architecture-view="list" role="tab" aria-selected="true">状态清单</button>
+    </div>
+    <button type="button" id="architecture-fit" title="将全部节点缩放到可见区域" hidden>适应画布</button>
+  </div>
+  <div class="architecture-graph-panel" data-architecture-panel="graph" hidden>
+    <div class="architecture-graph-layout">
+      <div class="architecture-network-wrap">
+        <div id="architecture-network" role="img" aria-label="M-Agent 五层架构能力关系图"></div>
+        <div id="architecture-graph-fallback" class="architecture-graph-fallback" hidden>关系图组件未能加载，已保留状态清单供查看。</div>
+      </div>
+      <aside class="architecture-detail" aria-live="polite">
+        <div class="architecture-detail-kicker" id="architecture-detail-layer">节点详情</div>
+        <h3 id="architecture-detail-name">点击节点查看详情</h3>
+        <p id="architecture-detail-description">节点颜色表示建设成熟度，箭头表示真实调用或数据关系。</p>
+        <div class="architecture-detail-row">
+          <span class="architecture-detail-label">建设状态</span>
+          <div class="architecture-detail-value" id="architecture-detail-status">-</div>
+        </div>
+        <div class="architecture-detail-row">
+          <span class="architecture-detail-label">运行状态</span>
+          <div class="architecture-detail-value" id="architecture-detail-runtime">不适用</div>
+        </div>
+        <div class="architecture-detail-row">
+          <span class="architecture-detail-label">事实依据</span>
+          <div class="architecture-detail-value" id="architecture-detail-evidence">-</div>
+        </div>
+        <div class="architecture-detail-row">
+          <span class="architecture-detail-label">下一步</span>
+          <div class="architecture-detail-value" id="architecture-detail-next">暂无开放待办</div>
+        </div>
+      </aside>
+    </div>
+    <div class="architecture-graph-meta">
+      <div class="architecture-layer-key">{layer_key}</div>
+      <span>鼠标滚轮或双指缩放，拖动画布查看；筛选会同时作用于关系图和清单。</span>
+    </div>
+  </div>
+  <div class="architecture-flow architecture-list-panel" data-architecture-panel="list">{layers}</div>
+  <script id="architecture-graph-data" type="application/json">{graph_data}</script>
 </section>"""
+
+
+def _architecture_graph_json(overview: ProjectOverview) -> str:
+    nodes: list[dict[str, object]] = []
+    for level, layer in enumerate(overview.architecture_layers):
+        for capability in layer.capabilities:
+            nodes.append(
+                {
+                    "id": capability.id,
+                    "name": capability.name,
+                    "status": capability.status,
+                    "status_label": capability.status_label,
+                    "layer": layer.key,
+                    "layer_name": layer.name,
+                    "layer_order": layer.order,
+                    "level": level,
+                    "description": capability.description,
+                    "evidence": capability.evidence,
+                    "todo_id": capability.todo_id,
+                    "next_action": capability.next_action,
+                    "runtime_status": capability.runtime_status,
+                    "runtime_label": capability.runtime_label,
+                }
+            )
+    edges = [
+        {
+            "source_id": relation.source_id,
+            "target_id": relation.target_id,
+            "label": relation.label,
+        }
+        for relation in overview.architecture_relations
+    ]
+    data = json.dumps(
+        {"nodes": nodes, "edges": edges},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        data.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 def _render_architecture_layer(layer: object) -> str:

@@ -138,6 +138,13 @@ class ArchitectureLayerSummary:
 
 
 @dataclass(frozen=True)
+class ArchitectureRelationSummary:
+    source_id: str
+    target_id: str
+    label: str
+
+
+@dataclass(frozen=True)
 class ProjectOverview:
     generated_at: str
     enabled_skill_count: int
@@ -152,6 +159,7 @@ class ProjectOverview:
     todos: tuple[TodoAdminSummary, ...]
     services: tuple[ServiceHealthSummary, ...]
     architecture_layers: tuple[ArchitectureLayerSummary, ...]
+    architecture_relations: tuple[ArchitectureRelationSummary, ...]
     capability_status_counts: dict[str, int]
     modules: tuple[ModuleAdminSummary, ...]
     recent_changes: tuple[RecentChangeSummary, ...]
@@ -514,6 +522,54 @@ _ARCHITECTURE_LAYER_SPECS = (
     ),
 )
 
+_ARCHITECTURE_RELATION_SPECS = (
+    ("writing_bot", "gateway_identity", "身份校验"),
+    ("review_bot", "gateway_identity", "身份校验"),
+    ("unified_entry", "gateway_identity", "统一接入"),
+    ("writing_bot", "task_intake", "组装请求"),
+    ("review_bot", "task_intake", "组装请求"),
+    ("gateway_identity", "router_registry", "授权路由"),
+    ("task_intake", "router_registry", "提交任务"),
+    ("router_registry", "runtime_gateway", "选择能力"),
+    ("runtime_gateway", "direct_report", "执行 Skill"),
+    ("runtime_gateway", "brief_writing", "执行 Skill"),
+    ("runtime_gateway", "rewrite", "执行 Skill"),
+    ("conversation_revision", "direct_report", "续改稿件"),
+    ("conversation_revision", "brief_writing", "续改稿件"),
+    ("conversation_revision", "rewrite", "续改稿件"),
+    ("review_bot", "general_review", "执行审核"),
+    ("review_bot", "official_format_review", "执行审核"),
+    ("review_bot", "multi_file_review", "执行审核"),
+    ("review_bot", "ppt_review", "执行审核"),
+    ("document_service", "direct_report", "提供材料"),
+    ("document_service", "brief_writing", "提供材料"),
+    ("document_service", "general_review", "提供材料"),
+    ("document_service", "multi_file_review", "提供材料"),
+    ("document_service", "ppt_review", "提供材料"),
+    ("web_tools", "direct_report", "提供素材"),
+    ("web_tools", "brief_writing", "提供素材"),
+    ("policy_knowledge", "direct_report", "提供背景"),
+    ("policy_knowledge", "brief_writing", "提供背景"),
+    ("bank_knowledge", "direct_report", "提供事实"),
+    ("bank_knowledge", "brief_writing", "提供事实"),
+    ("docx_reader", "document_service", "标准解析"),
+    ("pdf_ppt_reader", "document_service", "标准解析"),
+    ("direct_report", "writing_final_review", "成稿检查"),
+    ("brief_writing", "writing_final_review", "成稿检查"),
+    ("general_review", "attachment_delivery", "回传结果"),
+    ("official_format_review", "attachment_delivery", "回传结果"),
+    ("multi_file_review", "attachment_delivery", "回传结果"),
+    ("runtime_gateway", "task_files", "保存任务"),
+    ("writing_bot", "logs_identity", "记录对话"),
+    ("review_bot", "logs_identity", "记录任务"),
+    ("writing_bot", "ops_monitoring", "上报状态"),
+    ("review_bot", "ops_monitoring", "上报状态"),
+    ("ops_monitoring", "ops_bot", "发送告警"),
+    ("task_files", "retention_cleanup", "到期清理"),
+    ("policy_admin", "policy_knowledge", "治理数据"),
+    ("admin_console", "router_registry", "管理 Skill"),
+)
+
 
 def list_skills(skills_dir: Path) -> list[SkillAdminSummary]:
     summaries: list[SkillAdminSummary] = []
@@ -681,6 +737,7 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
             services=services,
         )
     )
+    architecture_relations = tuple(_build_architecture_relations(architecture_layers))
     capability_status_counts = _count_capability_statuses(architecture_layers)
     modules = tuple(
         _build_module_summaries(
@@ -708,6 +765,7 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         todos=tuple(todos),
         services=tuple(services),
         architecture_layers=architecture_layers,
+        architecture_relations=architecture_relations,
         capability_status_counts=capability_status_counts,
         modules=modules,
         recent_changes=recent_changes,
@@ -830,6 +888,29 @@ def _build_capability_summary(
         runtime_status=runtime_status,
         runtime_label=_RUNTIME_STATUS_LABELS.get(runtime_status, ""),
     )
+
+
+def _build_architecture_relations(
+    layers: tuple[ArchitectureLayerSummary, ...],
+) -> list[ArchitectureRelationSummary]:
+    capability_ids = {
+        capability.id
+        for layer in layers
+        for capability in layer.capabilities
+    }
+    relations: list[ArchitectureRelationSummary] = []
+    for source_id, target_id, label in _ARCHITECTURE_RELATION_SPECS:
+        unknown_ids = {source_id, target_id} - capability_ids
+        if unknown_ids:
+            raise ValueError(f"架构关系引用了未知能力：{', '.join(sorted(unknown_ids))}")
+        relations.append(
+            ArchitectureRelationSummary(
+                source_id=source_id,
+                target_id=target_id,
+                label=label,
+            )
+        )
+    return relations
 
 
 def _resolve_capability_status(
