@@ -200,8 +200,8 @@ python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 5. 是否没有输出或提交密钥。
 6. 是否运行了 `python scripts/project_docs.py check`。
 7. 是否确认 `STATUS-REPORT.md`、`config/platform-policy.yaml`、真实用户材料和本机路径没有进入暂存区。
-8. 是否已按逻辑创建提交，并在推送前获取远端最新状态。
-9. 是否已推送 `main`，且 `python scripts/project_docs.py check-sync` 显示本地与远端同步。
+8. 是否已按逻辑创建提交，并使用 `python scripts/project_docs.py push --summary "本次做了什么改动"` 完成受管推送。
+9. 是否已在本机 `STATUS-REPORT.md` 自动生成本次“Git 推送”记录，且 `python scripts/project_docs.py check-sync` 显示本地与远端同步。
 
 首次克隆后运行：
 
@@ -209,7 +209,7 @@ python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 python scripts/project_docs.py install-hooks
 ```
 
-pre-commit hook 会读取暂存区版本，检查 TODO 编号和状态、本机文件/路径，并按模块要求代码、依赖、hooks、配置同步对应核心文档；无关计划文档不能充当核心文档。post-commit hook 会把提交摘要自动写入本机 `STATUS-REPORT.md`，并提醒本地未推送提交；pre-push hook 会再次运行核心文档检查。行为已变化但核心文档未同步，或本地提交尚未推送且没有说明时，不允许交付。
+pre-commit hook 会读取暂存区版本，检查 TODO 编号和状态、本机文件/路径，并按模块要求代码、依赖、hooks、配置同步对应核心文档；无关计划文档不能充当核心文档。post-commit hook 会把本地提交摘要写入 `STATUS-REPORT.md` 并提醒未推送提交；pre-push hook 会再次检查文档并拒绝直接 `git push`。受管推送成功后再追加独立的“Git 推送”记录。行为已变化但核心文档未同步，或本地提交尚未推送且没有说明时，不允许交付。
 
 ## 推荐给 AI 的提示词
 

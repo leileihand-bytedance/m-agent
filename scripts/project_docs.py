@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -36,6 +37,17 @@ CORE_DOCUMENTS = {
 }
 SOURCE_SUFFIXES = (".py", ".yaml", ".yml", ".json", ".env", ".txt")
 MAC_HOME_PREFIX = "/" + "Users" + "/"
+CHANGE_AREA_RULES = (
+    ("运维", lambda path: path.startswith("app/platform/ops/")),
+    ("底座", lambda path: path.startswith("app/platform/") and not path.startswith("app/platform/ops/")),
+    ("写作入口", lambda path: path.startswith("app/writing/")),
+    ("审核", lambda path: path.startswith("app/review/") or path == "app/data/rules.md"),
+    ("Skills", lambda path: path.startswith("skills/")),
+    ("配置", lambda path: path.startswith("config/") or path.endswith(".env")),
+    ("文档与规范", lambda path: path.startswith("docs/") or path in {"AGENTS.md", "CLAUDE.md", "README.md"}),
+    ("测试", lambda path: path.startswith("tests/")),
+    ("工程化", lambda path: path.startswith(("scripts/", ".githooks/"))),
+)
 
 
 def validate_todo_document(text: str) -> list[str]:
@@ -268,10 +280,6 @@ def record_commit_status(
     timestamp: datetime | None = None,
 ) -> None:
     """把提交摘要写入本地状态报告，不记录用户材料或业务原文。"""
-    current = report_path.read_text(encoding="utf-8") if report_path.exists() else _new_report_header()
-    if commit_hash in current:
-        return
-
     moment = timestamp or datetime.now().astimezone()
     document_summary = "、".join(core_documents) if core_documents else "无"
     entry = (
@@ -282,6 +290,60 @@ def record_commit_status(
         "- 记录方式：Git post-commit 自动生成；不包含用户材料、原文或运行日志。\n\n"
         "---\n\n"
     )
+    _insert_status_entry(
+        report_path=report_path,
+        entry=entry,
+        unique_marker=f"Git 提交：`{commit_hash}`",
+    )
+
+
+def classify_changed_areas(paths: Iterable[str]) -> tuple[str, ...]:
+    normalized_paths = tuple(path.replace("\\", "/") for path in paths)
+    areas = tuple(
+        label
+        for label, predicate in CHANGE_AREA_RULES
+        if any(predicate(path) for path in normalized_paths)
+    )
+    return areas or ("其他",)
+
+
+def record_push_status(
+    *,
+    report_path: Path,
+    remote: str,
+    branch: str,
+    before_hash: str,
+    after_hash: str,
+    commit_subjects: tuple[str, ...],
+    changed_paths: tuple[str, ...],
+    summary: str,
+    timestamp: datetime | None = None,
+) -> None:
+    """在远端推送成功后记录本次推送范围和主要改动。"""
+    moment = timestamp or datetime.now().astimezone()
+    marker = f"push:{remote}/{branch}:{after_hash}"
+    areas = "、".join(classify_changed_areas(changed_paths))
+    subjects = "；".join(commit_subjects) if commit_subjects else "无新增提交摘要"
+    explanation = summary.strip() or subjects
+    entry = (
+        f"## [{moment.strftime('%Y-%m-%d %H:%M')}] Git 推送 {remote}/{branch}\n\n"
+        f"- 推送标识：`{marker}`\n"
+        f"- 推送范围：`{before_hash}` -> `{after_hash}`\n"
+        f"- 推送提交：{len(commit_subjects)} 个\n"
+        f"- 改动说明：{explanation}\n"
+        f"- 提交摘要：{subjects}\n"
+        f"- 影响范围：{areas}\n"
+        f"- 变更文件：{len(changed_paths)} 个\n"
+        "- 记录方式：受管推送成功后自动生成；不包含用户材料、密钥或运行日志。\n\n"
+        "---\n\n"
+    )
+    _insert_status_entry(report_path=report_path, entry=entry, unique_marker=marker)
+
+
+def _insert_status_entry(*, report_path: Path, entry: str, unique_marker: str) -> None:
+    current = report_path.read_text(encoding="utf-8") if report_path.exists() else _new_report_header()
+    if unique_marker in current:
+        return
     marker = "\n---\n"
     marker_index = current.find(marker)
     if marker_index >= 0:
@@ -290,6 +352,80 @@ def record_commit_status(
     else:
         updated = _new_report_header() + entry + current
     report_path.write_text(updated, encoding="utf-8")
+
+
+def collect_push_details(before_hash: str, after_hash: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    subjects = tuple(
+        line.strip()
+        for line in _run_git(
+            "log",
+            "--reverse",
+            "--format=%s",
+            f"{before_hash}..{after_hash}",
+        ).stdout.splitlines()
+        if line.strip()
+    )
+    changed_paths = tuple(
+        line.strip()
+        for line in _run_git("diff", "--name-only", before_hash, after_hash).stdout.splitlines()
+        if line.strip()
+    )
+    return subjects, changed_paths
+
+
+def push_and_record(*, remote: str, branch: str, summary: str) -> None:
+    if _run_git("status", "--porcelain").stdout.strip():
+        raise RuntimeError("工作区存在未提交变更，请先完成测试和提交")
+    current_branch = _run_git("branch", "--show-current").stdout.strip()
+    if current_branch != branch:
+        raise RuntimeError(f"当前分支是 {current_branch or 'detached HEAD'}，要求推送 {branch}")
+
+    fetched = _run_git("fetch", remote, branch, check=False)
+    if fetched.returncode != 0:
+        raise RuntimeError(fetched.stderr.strip() or "获取远端状态失败")
+
+    remote_ref = f"{remote}/{branch}"
+    before_hash = _run_git("rev-parse", remote_ref).stdout.strip()
+    after_hash = _run_git("rev-parse", branch).stdout.strip()
+    if before_hash == after_hash:
+        print("本地分支与远端已同步，没有需要推送的新提交。")
+        return
+    ancestor = _run_git("merge-base", "--is-ancestor", before_hash, after_hash, check=False)
+    if ancestor.returncode != 0:
+        raise RuntimeError("远端包含本地尚未合并的提交，禁止自动推送或强推")
+
+    commit_subjects, changed_paths = collect_push_details(before_hash, after_hash)
+    environment = dict(os.environ)
+    environment["M_AGENT_MANAGED_PUSH"] = "1"
+    pushed = subprocess.run(
+        ("git", "push", remote, f"{branch}:{branch}"),
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=environment,
+        check=False,
+    )
+    if pushed.stdout.strip():
+        print(pushed.stdout.strip())
+    if pushed.stderr.strip():
+        print(pushed.stderr.strip(), file=sys.stderr)
+    if pushed.returncode != 0:
+        raise RuntimeError("Git 推送失败，状态报告未写入推送记录")
+
+    confirmed_hash = _run_git("rev-parse", remote_ref).stdout.strip()
+    if confirmed_hash != after_hash:
+        raise RuntimeError("远端推送已返回成功，但本地远端引用未同步；请人工核对")
+    record_push_status(
+        report_path=STATUS_REPORT_PATH,
+        remote=remote,
+        branch=branch,
+        before_hash=before_hash,
+        after_hash=after_hash,
+        commit_subjects=commit_subjects,
+        changed_paths=changed_paths,
+        summary=summary,
+    )
+    print("推送成功，已同步写入本机 STATUS-REPORT.md。")
 
 
 def check_repository(*, staged: bool = False) -> list[str]:
@@ -399,6 +535,16 @@ def main(argv: list[str] | None = None) -> int:
     sync_parser = subparsers.add_parser("check-sync", help="检查当前分支是否与远端跟踪分支同步")
     sync_parser.add_argument("--warn-only", action="store_true", help="仅告警，不阻止提交后流程")
     sync_parser.add_argument("--upstream", default="@{upstream}", help="要比较的远端引用")
+    push_parser = subparsers.add_parser("push", help="安全推送并在本机状态报告记录改动")
+    push_parser.add_argument("--remote", default="origin")
+    push_parser.add_argument("--branch", default="main")
+    push_parser.add_argument("--summary", required=True, help="本次推送的通俗改动说明")
+    record_push_parser = subparsers.add_parser("record-push", help="补记一次已完成的推送")
+    record_push_parser.add_argument("--remote", default="origin")
+    record_push_parser.add_argument("--branch", default="main")
+    record_push_parser.add_argument("--before", required=True)
+    record_push_parser.add_argument("--after", required=True)
+    record_push_parser.add_argument("--summary", required=True)
     subparsers.add_parser("record-commit", help="把 HEAD 摘要写入本地 STATUS-REPORT.md")
     subparsers.add_parser("install-hooks", help="启用仓库内 Git hooks")
     args = parser.parse_args(argv)
@@ -416,6 +562,27 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "check-sync":
         return check_sync(warn_only=args.warn_only, upstream_ref=args.upstream)
+    if args.command == "push":
+        try:
+            push_and_record(remote=args.remote, branch=args.branch, summary=args.summary)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "record-push":
+        commit_subjects, changed_paths = collect_push_details(args.before, args.after)
+        record_push_status(
+            report_path=STATUS_REPORT_PATH,
+            remote=args.remote,
+            branch=args.branch,
+            before_hash=args.before,
+            after_hash=args.after,
+            commit_subjects=commit_subjects,
+            changed_paths=changed_paths,
+            summary=args.summary,
+        )
+        print("已补记推送记录。")
+        return 0
     install_hooks()
     print("已启用 .githooks。")
     return 0

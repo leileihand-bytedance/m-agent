@@ -84,6 +84,6 @@ python tests/test_reviewer.py
 ## Git 远端同步（强制）
 
 - 活跃开发达到可测试的逻辑节点后及时提交，任务结束前不得遗留应提交变更。
-- 推送前先 `git fetch origin`；远端分叉时禁止强推，应先安全合并或报告。
-- 用户已授权本项目保持远端同步：本地提交完成后及时推送 `main`，再运行 `python scripts/project_docs.py check-sync` 确认本地和远端差异为零。
-- post-commit 只告警未推送状态，pre-push 再检查核心文档；网络或权限失败必须如实报告。
+- 禁止直接 `git push`；统一运行 `python scripts/project_docs.py push --summary "本次做了什么改动"`。命令会先获取远端、阻止分叉和强推，成功后再写本机推送记录。
+- 每次成功推送必须在本机 `STATUS-REPORT.md` 追加推送范围、提交摘要、改动说明、影响模块和文件数量；失败不得记成成功。
+- 推送后运行 `python scripts/project_docs.py check-sync` 确认差异为零。post-commit 记录本地提交，pre-push 检查文档并阻止绕过受管流程；网络或权限失败必须如实报告。

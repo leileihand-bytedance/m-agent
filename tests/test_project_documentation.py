@@ -5,11 +5,13 @@ from pathlib import Path
 
 from scripts.project_docs import (
     build_sync_status_message,
+    classify_changed_areas,
     documentation_sync_errors,
     has_core_document_change,
     is_core_document,
     parse_sync_counts,
     record_commit_status,
+    record_push_status,
     requires_core_document_change,
     validate_todo_document,
 )
@@ -77,6 +79,48 @@ def test_git_hooks_remind_after_commit_and_validate_before_push():
     assert "check-sync --warn-only" in post_commit
     assert pre_push.exists()
     assert "project_docs.py check" in pre_push.read_text(encoding="utf-8")
+    assert "M_AGENT_MANAGED_PUSH" in pre_push.read_text(encoding="utf-8")
+
+
+def test_push_record_describes_changes_and_is_idempotent(tmp_path: Path):
+    report_path = tmp_path / "STATUS-REPORT.md"
+    timestamp = datetime(2026, 7, 13, 10, 20, tzinfo=timezone.utc)
+    changed_paths = (
+        "app/platform/app.py",
+        "app/review/main.py",
+        "skills/rewrite/workflow.py",
+        "docs/development/architecture.md",
+        "tests/test_platform_app.py",
+    )
+
+    assert classify_changed_areas(changed_paths) == (
+        "底座",
+        "审核",
+        "Skills",
+        "文档与规范",
+        "测试",
+    )
+
+    for _ in range(2):
+        record_push_status(
+            report_path=report_path,
+            remote="origin",
+            branch="main",
+            before_hash="03533520c462",
+            after_hash="ad2e6c1ececb",
+            commit_subjects=("feat: synchronize M-Agent platform",),
+            changed_paths=changed_paths,
+            summary="统一底座、写作、审核和项目规范，并撤下远端状态报告。",
+            timestamp=timestamp,
+        )
+
+    text = report_path.read_text(encoding="utf-8")
+    assert "## [2026-07-13 10:20] Git 推送 origin/main" in text
+    assert "统一底座、写作、审核和项目规范" in text
+    assert "底座、审核、Skills、文档与规范、测试" in text
+    assert "feat: synchronize M-Agent platform" in text
+    assert "5 个" in text
+    assert text.count("push:origin/main:ad2e6c1ececb") == 1
 
 
 def test_record_commit_status_uses_timestamp_and_is_idempotent(tmp_path: Path):
