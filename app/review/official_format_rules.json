@@ -1,0 +1,61 @@
+{
+  "rule_set_id": "webank-common-official-document-v1",
+  "source_template": "格式模板 .docx",
+  "source_sha256": "024626b605851babfab67843370769b8f6621310b90f29c989a60a037186f8cd",
+  "page": {
+    "orientation": "portrait",
+    "width_cm": 21.0,
+    "height_cm": 29.7,
+    "top_margin_cm": 2.54,
+    "bottom_margin_cm": 2.54,
+    "left_margin_cm": 3.175,
+    "right_margin_cm": 3.175
+  },
+  "roles": {
+    "title": {
+      "label": "标题",
+      "fonts": ["宋体", "SimSun"],
+      "size_pt": 18.0,
+      "bold": true,
+      "alignment": "center",
+      "first_line_indent_pt": 0.0,
+      "line_spacing_pt": 29.0
+    },
+    "heading1": {
+      "label": "一级标题",
+      "fonts": ["黑体", "SimHei"],
+      "size_pt": 16.0,
+      "bold": false,
+      "alignment": "justify",
+      "first_line_indent_pt": 32.0,
+      "line_spacing_pt": 29.0
+    },
+    "heading2": {
+      "label": "二级标题",
+      "fonts": ["楷体", "楷体_GB2312", "KaiTi"],
+      "size_pt": 16.0,
+      "bold": true,
+      "alignment": "justify",
+      "first_line_indent_pt": 32.0,
+      "line_spacing_pt": 29.0
+    },
+    "heading3": {
+      "label": "三级标题",
+      "fonts": ["仿宋", "仿宋_GB2312", "FangSong"],
+      "size_pt": 16.0,
+      "bold": true,
+      "alignment": "justify",
+      "first_line_indent_pt": 32.0,
+      "line_spacing_pt": 29.0
+    },
+    "body": {
+      "label": "正文",
+      "fonts": ["仿宋", "仿宋_GB2312", "FangSong"],
+      "size_pt": 16.0,
+      "bold": false,
+      "alignment": "justify",
+      "first_line_indent_pt": 32.0,
+      "line_spacing_pt": 29.0
+    }
+  }
+}

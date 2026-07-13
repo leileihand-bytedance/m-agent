@@ -73,8 +73,10 @@ python -m pytest tests/test_direct_report_workflow.py tests/test_direct_report_g
 验证旧审核 Bot 没被影响：
 
 ```bash
-python tests/test_review_bot.py
+python -m pytest tests/test_review_bot.py tests/test_official_format_review.py -v
 ```
+
+其中 `test_official_format_review.py` 验证独立格式审核不依赖 Word 样式名称、实际格式规则能识别典型错误，并能生成带定位批注的返回文档。
 
 ### 4. LLM 端到端测试
 

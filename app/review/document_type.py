@@ -14,6 +14,7 @@ class DocumentType(Enum):
     NEI_CAN = auto()       # 微众银行信息内参周报
     HALF_MONTHLY = auto()  # 微众银行信息动态半月报
     GENERAL = auto()       # 通用文档审核
+    OFFICIAL_FORMAT = auto()  # 用户显式触发的独立公文格式审核
 
 
 def detect_document_type(filename: str | None, paragraphs: list[str]) -> DocumentType:
@@ -48,4 +49,6 @@ def document_type_label(doc_type: DocumentType) -> str:
         return "半月报"
     if doc_type == DocumentType.GENERAL:
         return "通用审核"
+    if doc_type == DocumentType.OFFICIAL_FORMAT:
+        return "公文格式审核"
     return "内参周报"

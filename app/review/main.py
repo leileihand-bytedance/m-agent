@@ -50,6 +50,13 @@ _FOLLOWUP_REVIEW_REQUEST_RE = re.compile(
 )
 _ACK_SMALLTALK_RE = re.compile(r"^(?:好|好的|收到|知道了|明白了|行|行的|ok|okay|ok了|嗯|嗯嗯)$", re.IGNORECASE)
 _THANKS_SMALLTALK_RE = re.compile(r"^(?:谢谢|谢谢你|谢谢啦|谢谢哈|多谢|辛苦了)$")
+_OFFICIAL_FORMAT_REQUEST_RE = re.compile(
+    r"(?:(?:审|审核|检查|核对|校对|看看|看下).{0,8}(?:公文)?格式|"
+    r"(?:公文)?格式.{0,8}(?:审|审核|检查|核对|校对|看看|看下))"
+)
+_OFFICIAL_FORMAT_NEGATION_RE = re.compile(
+    r"(?:不审|不用审|不用看|无需|不要|不用管)格式|格式(?:不审|不用审|不用看|无需|不要|不用管)"
+)
 
 
 # ============================================================
@@ -378,6 +385,33 @@ class RecentSubmissionTracker:
         return self.has_recent_submission(userid, now=now) and _is_followup_review_request_text(text)
 
 
+class PendingReviewModeTracker:
+    """记录用户显式选择的下一份文件审核模式。"""
+
+    def __init__(self, *, ttl_seconds: float = 1800.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._official_format_requests: dict[str, float] = {}
+
+    def request_official_format(self, userid: str, *, now: float | None = None) -> None:
+        self._official_format_requests[userid] = now if now is not None else perf_counter()
+
+    def has_official_format(self, userid: str, *, now: float | None = None) -> bool:
+        requested_at = self._official_format_requests.get(userid)
+        if requested_at is None:
+            return False
+        current = now if now is not None else perf_counter()
+        if current - requested_at > self.ttl_seconds:
+            self._official_format_requests.pop(userid, None)
+            return False
+        return True
+
+    def consume_official_format(self, userid: str, *, now: float | None = None) -> bool:
+        if not self.has_official_format(userid, now=now):
+            return False
+        self._official_format_requests.pop(userid, None)
+        return True
+
+
 def extract_file_payload(frame: Mapping[str, object]) -> FilePayload | None:
     file_info = get_file_info(frame)
     if file_info is None:
@@ -406,6 +440,16 @@ def _is_followup_review_request_text(text: str) -> bool:
     if not normalized:
         return False
     return _FOLLOWUP_REVIEW_REQUEST_RE.fullmatch(normalized) is not None
+
+
+def _is_official_format_review_request_text(text: str) -> bool:
+    """只识别用户明确提出的短格式审核指令。"""
+    normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text.strip())
+    if not normalized or len(normalized) > 40:
+        return False
+    if _OFFICIAL_FORMAT_NEGATION_RE.search(normalized):
+        return False
+    return _OFFICIAL_FORMAT_REQUEST_RE.search(normalized) is not None
 
 
 def _resolve_smalltalk_text_reply(text: str) -> str | None:
@@ -481,6 +525,8 @@ def build_user_review_reply(
     """
     if result.findings:
         return None
+    if doc_type == DocumentType.OFFICIAL_FORMAT:
+        return "没有发现公文格式问题，可以走审批了。"
     return "没有发现问题，可以走审批了。"
 
 
@@ -792,6 +838,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         registry, require_registration=config.require_registration
     )
     recent_submission_tracker = RecentSubmissionTracker()
+    pending_review_mode_tracker = PendingReviewModeTracker()
 
     ws_client = WSClient(
         bot_id=config.wecom_bot_id,
@@ -899,6 +946,18 @@ async def run_review_bot(config: ReviewConfig) -> None:
             elif not was_registered:
                 logger.info("新用户 %s 首次使用,等待有效英文名", sender, extra=extra)
             await ws_client.reply_stream(frame, stream_id, reg_reply, True)
+            return
+
+        if _is_official_format_review_request_text(content):
+            pending_review_mode_tracker.request_official_format(sender)
+            resend_word = "重新发送" if recent_submission_tracker.has_recent_submission(sender) else "发送"
+            logger.info("用户选择公文格式审核 from %s", sender, extra=extra)
+            await ws_client.reply_stream(
+                frame,
+                stream_id,
+                f"收到。请{resend_word}需要审核格式的 .docx 文档；本次只检查公文格式，不审核文字内容。",
+                True,
+            )
             return
 
         instruction_only_reply = _resolve_instruction_only_text_reply(
@@ -1013,6 +1072,8 @@ async def run_review_bot(config: ReviewConfig) -> None:
             )
             return
 
+        official_format_requested = pending_review_mode_tracker.has_official_format(sender)
+
         recent_submission_tracker.remember(sender, "file")
 
         payload = extract_file_payload(frame)
@@ -1028,7 +1089,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
         # 1. ACK（快速回复，不进队列）
         await ws_client.reply_stream(
             frame, stream_id,
-            "收到文件啦，正在加紧审核，请稍等（模型反应有点慢，你可以先干点别的，一会儿再来看）……", True,
+            (
+                "收到文件啦，正在按公文模板检查实际格式，请稍等……"
+                if official_format_requested
+                else "收到文件啦，正在加紧审核，请稍等（模型反应有点慢，你可以先干点别的，一会儿再来看）……"
+            ),
+            True,
         )
 
         # 2. 下载(SDK 内部从 HTTP Content-Disposition 拿真实 filename)
@@ -1090,7 +1156,10 @@ async def run_review_bot(config: ReviewConfig) -> None:
             return
 
         # 6. 识别文档类型并分发到对应审核引擎
-        doc_type = detect_document_type(filename, parsed.paragraphs)
+        if official_format_requested and pending_review_mode_tracker.consume_official_format(sender):
+            doc_type = DocumentType.OFFICIAL_FORMAT
+        else:
+            doc_type = detect_document_type(filename, parsed.paragraphs)
         logger.info(
             "文档类型识别: %s (%s) from %s",
             document_type_label(doc_type),
@@ -1231,21 +1300,30 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     )
             return
 
-        if doc_type == DocumentType.GENERAL:
-            from app.review.general_reviewer import review_general  # noqa: E402
-            general_rules_text = load_rules("app/review/rules_general.md")
+        if doc_type in {DocumentType.GENERAL, DocumentType.OFFICIAL_FORMAT}:
+            review_label = document_type_label(doc_type)
             try:
-                combined_result = await review_general(
-                    parsed.paragraphs, general_rules_text, filename
-                )
+                if doc_type == DocumentType.OFFICIAL_FORMAT:
+                    from app.review.official_format_checker import review_official_format  # noqa: E402
+
+                    combined_result = review_official_format(tmp_path, filename)
+                else:
+                    from app.review.general_reviewer import review_general  # noqa: E402
+
+                    general_rules_text = load_rules("app/review/rules_general.md")
+                    combined_result = await review_general(
+                        parsed.paragraphs, general_rules_text, filename
+                    )
             except Exception as exc:
-                logger.exception("通用审核失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "通用审核", exc)
+                logger.exception("%s失败 from %s", review_label, sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, review_label, exc)
                 await ws_client.reply_stream(
                     frame, generate_req_id("review-err"),
-                    _build_processing_failure_user_reply("通用审核", exc), True,
+                    _build_processing_failure_user_reply(review_label, exc), True,
                 )
                 return
+            finally:
+                tmp_path.unlink(missing_ok=True)
 
             msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
             review_dir = None
@@ -1258,10 +1336,11 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     msgid=msgid,
                     result=combined_result,
                     parsed_paragraphs=parsed.paragraphs,
-                    doc_type=DocumentType.GENERAL,
+                    doc_type=doc_type,
                 )
                 logger.info(
-                    "通用审核完成: %s (%d 个问题), 存档: %s",
+                    "%s完成: %s (%d 个问题), 存档: %s",
+                    review_label,
                     filename,
                     len(combined_result.findings),
                     review_dir,
@@ -1295,14 +1374,15 @@ async def run_review_bot(config: ReviewConfig) -> None:
                             ws_client.reply_stream(frame, text_id, reply, True),
                             timeout=30.0,
                         )
-                        logger.info("通用审核文本提示已发送 to %s", sender, extra=extra)
+                        logger.info("%s文本提示已发送 to %s", review_label, sender, extra=extra)
                         text_sent = True
                         break
                     except asyncio.TimeoutError:
-                        logger.warning("通用审核文本发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
+                        logger.warning("%s文本发送超时 to %s, 第 %d 次重试", review_label, sender, retry + 1, extra=extra)
                     except Exception as exc:
                         logger.warning(
-                            "通用审核文本发送失败 to %s: %s, 第 %d 次重试",
+                            "%s文本发送失败 to %s: %s, 第 %d 次重试",
+                            review_label,
                             sender,
                             exc,
                             retry + 1,
@@ -1311,8 +1391,8 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     if retry < 2:
                         await asyncio.sleep(2 * (retry + 1))
                 if not text_sent:
-                    logger.error("通用审核文本发送失败（已重试3次） to %s", sender, extra=extra)
-                    await notifier.notify_send_failure(sender, "通用审核结果", Exception("发送失败（已重试3次）"))
+                    logger.error("%s文本发送失败（已重试3次） to %s", review_label, sender, extra=extra)
+                    await notifier.notify_send_failure(sender, f"{review_label}结果", Exception("发送失败（已重试3次）"))
 
             if reply_file_path is not None:
                 file_sent = False

@@ -177,7 +177,11 @@ def _sentence_range(
 
     end_pos = pos + len(target_text)
 
-    if rule_id.startswith("general-") or rule_id in _EXACT_TARGET_RULE_IDS:
+    if (
+        rule_id.startswith("general-")
+        or rule_id.startswith("official-format-")
+        or rule_id in _EXACT_TARGET_RULE_IDS
+    ):
         return pos, end_pos
 
     if rule_id == "quote-pair":

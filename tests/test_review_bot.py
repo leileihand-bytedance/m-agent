@@ -32,11 +32,13 @@ from app.review.main import (  # noqa: E402
     _is_followup_review_request_text,
     _resolve_instruction_only_text_reply,
     _resolve_smalltalk_text_reply,
+    _is_official_format_review_request_text,
     _configure_ws_client_timeouts,
     _build_delivery_failure_user_reply,
     _build_processing_failure_user_reply,
     _summarize_delivery_error,
     RecentSubmissionTracker,
+    PendingReviewModeTracker,
 )
 from app.review.document_type import DocumentType  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
@@ -62,6 +64,32 @@ def test_is_docx_filename_reject():
     assert is_docx_filename(None) is False
     assert is_docx_filename("") is False
     print("✅ test_is_docx_filename_reject: 非 .docx 全部拒")
+
+
+def test_official_format_review_request_requires_explicit_format_wording():
+    assert _is_official_format_review_request_text("帮我做一下格式审核") is True
+    assert _is_official_format_review_request_text("按公文格式检查") is True
+    assert _is_official_format_review_request_text("看看这个文件格式有没有问题") is True
+    assert _is_official_format_review_request_text("帮我审一下这个材料") is False
+    assert _is_official_format_review_request_text("请审核文字内容") is False
+    assert _is_official_format_review_request_text("只审核内容，格式不用看") is False
+
+
+def test_pending_review_mode_applies_only_to_next_valid_file():
+    tracker = PendingReviewModeTracker(ttl_seconds=60)
+
+    tracker.request_official_format("user-1", now=10)
+
+    assert tracker.has_official_format("user-1", now=20) is True
+    assert tracker.consume_official_format("user-1", now=20) is True
+    assert tracker.consume_official_format("user-1", now=21) is False
+
+
+def test_pending_review_mode_expires():
+    tracker = PendingReviewModeTracker(ttl_seconds=60)
+    tracker.request_official_format("user-1", now=10)
+
+    assert tracker.has_official_format("user-1", now=71) is False
 
 
 # ============================================================

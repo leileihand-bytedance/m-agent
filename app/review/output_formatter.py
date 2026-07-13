@@ -188,6 +188,12 @@ def _rule_label(rule_id: str) -> str:
         "general-date-range-logic": "时间范围逻辑错误",
         "general-logic-inconsistency": "前后逻辑不一致",
         "general-term-variant": "术语写法",
+        "official-format-page": "公文页面设置",
+        "official-format-title": "公文标题格式",
+        "official-format-heading1": "公文一级标题格式",
+        "official-format-heading2": "公文二级标题格式",
+        "official-format-heading3": "公文三级标题格式",
+        "official-format-body": "公文正文格式",
     }
     return labels.get(rule_id, rule_id)
 

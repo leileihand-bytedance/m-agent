@@ -55,6 +55,7 @@ Pydantic AI Agent
 - `app/platform/app.py`：平台应用服务，把路由、权限、任务记录、runtime 串起来。
 - `app/writing/bot.py`：当前写作 Bot 的真实企业微信入口适配层，已经调用 `PlatformApp`。
 - `app/writing/intake.py`：写作 Bot 的短任务组装层，负责把用户分多条发送的意图、链接、文字和文件组装成一次结构化写作请求。
+- `app/review/main.py`：审核 Bot 独立入口；普通文件按原有内容审核分流，用户明确要求“格式审核”时只把下一份有效 `.docx` 交给确定性公文格式检查器，不把该能力自动接入通用内容审核。
 
 后续新增：
 
