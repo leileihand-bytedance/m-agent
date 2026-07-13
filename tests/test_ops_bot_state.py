@@ -31,6 +31,33 @@ def test_collect_pending_events_skips_already_notified_events(tmp_path):
     assert [event.event_id for event in pending] == [second.event_id]
 
 
+def test_collect_pending_events_does_not_replay_previous_workday_events(tmp_path):
+    logger = OpsEventLogger(tmp_path / "events")
+    friday = logger.record(
+        source="writing_bot",
+        severity="error",
+        subject="写作 Bot 连接断开",
+        detail="old disconnect",
+        created_at=datetime(2026, 7, 10, 15, 0, 0),
+    )
+    monday = logger.record(
+        source="writing_bot",
+        severity="error",
+        subject="写作处理失败",
+        detail="current failure",
+        created_at=datetime(2026, 7, 13, 10, 0, 0),
+    )
+
+    pending = collect_pending_events(
+        events_dir=tmp_path / "events",
+        today=date(2026, 7, 13),
+        state=OpsBotState(notified_event_ids=set(), last_daily_report_for=""),
+    )
+
+    assert friday.event_id not in [event.event_id for event in pending]
+    assert [event.event_id for event in pending] == [monday.event_id]
+
+
 def test_should_send_daily_report_only_after_configured_time():
     state = OpsBotState(notified_event_ids=set(), last_daily_report_for="")
 

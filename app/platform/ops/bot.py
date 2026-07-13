@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import json
 from pathlib import Path
 
@@ -21,14 +21,9 @@ class OpsBotState:
 
 
 def collect_pending_events(*, events_dir: Path, today: date, state: OpsBotState) -> list[OpsEvent]:
-    days = {
-        today,
-        today - timedelta(days=1),
-        previous_workday(today),
-    }
-    events: list[OpsEvent] = []
-    for day in sorted(days):
-        events.extend(read_ops_events(events_dir, day))
+    # 实时通知只处理当天事件。历史事件已进入工作日报，Bot 重启时不再逐条补发，
+    # 避免同一批旧故障在周一或迁移后重新刷屏。
+    events = read_ops_events(events_dir, today)
     return [
         event
         for event in events
