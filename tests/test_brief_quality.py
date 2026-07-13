@@ -9,6 +9,7 @@ from skills.brief_quality import (
     check_brief_subject_name,
     check_brief_title_format,
     check_no_list_style,
+    classify_brief_case_type,
     validate_brief_deterministic,
 )
 
@@ -27,7 +28,10 @@ def test_build_brief_plan_guides_single_source_brief_away_from_news_style():
     )
 
     assert "写作类型：单素材简报" in plan
+    assert "地方政府和监管部门" in plan
+    assert "1000字左右" in plan
     assert "不要沿用新闻稿或通稿写法" in plan
+    assert "简报类型" in plan
     assert "核心主线" in plan
     assert "优先写入数据" in plan
 
@@ -85,3 +89,40 @@ def test_validate_brief_deterministic_collects_multiple_rules():
     assert "title-format" in rules
     assert "brief-subject-name" in rules
     assert "no-list-style" in rules
+
+
+def test_classify_brief_case_type_covers_mechanism_product_and_event_cases():
+    mechanism = classify_brief_case_type(
+        "请根据材料写简报",
+        [
+            {
+                "title": "微众银行全力推动支持小微企业融资协调工作机制走深走实",
+                "text": "我行成立工作专班，围绕融资协调工作机制推进企业触达、授信审批和政策落实。",
+            }
+        ],
+        multi_source=False,
+    )
+    product = classify_brief_case_type(
+        "请根据材料写简报",
+        [
+            {
+                "title": "微众银行推出国内首个小微企业金融健康自测工具",
+                "text": "该工具围绕诊断、建议和评估闭环，为小微企业提供金融健康自测。",
+            }
+        ],
+        multi_source=False,
+    )
+    event = classify_brief_case_type(
+        "请根据材料写简报",
+        [
+            {
+                "title": "微众银行携微众科技亮相香港金融科技周",
+                "text": "我行亮相金融科技周，展示数字员工、AI 应用与金融科技成果。",
+            }
+        ],
+        multi_source=False,
+    )
+
+    assert mechanism["label"] == "机制成果型"
+    assert product["label"] == "产品工具型"
+    assert event["label"] == "活动亮相型"

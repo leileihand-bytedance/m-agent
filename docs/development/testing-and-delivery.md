@@ -130,7 +130,7 @@ python -m pytest tests/test_ops_events.py tests/test_ops_report.py tests/test_op
 至少跑：
 
 ```bash
-python -m pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_platform_pydantic_runtime.py -v
+python -m pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_brief_quality.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_platform_pydantic_runtime.py -v
 ```
 
 如果影响真实效果，再跑 demo。

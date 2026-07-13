@@ -29,18 +29,71 @@ _BUSINESS_THEME_LABELS = {
     "green",
     "inclusive_service",
 }
+_BRIEF_CASE_PROFILES = (
+    {
+        "label": "专项治理型",
+        "keywords": ("黑灰产", "整治", "治理", "风险事件", "投诉", "举报", "震慑"),
+        "guidance": "重点写问题背景、治理动作、协同机制和阶段性成效，压缩案件细节与口号式表态。",
+    },
+    {
+        "label": "平台合作型",
+        "keywords": ("平台", "接入", "上线", "商业数据通", "跨境数据验证", "合作理事会", "新加坡", "香港金管局"),
+        "guidance": "重点写平台定位、合作分工、已落地场景和对区域协同或监管关注点的价值，压缩会议流程。",
+    },
+    {
+        "label": "外部认可型",
+        "keywords": ("获奖", "评级", "认证", "认可", "奖", "铂金级"),
+        "guidance": "把获奖、评级或认证改写成我行在相关领域持续推进并获权威认可，不要只罗列奖项或证书信息。",
+    },
+    {
+        "label": "活动亮相型",
+        "keywords": ("亮相", "活动", "金融科技周", "万里行", "研学", "宣传", "展会", "论坛", "直播", "参观"),
+        "guidance": "重点写活动承载的主题、展示内容、传播效果和后续价值，压缩人物名单、现场流程和会务描写。",
+    },
+    {
+        "label": "标准引领型",
+        "keywords": ("标准", "国际标准", "国家标准", "IEEE", "话语权"),
+        "guidance": "重点写牵头或参与标准的内容、行业影响和对相关领域规范化发展的支撑，不要堆砌标准名称。",
+    },
+    {
+        "label": "能力建设型",
+        "keywords": ("科技管理", "研发", "运维", "数字员工", "Agent", "Copilot", "AI", "人工智能+"),
+        "guidance": "重点写能力建设场景、落地做法、效率提升和可复制经验，避免写成纯技术清单。",
+    },
+    {
+        "label": "机制成果型",
+        "keywords": ("机制", "模式", "协调工作", "走深走实", "协同", "专班", "联动", "担保"),
+        "guidance": "重点写机制为何建立、如何运转、解决什么问题、形成什么成效，是最常见的监管报送简报类型。",
+    },
+    {
+        "label": "产品工具型",
+        "keywords": ("产品", "工具", "自测", "贷款", "小程序", "APP", "诊断", "授信"),
+        "guidance": "重点写服务痛点、产品或工具机制、使用路径和阶段性效果，不要写成产品说明书。",
+    },
+    {
+        "label": "综合成果型",
+        "keywords": ("大文章", "行稳致远", "积极成果", "阶段性成果", "持续提升", "聚力服务", "全面提升"),
+        "guidance": "围绕一个总主题组织2到3个核心板块，分别交代主要动作和数据，适合阶段性盘点类简报。",
+    },
+)
 
 
 def build_brief_plan(instruction: str, materials: list[object], *, multi_source: bool) -> str:
     core_materials = [item for item in materials if isinstance(item, dict)]
+    case_type = classify_brief_case_type(instruction, core_materials, multi_source=multi_source)
     theme = _summarize_theme(instruction, core_materials)
     key_facts = _select_sentences(core_materials, require_number=False, limit=3)
     key_data = _select_sentences(core_materials, require_number=True, limit=2)
     lines = [
         f"写作类型：{'多素材简报' if multi_source else '单素材简报'}",
-        "文体要求：不要沿用新闻稿或通稿写法，要改写为适合内部流转和领导阅读的简报体。",
+        "报送定位：面向深圳市金融办、南山区、前海管理局、深圳人行、深圳金监局等地方政府和监管部门，重点展示微众银行近期动态及成果。",
+        "篇幅要求：正常控制在1000字左右，最长不超过1200字。",
+        "文体要求：不要沿用新闻稿或通稿写法，要改写为正式、克制、可直接报送的地方监管简报体。",
+        f"简报类型：{case_type['label']}",
+        f"类型写法：{case_type['guidance']}",
         f"{'统一主题' if multi_source else '核心主线'}：{theme}",
         f"{'结构要求：围绕一个统一主题组织材料，明确主线与辅线，不能逐条拼接素材。' if multi_source else '结构要求：围绕一个核心主线展开，按背景、做法、成效组织正文，不要写成活动报道。'}",
+        "A类样本共通写法：第一段尽快点明值得报送的近期动态或成果；正文用2到3个核心板块展开，每个板块都要交代动作、机制和阶段性结果；活动、获奖、亮相类题材也要从监管和地方关注的价值切入，而不是堆现场信息。",
         "主体称谓：正文首次出现主体时写“深圳前海微众银行（以下简称“我行”）”，后文统一写“我行”。",
         "补充材料使用方式：政策和微众补充材料只能补背景、口径和关键数据，不能把正文带向用户材料之外的新主线。",
     ]
@@ -56,6 +109,27 @@ def build_brief_plan(instruction: str, materials: list[object], *, multi_source:
         lines.extend(f"- {sentence}" for sentence in key_data)
     lines.append("避免：新闻发布式开头、口号化结尾、逐条拼接素材、列表式正文。")
     return "\n".join(lines)
+
+
+def classify_brief_case_type(
+    instruction: str,
+    materials: list[dict[str, object]],
+    *,
+    multi_source: bool,
+) -> dict[str, str]:
+    merged = _merged_brief_text(instruction, materials)
+    for profile in _BRIEF_CASE_PROFILES:
+        if any(keyword.lower() in merged.lower() for keyword in profile["keywords"]):
+            return {"label": profile["label"], "guidance": profile["guidance"]}
+    if multi_source:
+        return {
+            "label": "综合成果型",
+            "guidance": "围绕一个总主题组织2到3个核心板块，分别交代主要动作和数据，适合阶段性盘点类简报。",
+        }
+    return {
+        "label": "机制成果型",
+        "guidance": "重点写近期动态、具体做法、机制支撑和阶段性成果，避免空泛表态。",
+    }
 
 
 def assess_multi_source_relation(materials: list[object]) -> dict[str, str]:
@@ -229,6 +303,14 @@ def _matched_labels(text: str) -> set[str]:
         if any(keyword.lower() in lowered.lower() for keyword in profile["keywords"])
     }
     return labels
+
+
+def _merged_brief_text(instruction: str, materials: list[dict[str, object]]) -> str:
+    parts = [instruction]
+    for item in materials:
+        parts.append(str(item.get("title", "") or ""))
+        parts.append(_material_text(item))
+    return "\n".join(part for part in parts if part).replace(" ", "")
 
 
 def _summarize_theme(instruction: str, materials: list[dict[str, object]]) -> str:

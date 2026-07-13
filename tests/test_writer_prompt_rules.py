@@ -70,6 +70,11 @@ def test_writer1_prompt_mentions_planning_revision_feedback_and_anti_news_style(
     assert "写作规划" in prompt
     assert "revision_feedback" in prompt
     assert "新闻稿" in prompt + skill
+    assert "地方政府和监管部门" in prompt + skill
+    assert "1000字左右" in prompt + skill
+    assert "机制成果型" in prompt + skill
+    assert "产品工具型" in prompt + skill
+    assert "活动亮相型" in prompt + skill
 
 
 def test_writer2_prompt_mentions_unified_theme_weak_relation_and_revision_feedback():
@@ -80,3 +85,7 @@ def test_writer2_prompt_mentions_unified_theme_weak_relation_and_revision_feedba
     assert "revision_feedback" in prompt
     assert "统一主题" in prompt + skill
     assert "不要强行整合" in prompt + skill or "弱关联" in prompt + skill
+    assert "地方政府和监管部门" in prompt + skill
+    assert "1000字左右" in prompt + skill
+    assert "平台合作型" in prompt + skill
+    assert "外部认可型" in prompt + skill
