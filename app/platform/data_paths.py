@@ -20,6 +20,7 @@ class DataPaths:
     policy_wiki: Path
     chat_logs: Path
     conversations: Path
+    intake: Path
     ops_events: Path
     ops_state: Path
     heartbeats: Path
@@ -48,6 +49,7 @@ class DataPaths:
             policy_wiki=root / "knowledge" / "policy-wiki",
             chat_logs=root / "runtime" / "chat-logs",
             conversations=root / "runtime" / "conversations",
+            intake=root / "runtime" / "intake",
             ops_events=root / "runtime" / "ops" / "events",
             ops_state=root / "runtime" / "ops" / "state.json",
             heartbeats=root / "runtime" / "ops" / "heartbeats",
@@ -66,6 +68,7 @@ class DataPaths:
             self.policy_wiki,
             self.chat_logs,
             self.conversations,
+            self.intake,
             self.ops_events,
             self.ops_state,
             self.heartbeats,
@@ -84,6 +87,7 @@ class DataPaths:
             self.policy_wiki,
             self.chat_logs,
             self.conversations,
+            self.intake,
             self.ops_events,
             self.ops_state.parent,
             self.heartbeats,

@@ -25,7 +25,7 @@ ENTRY_LABELS = {
     "direct_report": "写直报",
 }
 LOCAL_PREVIEW_USER = "local-preview-user"
-SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf"}
+SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf", ".pptx"}
 MAX_PORTAL_REQUEST_BYTES = 20 * 1024 * 1024
 MAX_PORTAL_FILES = 5
 _PUBLIC_ERROR_PREFIXES = (
@@ -347,7 +347,7 @@ def render_compose_page(*, entry_key: str, token: str, error: str = "", submitte
         <div class="grid">
           <label>
             <span class="label-title">上传文件</span>
-            <input type="file" name="files" multiple accept=".docx,.pdf">
+            <input type="file" name="files" multiple accept=".docx,.pdf,.pptx">
           </label>
           <label>
             <span class="label-title">粘贴链接</span>
@@ -363,7 +363,7 @@ def render_compose_page(*, entry_key: str, token: str, error: str = "", submitte
           <textarea name="material_text" placeholder="如果有原文或补充段落，也可以直接粘贴在这里。"></textarea>
         </label>
         <div class="tips">
-          <div>支持上传 Word、PDF，也支持只贴链接或只贴文字素材。</div>
+          <div>支持上传 Word、PDF、PPTX，也支持只贴链接或只贴文字素材。</div>
         </div>
         <button type="submit">提交处理</button>
       </form>
@@ -559,7 +559,7 @@ def _validate_uploaded_files(files: list[UploadedFile]) -> None:
         if Path(item.filename or "").suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES
     ]
     if invalid_names:
-        raise ValueError("暂时只支持上传 Word(.docx) 和 PDF(.pdf) 文件。")
+        raise ValueError("暂时只支持上传 Word(.docx)、PDF(.pdf) 和 PPT(.pptx) 文件。")
 
 
 def _dispatch_in_thread(fn: Callable[..., None], args: tuple[object, ...]) -> None:

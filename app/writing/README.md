@@ -4,7 +4,7 @@
 
 ## 当前身份
 
-这里负责连接企业微信写作 Bot，并把文本、Word/PDF 文件消息和本机素材页提交交给新底座 `PlatformApp`。
+这里负责连接企业微信写作 Bot，并把文本、Word/PDF/PPTX 文件消息和本机素材页提交交给新底座 `PlatformApp`。
 
 当前链路：
 
@@ -22,10 +22,13 @@
 - 用户可直接粘贴文字并选择润色；`rewrite` 当前不接收文件或链接。
 - 如果用户手里有多个素材文档，欢迎语会提示先整合成一个文档再发送，减少处理歧义。
 - 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报分别使用不同话术。
-- 开发者可在本机素材页一次性上传多个 Word/PDF、粘贴链接、补充要求或文字素材。
-- 服务端会拒绝非 `.docx` / `.pdf` 文件，避免“上传成功但实际无法解析”。
+- 开发者可在本机素材页一次性上传多个 Word/PDF/PPTX、粘贴链接、补充要求或文字素材。
+- 服务端会拒绝非 `.docx` / `.pdf` / `.pptx` 文件，避免“上传成功但实际无法解析”。HTML 文件上传暂缓，网页仍通过链接读取。
 - 提交后结果直接返回企业微信对话。
 - 素材入口默认只监听 `127.0.0.1`，企业微信欢迎语不发送入口链接。本地 preview 仅允许回环地址访问；单次请求和企业微信单文件上限均为 20MB。
+- 企业微信待组装文件和会话保存在 `M-Agent-Files/runtime/intake/`，默认 1800 秒有效；写作 Bot 重启后会恢复有效会话，提交、取消或过期后清理。
+- 任务开始后，原文件复制到 `M-Agent-Files/tasks/writing/YYYY/MM/<job_id>/input/`，完整文档解析结果写入同一任务的 `work/documents/`。统一解析器默认安全上限为 50MB，可通过 `M_AGENT_DOCUMENT_MAX_MB` 调整，但入口 20MB 限制仍优先生效。
+- PPTX 在写作链路中只作为文字和结构素材读取；当前不等于已经支持 PPT 视觉审核、版式修改或结果 PPT 回传。
 - 本地预览可直接打开：
 
 ```text
@@ -54,9 +57,11 @@ WRITING_BOT_ID
 WRITING_BOT_SECRET
 M_AGENT_PORTAL_BASE_URL
 M_AGENT_DATA_DIR
+M_AGENT_DOCUMENT_MAX_MB
+M_AGENT_INTAKE_DIR
 ```
 
-`M_AGENT_DATA_DIR` 默认指向项目同级的桌面 `M-Agent-Files/`。用户上传、系统生成、知识库、会话和日志都保存在该目录，`app/writing/` 不得自行新增其他持久化目录。
+`M_AGENT_DATA_DIR` 默认指向项目同级的桌面 `M-Agent-Files/`。用户上传、待组装文件、系统生成、知识库、会话和日志都保存在该目录，`app/writing/` 不得自行新增其他持久化目录。`M_AGENT_INTAKE_DIR` 仅用于明确覆盖待组装目录，正常部署不需要单独配置。
 
 如果后续需要重新启用跨设备素材入口：
 
@@ -81,6 +86,6 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 ## 测试
 
 ```bash
-python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
+python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py -v
 python -m app.writing.bot --check-config
 ```

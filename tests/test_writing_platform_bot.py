@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+import json
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -269,6 +270,7 @@ def test_writing_load_config_uses_single_external_data_root(tmp_path):
     assert config.ops_events_dir == data_root / "runtime" / "ops" / "events"
     assert config.ops_heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"
     assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
+    assert config.intake_dir == data_root / "runtime" / "intake"
 
 
 def test_writing_load_config_defaults_to_local_only_portal(tmp_path, monkeypatch):
@@ -740,6 +742,84 @@ def test_writing_intake_limits_file_count_and_total_bytes():
 
     assert "已收到文件" in first.reply
     assert "最多接收 1 个文件" in second.reply
+
+
+def test_writing_intake_persists_file_and_recovers_after_restart(tmp_path):
+    storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
+    first_store = WritingIntakeStore(storage_dir=storage_dir)
+    first_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="帮我写简报",
+    )
+    first_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=writing_bot.UploadedFile(filename="材料.docx", content=b"persistent-content"),
+    )
+
+    stored_files = list(storage_dir.glob("**/files/*"))
+    assert len(stored_files) == 1
+    assert stored_files[0].read_bytes() == b"persistent-content"
+
+    restarted_store = WritingIntakeStore(storage_dir=storage_dir)
+    decision = restarted_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="开始写",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "writer1"
+    assert decision.files[0].filename == "材料.docx"
+    assert decision.files[0].content == b""
+    assert Path(decision.files[0].stored_path).read_bytes() == b"persistent-content"
+    assert decision.files[0].delete_after_read is True
+
+
+def test_writing_intake_removes_expired_persisted_sessions_on_startup(tmp_path):
+    storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
+    store = WritingIntakeStore(storage_dir=storage_dir, ttl_seconds=60)
+    store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=writing_bot.UploadedFile(filename="材料.docx", content=b"expired-content"),
+    )
+    state_path = next(storage_dir.glob("*/session.json"))
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["updated_at"] = 0
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    WritingIntakeStore(storage_dir=storage_dir, ttl_seconds=60)
+
+    assert list(storage_dir.iterdir()) == []
+
+
+@pytest.mark.anyio
+async def test_structured_run_cleans_persisted_intake_file_after_failure(tmp_path):
+    storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
+    store = WritingIntakeStore(storage_dir=storage_dir)
+    store.handle_text(channel="wecom", sender_userid="user-001", text="帮我写简报")
+    store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=writing_bot.UploadedFile(filename="材料.docx", content=b"pending-content"),
+    )
+    decision = store.handle_text(channel="wecom", sender_userid="user-001", text="开始写")
+    stored_path = Path(decision.files[0].stored_path)
+
+    await writing_bot._run_structured_decision(
+        decision=decision,
+        frame=_frame("开始写"),
+        ws_client=FakeWsClient(),
+        platform_app=FakePlatformApp(error=RuntimeError("model timeout")),
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        sender_userid="user-001",
+        sender_name="test-user",
+        ops_event_logger=None,
+    )
+
+    assert not stored_path.exists()
 
 
 @pytest.mark.anyio

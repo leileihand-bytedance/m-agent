@@ -174,9 +174,12 @@ class PydanticAIWriter:
                 continue
             text = str(item.get("text", "") or "")
             source = str(item.get("source", "") or "")
-            max_text_chars = 12000 if source == "previous_draft" else 2000
-            if len(text) > max_text_chars:
-                text = text[:max_text_chars] + "\n[后文已截断]"
+            if source == "previous_draft":
+                text = _trim_material_text(text, max_chars=12000)
+            elif source == "uploaded_file":
+                text = _trim_material_text(text, max_chars=6000, balanced=True)
+            else:
+                text = _trim_material_text(text, max_chars=2000)
             sections.append(
                 f"【材料{idx}】\n"
                 f"标题：{item.get('title', '')}\n"
@@ -187,3 +190,24 @@ class PydanticAIWriter:
                 f"正文：{text}"
             )
         return "\n\n".join(sections)
+
+
+def _trim_material_text(text: str, *, max_chars: int, balanced: bool = False) -> str:
+    if len(text) <= max_chars:
+        return text
+    if not balanced:
+        return text[:max_chars] + "\n[后文已截断]"
+
+    marker = "\n[长文档已均衡取样，完整解析结果保存在任务 work 目录]\n"
+    budget = max(3, max_chars - len(marker) * 2)
+    head_length = max(1, budget * 2 // 5)
+    middle_length = max(1, budget // 5)
+    tail_length = max(1, budget - head_length - middle_length)
+    middle_start = max(0, (len(text) - middle_length) // 2)
+    return (
+        text[:head_length]
+        + marker
+        + text[middle_start : middle_start + middle_length]
+        + marker
+        + text[-tail_length:]
+    )

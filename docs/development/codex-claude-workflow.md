@@ -21,7 +21,7 @@
 
 ```text
 新增一个“简报写作”skill。
-输入是网页链接或 Word/PDF 文件。
+输入是网页链接或 Word/PDF/PPTX 文件。
 输出包括标题、摘要、正文、来源。
 风格正式、简洁，适合领导阅读。
 请按 direct_report 的结构实现，并补测试。
@@ -159,7 +159,7 @@ handle_text_frame_with_app(frame, app)
 平台测试：
 
 ```bash
-pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
+pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
 ```
 
 底座配置检查：

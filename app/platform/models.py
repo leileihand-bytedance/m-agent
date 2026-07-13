@@ -29,8 +29,28 @@ class RoutedRequest:
 @dataclass(frozen=True)
 class UploadedFile:
     filename: str
-    content: bytes
+    content: bytes = b""
     content_type: str = ""
+    stored_path: str = ""
+    delete_after_read: bool = False
+
+    @property
+    def size_bytes(self) -> int:
+        if self.content:
+            return len(self.content)
+        if self.stored_path:
+            try:
+                return Path(self.stored_path).stat().st_size
+            except OSError:
+                return 0
+        return 0
+
+    def read_bytes(self) -> bytes:
+        if self.content:
+            return self.content
+        if self.stored_path:
+            return Path(self.stored_path).read_bytes()
+        return b""
 
 
 @dataclass(frozen=True)

@@ -55,7 +55,7 @@ python -m pytest tests/test_bot_logging.py tests/test_review_bot.py -v
 验证底座区：
 
 ```bash
-python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
 ```
 
 ### 2. Skill 测试
@@ -115,7 +115,7 @@ docs/development/direct-report-production-test.md
 自动化测试至少运行：
 
 ```bash
-python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 python tests/test_review_bot.py
 ```
 
@@ -202,8 +202,18 @@ python -m pytest tests/test_platform_conversation.py tests/test_platform_intent.
 至少跑：
 
 ```bash
-python -m pytest tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py -v
+python -m pytest tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py -v
 ```
+
+### 修改文件接收或统一文档服务
+
+至少跑：
+
+```bash
+python -m pytest tests/test_platform_document_service.py tests/test_platform_file_readers.py tests/test_platform_data_paths.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+```
+
+重点确认：格式伪造、路径越界、异常压缩包和超限文件被拦截；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 明确记录待 OCR；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
 
 ### 修改 Pydantic AI 执行层
 

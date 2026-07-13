@@ -683,6 +683,7 @@ def test_build_platform_tools_exposes_common_material_readers(tmp_path):
     assert "bank_materials" in tools
     assert "word_reader" in tools
     assert "pdf_reader" in tools
+    assert "document_reader" in tools
     assert "llm_writer" in tools
 
 
@@ -826,6 +827,39 @@ def test_platform_app_rejects_unsupported_uploaded_files(tmp_path):
         raise AssertionError("ValueError was not raised")
 
 
+def test_platform_app_accepts_pptx_and_routes_it_through_document_reader(tmp_path):
+    seen_payloads = []
+    app = PlatformApp(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={
+            "document_reader": lambda path, *, allowed_root, work_dir: {
+                "title": Path(path).name,
+                "text": "PPT 中的经营成果和关键数据。",
+                "path": path,
+                "document_format": "pptx",
+                "artifact_path": str(Path(work_dir) / "documents" / "x" / "document.json"),
+            },
+            "bank_materials": lambda user_instruction, materials, limit=3: [],
+            "policy_research": lambda user_instruction, materials, usage_profile, limit=3: {},
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {"title": "微众银行经营成果简报", "body": "深圳前海微众银行（以下简称“我行”）持续提升服务能力。"},
+        },
+        job_store=JobStore(tmp_path),
+        access_policy=AccessPolicy.allow_all_for_skills(["writer1"]),
+    )
+
+    result = app.handle_structured_request(
+        channel="wecom",
+        sender_userid="user-001",
+        skill_id="writer1",
+        files=[UploadedFile(filename="经营材料.pptx", content=b"pptx-bytes")],
+    )
+
+    assert result.skill_id == "writer1"
+    assert seen_payloads[0]["materials"][0]["document_format"] == "pptx"
+    assert list(tmp_path.glob("**/input/经营材料.pptx"))
+
+
 def test_platform_app_checks_permission_before_saving_uploaded_files(tmp_path):
     jobs_dir = tmp_path / "jobs"
     app = PlatformApp(
@@ -850,6 +884,49 @@ def test_platform_app_checks_permission_before_saving_uploaded_files(tmp_path):
 
     assert result.message == "你没有使用该能力的权限。"
     assert list(jobs_dir.glob("**/input/*")) == []
+
+
+def test_platform_app_moves_persisted_intake_file_into_job_input(tmp_path):
+    pending = tmp_path / "M-Agent-Files" / "runtime" / "intake" / "session" / "files" / "材料.docx"
+    pending.parent.mkdir(parents=True)
+    pending.write_bytes(b"persisted-material")
+    app = PlatformApp(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={
+            "document_reader": lambda path, *, allowed_root, work_dir: {
+                "title": Path(path).name,
+                "text": "持久化文件正文",
+                "path": path,
+            },
+            "bank_materials": lambda user_instruction, materials, limit=3: [],
+            "policy_research": lambda user_instruction, materials, usage_profile, limit=3: {},
+            "llm_writer": lambda payload: {
+                "title": "微众银行简报标题",
+                "body": "深圳前海微众银行（以下简称“我行”）持续提升服务能力。",
+            },
+        },
+        job_store=JobStore(tmp_path / "M-Agent-Files" / "tasks" / "writing"),
+        access_policy=AccessPolicy.allow_all_for_skills(["writer1"]),
+    )
+
+    result = app.handle_structured_request(
+        channel="wecom",
+        sender_userid="user-001",
+        skill_id="writer1",
+        files=[
+            UploadedFile(
+                filename="材料.docx",
+                stored_path=str(pending),
+                delete_after_read=True,
+            )
+        ],
+    )
+
+    assert result.skill_id == "writer1"
+    saved = list((tmp_path / "M-Agent-Files" / "tasks" / "writing").glob("**/input/材料.docx"))
+    assert len(saved) == 1
+    assert saved[0].read_bytes() == b"persisted-material"
+    assert not pending.exists()
 
 
 def test_platform_app_starts_new_rewrite_task_instead_of_revising_active_direct_report(tmp_path):

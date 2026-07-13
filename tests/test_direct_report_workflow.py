@@ -3,7 +3,23 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.tools import ToolGateway
-from skills.direct_report.workflow import run
+from skills.direct_report.workflow import _truncate_material_texts, run
+
+
+def test_direct_report_keeps_head_and_tail_for_long_standard_document_material():
+    materials = [
+        {
+            "title": "长材料.pdf",
+            "text": "开头事实" + "甲" * 3000 + "结尾关键事实",
+            "artifact_path": "/task/work/documents/example/document.json",
+        }
+    ]
+
+    result = _truncate_material_texts(materials, max_length=500)
+
+    assert "开头事实" in result[0]["text"]
+    assert "结尾关键事实" in result[0]["text"]
+    assert "完整解析结果" in result[0]["text"]
 
 
 def test_direct_report_workflow_reads_url_and_returns_draft():
@@ -101,6 +117,36 @@ def test_direct_report_file_read_error_does_not_expose_internal_path_or_exceptio
     assert result.needs_clarification is True
     assert "material.docx" in result.message
     assert "/private/tmp" not in result.message
+
+
+def test_direct_report_asks_for_readable_copy_when_scanned_pdf_has_no_text():
+    gateway = ToolGateway(
+        allowed_tools=("document_reader", "llm_writer"),
+        tools={
+            "document_reader": lambda path, *, allowed_root, work_dir: {
+                "title": "扫描材料.pdf",
+                "text": "",
+                "source": "uploaded_file",
+                "warning_codes": ["ocr_required"],
+            },
+            "llm_writer": lambda payload: (_ for _ in ()).throw(
+                AssertionError("should not write without extracted document text")
+            ),
+        },
+    )
+
+    result = run(
+        inputs={
+            "text": "请写直报",
+            "files": ["/task/input/扫描材料.pdf"],
+            "input_dir": "/task/input",
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is True
+    assert "扫描材料.pdf" in result.message
+    assert "未读到有效正文" in result.message
     assert "failed at" not in result.message
 
 

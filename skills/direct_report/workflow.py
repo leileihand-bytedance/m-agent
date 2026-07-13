@@ -156,7 +156,14 @@ def _truncate_material_texts(materials: list[dict[str, object]], max_length: int
         copied = dict(item)
         text = str(copied.get("text", "") or "")
         if len(text) > max_length:
-            copied["text"] = text[:max_length] + "\n[后文已截断]"
+            if copied.get("artifact_path"):
+                marker = "\n[中间内容已省略，完整解析结果保存在任务 work 目录]\n"
+                available = max(2, max_length - len(marker))
+                head_length = max(1, available * 3 // 5)
+                tail_length = max(1, available - head_length)
+                copied["text"] = text[:head_length] + marker + text[-tail_length:]
+            else:
+                copied["text"] = text[:max_length] + "\n[后文已截断]"
         truncated.append(copied)
     return truncated
 
@@ -180,10 +187,10 @@ def _source_materials(inputs: dict[str, object], tools: ToolGateway) -> tuple[li
         try:
             material = tools.call("web_reader", url)
         except Exception:
-            read_errors.append(f"链接暂时无法读取：{url}。请更换可直接访问的链接，或直接粘贴正文/上传 Word、PDF 文件。")
+            read_errors.append(f"链接暂时无法读取：{url}。请更换可直接访问的链接，或直接粘贴正文/上传 Word、PDF、PPTX 文件。")
             continue
         if not _has_meaningful_web_body(material):
-            read_errors.append(f"链接未读到有效正文：{url}。请更换可直接访问的链接，或直接补充正文/上传 Word、PDF 文件。")
+            read_errors.append(f"链接未读到有效正文：{url}。请更换可直接访问的链接，或直接补充正文/上传 Word、PDF、PPTX 文件。")
             continue
         materials.append(material)
 
@@ -192,10 +199,14 @@ def _source_materials(inputs: dict[str, object], tools: ToolGateway) -> tuple[li
         try:
             material = _read_file_material(file_path=file_path, input_dir=input_dir, tools=tools)
         except Exception:
-            read_errors.append(f"文件暂时无法读取：{Path(file_path).name}。请确认文件未损坏，并重新发送 Word 或 PDF 文件。")
+            read_errors.append(f"文件暂时无法读取：{Path(file_path).name}。请确认文件未损坏，并重新发送 Word、PDF 或 PPTX 文件。")
             continue
-        if material:
+        if material and str(material.get("text", "") or "").strip():
             materials.append(material)
+        else:
+            read_errors.append(
+                f"文件未读到有效正文：{Path(file_path).name}。文件可能是扫描件或内容为空，请重新发送可读取版本，或直接粘贴正文。"
+            )
 
     material_text = str(inputs.get("material_text", "")).strip()
     if material_text:
@@ -252,6 +263,18 @@ def _search_materials(inputs: dict[str, object], tools: ToolGateway) -> list[dic
     return materials
 def _read_file_material(*, file_path: str, input_dir: str, tools: ToolGateway) -> dict[str, object] | None:
     suffix = Path(file_path).suffix.lower()
+    if suffix in {".docx", ".pdf", ".pptx"}:
+        try:
+            return tools.call(
+                "document_reader",
+                file_path,
+                allowed_root=input_dir or str(Path(file_path).parent),
+                work_dir=str(Path(input_dir).parent / "work")
+                if input_dir
+                else str(Path(file_path).parent.parent / "work"),
+            )
+        except (ToolNotAllowedError, KeyError):
+            pass
     if suffix == ".docx":
         return tools.call("word_reader", file_path, allowed_root=input_dir or str(Path(file_path).parent))
     if suffix == ".pdf":

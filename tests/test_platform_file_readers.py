@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.platform.builtin_tools import read_pdf_file, read_word_file  # noqa: E402
+from app.platform.builtin_tools import read_document_file, read_pdf_file, read_word_file  # noqa: E402
 
 
 def test_read_word_file_extracts_docx_text_inside_allowed_root(tmp_path):
@@ -58,3 +58,26 @@ def test_read_pdf_file_rejects_path_outside_allowed_root(tmp_path):
 
     with pytest.raises(ValueError, match="不允许读取当前任务目录之外的文件"):
         read_pdf_file(str(outside), allowed_root=tmp_path, extractor=lambda path: "x")
+
+
+def test_read_document_file_persists_standard_artifact_in_work_dir(tmp_path):
+    pdf_path = tmp_path / "input" / "sample.pdf"
+    pdf_path.parent.mkdir()
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    with pdf_path.open("wb") as stream:
+        writer.write(stream)
+
+    result = read_document_file(
+        str(pdf_path),
+        allowed_root=tmp_path / "input",
+        work_dir=tmp_path / "work",
+    )
+
+    assert result["document_format"] == "pdf"
+    assert result["page_count"] == 1
+    assert result["artifact_path"].endswith("document.json")
+    assert Path(result["artifact_path"]).is_file()
+    assert result["warnings"]

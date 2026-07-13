@@ -26,6 +26,7 @@ class WritingBotConfig:
     policy_db_path: Path
     bank_db_path: Path
     conversation_dir: Path
+    intake_dir: Path | None = None
     model_max_tokens: int = 4096
     direct_report_critic_mode: str = "advisory"
     chat_log_enabled: bool = True
@@ -39,6 +40,7 @@ class WritingBotConfig:
     portal_base_url: str = "http://127.0.0.1:8790"
     portal_token_ttl_seconds: int = 1800
     intake_ttl_seconds: int = 1800
+    document_max_bytes: int = 50 * 1024 * 1024
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -155,6 +157,9 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     user_registry_path = configured_path(
         values, "M_AGENT_USER_REGISTRY_PATH", data_paths.user_registry, project_root=ROOT
     )
+    intake_dir = configured_path(
+        values, "M_AGENT_INTAKE_DIR", data_paths.intake, project_root=ROOT
+    )
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
     portal_host = values.get("M_AGENT_PORTAL_HOST", "127.0.0.1") or "127.0.0.1"
@@ -176,6 +181,7 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         policy_db_path=policy_db_path,
         bank_db_path=bank_db_path,
         conversation_dir=conversation_dir,
+        intake_dir=intake_dir,
         model_max_tokens=model_max_tokens,
         direct_report_critic_mode=normalize_direct_report_critic_mode(
             values.get("M_AGENT_DIRECT_REPORT_CRITIC_MODE")
@@ -191,4 +197,10 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         portal_base_url=portal_base_url,
         portal_token_ttl_seconds=int(values.get("M_AGENT_PORTAL_TOKEN_TTL", "1800") or "1800"),
         intake_ttl_seconds=int(values.get("M_AGENT_WRITING_INTAKE_TTL", "1800") or "1800"),
+        document_max_bytes=max(
+            1,
+            int(values.get("M_AGENT_DOCUMENT_MAX_MB", "50") or "50"),
+        )
+        * 1024
+        * 1024,
     )

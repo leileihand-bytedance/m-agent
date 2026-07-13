@@ -197,6 +197,44 @@ def test_pydantic_writer_keeps_full_previous_draft_material_in_prompt():
     assert "[后文已截断]" not in fake_agent.last_prompt
 
 
+def test_pydantic_writer_balances_long_uploaded_document_material():
+    fake_agent = _FakeAgent(
+        DirectReportResult(
+            title="结构化标题",
+            body="结构化正文",
+            sources=[],
+        )
+    )
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills/direct_report"),
+        agent_factory=lambda model, output_type, instructions, model_settings=None: fake_agent,
+    )
+    long_material = "开头关键事实" + "甲" * 7000 + "中部关键事实" + "乙" * 7000 + "结尾关键事实"
+
+    writer.write(
+        {
+            "task": "direct_report",
+            "instruction": "请写直报",
+            "materials": [
+                {
+                    "title": "长材料.pdf",
+                    "text": long_material,
+                    "source": "uploaded_file",
+                    "content_complete": False,
+                }
+            ],
+        }
+    )
+
+    assert "开头关键事实" in fake_agent.last_prompt
+    assert "中部关键事实" in fake_agent.last_prompt
+    assert "结尾关键事实" in fake_agent.last_prompt
+    assert "长文档已均衡取样" in fake_agent.last_prompt
+
+
 def test_pydantic_writer_instructions_limit_supplementary_material_scope():
     fake_agent = _FakeAgent(
         DirectReportResult(

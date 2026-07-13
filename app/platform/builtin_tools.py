@@ -11,6 +11,8 @@ import urllib.request
 import zipfile
 import xml.etree.ElementTree as ET
 
+from app.platform.documents import DocumentService
+
 
 MAX_WEB_REDIRECTS = 5
 MAX_WEB_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -225,6 +227,22 @@ def read_word_file(path: str, *, allowed_root: str | Path) -> dict[str, str]:
         "title": file_path.name,
         "text": "\n".join(paragraphs)[:12000],
     }
+
+
+def read_document_file(
+    path: str,
+    *,
+    allowed_root: str | Path,
+    work_dir: str | Path,
+    max_file_bytes: int = 50 * 1024 * 1024,
+) -> dict[str, object]:
+    """安全解析任务内 Word/PDF/PPTX，并把完整标准结果写入 work 目录。"""
+    artifact = DocumentService(max_file_bytes=max_file_bytes).parse(
+        path,
+        allowed_root=allowed_root,
+        work_dir=work_dir,
+    )
+    return artifact.to_material()
 
 
 def read_pdf_file(

@@ -235,7 +235,7 @@ python tests/test_review_bot.py
 ## 当前风险
 
 - 企业微信长连接已经完成文本链路验证，但还需要继续扩大经授权链接样本。
-- 当前直报 Bot 的文本、链接及聊天框 Word/PDF 文件消息均已接入；文件仍由 `app/writing/` 适配层下载和组装，再交给新底座处理。
+- 当前直报 Bot 的文本、链接及聊天框 Word/PDF/PPTX 文件消息均已接入；文件由 `app/writing/` 适配层下载和持久化组装，再交给底座统一文档服务处理。PPTX 当前仅作为写作素材读取，不代表已支持 PPT 视觉审核。
 - 当前 direct_report workflow 可把不少于 30 字的纯文本作为直接素材；过短、缺少有效信息的内容会继续追问。
 - 权限文件尚未默认启用；正式测试前应配置 `M_AGENT_PLATFORM_POLICY`。
 - 部分站点在本机环境下无法稳定读取。例如 `www.cet.com.cn` 测试链接 HTTPS 返回 `SSL_ERROR_SYSCALL`，HTTP 返回 `Empty reply from server`。这类问题归为网页读取工具兜底能力不足，不应误判为模型失败。

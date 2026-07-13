@@ -7,8 +7,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
+from pathlib import Path
 import re
+import shutil
 import time
+from uuid import uuid4
 
 from app.platform.models import UploadedFile
 from app.platform.router import URL_RE
@@ -51,11 +56,7 @@ class IntakeDecision:
 
 
 class WritingIntakeStore:
-    """内存态写作任务暂存。
-
-    当前写作 bot 是本机单进程常驻运行，内存态足够支撑“几分钟内连续发几条消息”的场景。
-    后续如果要多进程或重启续写，可以把这个接口替换成 sqlite/redis。
-    """
+    """写作短任务暂存，可选持久化到 M-Agent-Files/runtime/intake。"""
 
     def __init__(
         self,
@@ -63,10 +64,16 @@ class WritingIntakeStore:
         ttl_seconds: int = 1800,
         max_files: int = DEFAULT_MAX_FILES,
         max_total_file_bytes: int = DEFAULT_MAX_TOTAL_FILE_BYTES,
+        storage_dir: str | Path | None = None,
     ):
         self._ttl_seconds = ttl_seconds
         self._max_files = max_files
         self._max_total_file_bytes = max_total_file_bytes
+        self._storage_dir = Path(storage_dir).resolve() if storage_dir else None
+        if self._storage_dir:
+            self._storage_dir.mkdir(parents=True, exist_ok=True)
+            self._storage_dir.chmod(0o700)
+            self._cleanup_expired_sessions()
         self._sessions: dict[tuple[str, str], WritingIntakeSession] = {}
 
     def handle_text(self, *, channel: str, sender_userid: str, text: str) -> IntakeDecision:
@@ -101,11 +108,16 @@ class WritingIntakeStore:
                 session.instructions.append(clean_text)
             session.updated_at = time.time()
             if intent == REWRITE_INTENT:
+                discarded = [item for item in session.materials if item.kind == "file"]
                 session.materials = [item for item in session.materials if item.kind == "text"]
+                for item in discarded:
+                    self._delete_stored_file(item.file)
                 if not session.materials:
+                    self._persist_session(key, session)
                     return IntakeDecision(action="wait", reply=_reply_for_waiting_material(intent))
             if session.materials:
                 return self._build_run_decision(key, session)
+            self._persist_session(key, session)
             return IntakeDecision(
                 action="wait",
                 reply=_reply_for_waiting_material(intent),
@@ -117,6 +129,7 @@ class WritingIntakeStore:
             else:
                 added = _add_text_materials(session, clean_text, urls)
             session.updated_at = time.time()
+            self._persist_session(key, session)
             if session.intent:
                 if session.intent == REWRITE_INTENT and added == 0:
                     return IntakeDecision(action="wait", reply=_reply_for_waiting_material(REWRITE_INTENT))
@@ -130,6 +143,7 @@ class WritingIntakeStore:
 
         session.instructions.append(clean_text)
         session.updated_at = time.time()
+        self._persist_session(key, session)
         return IntakeDecision(
             action="wait",
             reply="已补充要求。可以继续发送材料，发完后回复“开始写”。",
@@ -152,12 +166,14 @@ class WritingIntakeStore:
         limit_message = self.file_limit_message(
             channel=channel,
             sender_userid=sender_userid,
-            incoming_size=len(file.content),
+            incoming_size=file.size_bytes,
         )
         if limit_message:
             return IntakeDecision(action="wait", reply=limit_message)
-        session.materials.append(IntakeMaterial(kind="file", file=file))
+        stored_file = self._persist_uploaded_file(key, file)
+        session.materials.append(IntakeMaterial(kind="file", file=stored_file))
         session.updated_at = time.time()
+        self._persist_session(key, session)
         if session.intent:
             return IntakeDecision(
                 action="wait",
@@ -184,7 +200,7 @@ class WritingIntakeStore:
         if len(file_materials) >= self._max_files:
             return f"每次任务最多接收 {self._max_files} 个文件，请先回复“开始写”处理当前材料。"
         if incoming_size is not None:
-            current_size = sum(len(item.content) for item in file_materials)
+            current_size = sum(item.size_bytes for item in file_materials)
             if incoming_size < 0 or current_size + incoming_size > self._max_total_file_bytes:
                 limit_mb = self._max_total_file_bytes // 1024 // 1024
                 if limit_mb:
@@ -193,14 +209,21 @@ class WritingIntakeStore:
         return ""
 
     def clear(self, *, channel: str, sender_userid: str) -> None:
-        self._sessions.pop((channel, sender_userid), None)
+        key = (channel, sender_userid)
+        self._sessions.pop(key, None)
+        self._remove_persisted_session(key, preserve_files=False)
 
     def _get_active_session(self, key: tuple[str, str]) -> WritingIntakeSession | None:
         session = self._sessions.get(key)
         if session is None:
+            session = self._load_session(key)
+            if session is not None:
+                self._sessions[key] = session
+        if session is None:
             return None
         if time.time() - session.updated_at > self._ttl_seconds:
             self._sessions.pop(key, None)
+            self._remove_persisted_session(key, preserve_files=False)
             return None
         return session
 
@@ -230,6 +253,7 @@ class WritingIntakeStore:
             urls = tuple(item.url for item in session.materials if item.kind == "url" and item.url)
             files = tuple(item.file for item in session.materials if item.kind == "file" and item.file is not None)
         self._sessions.pop(key, None)
+        self._remove_persisted_session(key, preserve_files=True)
         return IntakeDecision(
             action="run",
             skill_id=skill_id,
@@ -239,6 +263,129 @@ class WritingIntakeStore:
             files=files,
             ack_message=f"收到，正在按{_skill_label(skill_id)}流程处理，请稍后……",
         )
+
+    def _persist_uploaded_file(self, key: tuple[str, str], file: UploadedFile) -> UploadedFile:
+        if self._storage_dir is None:
+            return file
+        files_dir = self._session_dir(key) / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = _safe_filename(file.filename)
+        target = files_dir / f"{uuid4().hex[:12]}-{safe_name}"
+        target.write_bytes(file.read_bytes())
+        return UploadedFile(
+            filename=file.filename,
+            content=b"",
+            content_type=file.content_type,
+            stored_path=str(target),
+            delete_after_read=True,
+        )
+
+    def _persist_session(self, key: tuple[str, str], session: WritingIntakeSession) -> None:
+        if self._storage_dir is None:
+            return
+        session_dir = self._session_dir(key)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "channel": key[0],
+            "sender_userid": key[1],
+            "intent": session.intent,
+            "instructions": list(session.instructions),
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "materials": [_material_to_dict(item) for item in session.materials],
+        }
+        temporary = session_dir / "session.json.tmp"
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(session_dir / "session.json")
+
+    def _load_session(self, key: tuple[str, str]) -> WritingIntakeSession | None:
+        if self._storage_dir is None:
+            return None
+        state_path = self._session_dir(key) / "session.json"
+        if not state_path.exists():
+            return None
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            if payload.get("channel") != key[0] or payload.get("sender_userid") != key[1]:
+                raise ValueError("intake session key mismatch")
+            materials = [self._material_from_dict(key, item) for item in payload.get("materials", [])]
+            return WritingIntakeSession(
+                intent=str(payload.get("intent")) if payload.get("intent") else None,
+                materials=[item for item in materials if item is not None],
+                instructions=[str(item) for item in payload.get("instructions", [])],
+                created_at=float(payload.get("created_at", time.time())),
+                updated_at=float(payload.get("updated_at", time.time())),
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            self._remove_persisted_session(key, preserve_files=False)
+            return None
+
+    def _material_from_dict(self, key: tuple[str, str], payload: object) -> IntakeMaterial | None:
+        if not isinstance(payload, dict):
+            return None
+        kind = str(payload.get("kind", ""))
+        if kind == "file":
+            stored_path = Path(str(payload.get("stored_path", ""))).resolve()
+            files_dir = (self._session_dir(key) / "files").resolve()
+            if files_dir not in stored_path.parents or not stored_path.is_file():
+                return None
+            return IntakeMaterial(
+                kind="file",
+                file=UploadedFile(
+                    filename=str(payload.get("filename", "upload")),
+                    content=b"",
+                    content_type=str(payload.get("content_type", "")),
+                    stored_path=str(stored_path),
+                    delete_after_read=True,
+                ),
+            )
+        if kind == "url":
+            return IntakeMaterial(kind="url", url=str(payload.get("url", "")))
+        if kind == "text":
+            return IntakeMaterial(kind="text", text=str(payload.get("text", "")))
+        return None
+
+    def _session_dir(self, key: tuple[str, str]) -> Path:
+        if self._storage_dir is None:
+            raise RuntimeError("intake persistence is disabled")
+        digest = hashlib.sha256(f"{key[0]}\0{key[1]}".encode("utf-8")).hexdigest()[:24]
+        return self._storage_dir / digest
+
+    def _remove_persisted_session(self, key: tuple[str, str], *, preserve_files: bool) -> None:
+        if self._storage_dir is None:
+            return
+        session_dir = self._session_dir(key)
+        (session_dir / "session.json").unlink(missing_ok=True)
+        (session_dir / "session.json.tmp").unlink(missing_ok=True)
+        if not preserve_files:
+            shutil.rmtree(session_dir, ignore_errors=True)
+            return
+        try:
+            session_dir.rmdir()
+        except OSError:
+            pass
+
+    def _cleanup_expired_sessions(self) -> None:
+        if self._storage_dir is None:
+            return
+        now = time.time()
+        for session_dir in self._storage_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            state_path = session_dir / "session.json"
+            try:
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+                updated_at = float(payload.get("updated_at", 0))
+                expired = updated_at <= 0 or now - updated_at > self._ttl_seconds
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                expired = True
+            if expired:
+                shutil.rmtree(session_dir, ignore_errors=True)
+
+    @staticmethod
+    def _delete_stored_file(file: UploadedFile | None) -> None:
+        if file and file.delete_after_read and file.stored_path:
+            Path(file.stored_path).unlink(missing_ok=True)
 
 
 def detect_writing_intent(text: str) -> str | None:
@@ -343,3 +490,26 @@ def _skill_label(skill_id: str) -> str:
         "rewrite": "材料润色",
     }
     return labels.get(skill_id, "写作")
+
+
+def _material_to_dict(material: IntakeMaterial) -> dict[str, object]:
+    if material.kind == "file" and material.file is not None:
+        return {
+            "kind": "file",
+            "filename": material.file.filename,
+            "content_type": material.file.content_type,
+            "stored_path": material.file.stored_path,
+            "size_bytes": material.file.size_bytes,
+        }
+    if material.kind == "url":
+        return {"kind": "url", "url": material.url}
+    return {"kind": "text", "text": material.text}
+
+
+def _safe_filename(filename: str) -> str:
+    candidate = Path(filename or "").name.strip() or "upload.bin"
+    cleaned = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", candidate)
+    cleaned = cleaned.strip("._") or "upload.bin"
+    suffix = Path(cleaned).suffix[:16]
+    stem = Path(cleaned).stem[:160] or "upload"
+    return f"{stem}{suffix}"

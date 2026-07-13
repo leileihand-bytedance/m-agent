@@ -101,6 +101,36 @@ def test_writer1_workflow_returns_clarification_when_url_read_fails():
     assert "链接读取失败" in result.message
 
 
+def test_writer1_workflow_asks_for_readable_copy_when_document_has_no_text():
+    gateway = ToolGateway(
+        allowed_tools=("document_reader", "llm_writer"),
+        tools={
+            "document_reader": lambda path, *, allowed_root, work_dir: {
+                "title": "扫描材料.pdf",
+                "text": "",
+                "source": "uploaded_file",
+                "warning_codes": ["ocr_required"],
+            },
+            "llm_writer": lambda payload: (_ for _ in ()).throw(
+                AssertionError("should not write without extracted document text")
+            ),
+        },
+    )
+
+    result = run_writer1(
+        inputs={
+            "text": "请写简报",
+            "files": ["/task/input/扫描材料.pdf"],
+            "input_dir": "/task/input",
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is True
+    assert "扫描材料.pdf" in result.message
+    assert "未读到有效正文" in result.message
+
+
 def test_writer2_workflow_asks_user_when_one_url_read_fails():
     gateway = ToolGateway(
         allowed_tools=("web_reader", "llm_writer"),

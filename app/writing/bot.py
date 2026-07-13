@@ -18,7 +18,7 @@ from .intake import IntakeDecision, WritingIntakeStore
 from .portal import PortalConfig, PortalService, PortalTokenStore, build_welcome_text, start_portal_server
 
 
-SUPPORTED_WRITING_FILE_SUFFIXES = {".docx", ".pdf"}
+SUPPORTED_WRITING_FILE_SUFFIXES = {".docx", ".pdf", ".pptx"}
 MAX_WRITING_FILE_BYTES = 20 * 1024 * 1024
 
 
@@ -47,6 +47,7 @@ def build_platform_config(config) -> PlatformConfig:
         chat_log_dir=config.chat_log_dir,
         access_policy_path=config.access_policy_path,
         user_registry_path=config.user_registry_path,
+        document_max_bytes=config.document_max_bytes,
     )
 
 
@@ -148,7 +149,6 @@ async def handle_text_with_platform(
                 skill_id=_preview_skill_id(platform_app, sender_userid=sender_userid, content=content.strip()),
             )
         reply = "处理失败，请稍后重试。"
-
     sent = await _reply_stream_safely(
         ws_client,
         frame,
@@ -165,6 +165,19 @@ async def handle_text_with_platform(
             sender_userid=sender_userid,
             sender_name=sender_name,
         )
+
+
+def _cleanup_decision_files(files: tuple[UploadedFile, ...]) -> None:
+    for item in files:
+        if not item.delete_after_read or not item.stored_path:
+            continue
+        source = Path(item.stored_path)
+        source.unlink(missing_ok=True)
+        for directory in (source.parent, source.parent.parent):
+            try:
+                directory.rmdir()
+            except OSError:
+                break
 
 
 async def handle_file_with_platform(
@@ -198,7 +211,7 @@ async def handle_file_with_platform(
             ws_client,
             frame,
             stream_id,
-            "暂时只支持 Word(.docx) 和 PDF(.pdf) 文件。",
+            "暂时只支持 Word(.docx)、PDF(.pdf) 和 PPT(.pptx) 文件。",
             True,
         )
         return
@@ -232,7 +245,7 @@ async def handle_file_with_platform(
                 ws_client,
                 frame,
                 req_id_factory("writing-file-reject"),
-                "暂时只支持 Word(.docx) 和 PDF(.pdf) 文件。",
+                "暂时只支持 Word(.docx)、PDF(.pdf) 和 PPT(.pptx) 文件。",
                 True,
             )
             return
@@ -337,6 +350,8 @@ async def _run_structured_decision(
                 skill_id=decision.skill_id or "",
             )
         reply = "处理失败，请稍后重试。"
+    finally:
+        _cleanup_decision_files(decision.files)
 
     sent = await _reply_stream_safely(
         ws_client,
@@ -532,7 +547,10 @@ async def run_bot(config) -> None:
 
     platform_app = PlatformApp.from_config(build_platform_config(config))
     ops_event_logger = OpsEventLogger(config.ops_events_dir) if config.ops_events_dir else None
-    intake_store = WritingIntakeStore(ttl_seconds=config.intake_ttl_seconds)
+    intake_store = WritingIntakeStore(
+        ttl_seconds=config.intake_ttl_seconds,
+        storage_dir=config.intake_dir,
+    )
     heartbeat_task = None
     if config.ops_heartbeat_dir:
         heartbeat_task = asyncio.create_task(

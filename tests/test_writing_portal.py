@@ -11,6 +11,7 @@ from app.writing.portal import (  # noqa: E402
     _is_loopback_address,
     _parse_multipart_form,
     _public_portal_error,
+    _validate_uploaded_files,
     _validate_request_size,
     build_welcome_text,
     parse_links,
@@ -235,6 +236,12 @@ def test_portal_service_rejects_unsupported_file_before_dispatch():
         raise AssertionError("ValueError was not raised")
 
     assert sent_messages == []
+
+
+def test_portal_accepts_pptx_upload_type():
+    _validate_uploaded_files(
+        [UploadedFile(filename="汇报材料.pptx", content=b"pptx-bytes")]
+    )
 
 
 def test_portal_service_records_ops_event_when_background_processing_fails(tmp_path):

@@ -11,6 +11,7 @@ from app.platform.builtin_tools import (
     policy_materials,
     policy_research,
     policy_search,
+    read_document_file,
     read_pdf_file,
     read_web_page,
     read_word_file,
@@ -29,7 +30,7 @@ from app.platform.runtime import PlatformRuntime
 from app.platform.storage import JobStore
 from app.platform.user_registry import UserRegistry
 
-SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf"}
+SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf", ".pptx"}
 
 
 class PlatformApp:
@@ -549,6 +550,12 @@ def build_platform_tools(config: PlatformConfig) -> dict[str, Callable[..., obje
         ),
         "word_reader": read_word_file,
         "pdf_reader": read_pdf_file,
+        "document_reader": lambda path, *, allowed_root, work_dir: read_document_file(
+            path,
+            allowed_root=allowed_root,
+            work_dir=work_dir,
+            max_file_bytes=config.document_max_bytes,
+        ),
         "llm_writer": writer.write,
     }
 
@@ -559,10 +566,23 @@ def _save_uploaded_files(input_dir: Path, files: list[UploadedFile]) -> list[str
     for item in files:
         target_name = _unique_filename(_sanitize_filename(item.filename), used_names)
         target_path = input_dir / target_name
-        target_path.write_bytes(item.content)
+        target_path.write_bytes(item.read_bytes())
+        _cleanup_consumed_upload(item)
         used_names.add(target_name)
         saved_paths.append(str(target_path))
     return saved_paths
+
+
+def _cleanup_consumed_upload(item: UploadedFile) -> None:
+    if not item.delete_after_read or not item.stored_path:
+        return
+    source = Path(item.stored_path)
+    source.unlink(missing_ok=True)
+    for directory in (source.parent, source.parent.parent):
+        try:
+            directory.rmdir()
+        except OSError:
+            break
 
 
 def _build_revision_instruction(user_request: str) -> str:
@@ -592,7 +612,7 @@ def _validate_uploaded_files(files: list[UploadedFile]) -> None:
         if Path(item.filename or "").suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES
     ]
     if invalid_names:
-        raise ValueError("暂时只支持上传 Word(.docx) 和 PDF(.pdf) 文件。")
+        raise ValueError("暂时只支持上传 Word(.docx)、PDF(.pdf) 和 PPT(.pptx) 文件。")
 
 
 def _sanitize_filename(filename: str) -> str:

@@ -14,6 +14,7 @@ allowed_tools:
   - search
   - word_reader
   - pdf_reader
+  - document_reader
   - llm_writer
 workflow: skills.direct_report.workflow:run
 inputs:

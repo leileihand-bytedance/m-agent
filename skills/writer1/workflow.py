@@ -131,9 +131,15 @@ def _source_materials(inputs: dict[str, object], tools: ToolGateway) -> list[dic
 
     input_dir = str(inputs.get("input_dir", "") or "").strip()
     for file_path in [str(path) for path in list(inputs.get("files") or []) if str(path).strip()]:
-        material = _read_file_material(file_path=file_path, input_dir=input_dir, tools=tools)
-        if material:
+        try:
+            material = _read_file_material(file_path=file_path, input_dir=input_dir, tools=tools)
+        except Exception:
+            materials.append(_file_read_error_material(file_path))
+            continue
+        if material and str(material.get("text", "") or "").strip():
             materials.append(material)
+        else:
+            materials.append(_file_read_error_material(file_path, no_text=True))
 
     material_text = str(inputs.get("material_text", "")).strip()
     if material_text:
@@ -174,7 +180,10 @@ def _missing_material_message(materials: list[dict[str, object]]) -> str:
     ]
     if failed_urls:
         return "链接读取失败，请换一个可访问链接，或直接粘贴素材正文。"
-    return "请发送网页链接、Word/PDF 文件，或直接粘贴需要写成简报的素材。"
+    failed_files = _failed_file_names(materials)
+    if failed_files:
+        return f"文件未读到有效正文：{'、'.join(failed_files)}。文件可能是扫描件、内容为空或已经损坏，请重新发送可读取版本，或直接粘贴正文。"
+    return "请发送网页链接、Word/PDF/PPTX 文件，或直接粘贴需要写成简报的素材。"
 
 
 def _has_read_errors(materials: list[dict[str, object]]) -> bool:
@@ -188,13 +197,17 @@ def _partial_read_error_message(materials: list[dict[str, object]]) -> str:
         if item.get("source") == "read_error" and str(item.get("failed_url", "") or "").strip()
     ]
     readable_count = sum(1 for item in materials if item.get("source") != "read_error")
-    failed_text = "\n".join(f"- {url}" for url in failed_urls)
+    failed_files = _failed_file_names(materials)
+    failed_items = [*failed_urls, *failed_files]
+    failed_text = "\n".join(f"- {item}" for item in failed_items)
+    failure_kind = "链接" if failed_urls and not failed_files else "素材"
+    followup = "粘贴读取失败链接的正文后，再一起写。" if failed_urls and not failed_files else "粘贴未读取内容的正文后，再一起写。"
     return (
-        f"有链接读取失败，当前已读取到 {readable_count} 份素材。\n\n"
-        f"读取失败的链接：\n{failed_text}\n\n"
+        f"有{failure_kind}读取失败，当前已读取到 {readable_count} 份素材。\n\n"
+        f"读取失败的内容：\n{failed_text}\n\n"
         "请回复你的选择：\n"
         "1. 继续使用已读取素材写；\n"
-        "2. 粘贴读取失败链接的正文后，再一起写。"
+        f"2. {followup}"
     )
 
 
@@ -206,6 +219,26 @@ def _read_error_material(*, url: str, error: Exception) -> dict[str, object]:
         "failed_url": url,
         "source": "read_error",
     }
+
+
+def _file_read_error_material(file_path: str, *, no_text: bool = False) -> dict[str, object]:
+    filename = Path(file_path).name
+    reason = "未读到有效正文，可能是扫描件或内容为空" if no_text else "文件损坏、格式不符或解析失败"
+    return {
+        "title": "文件读取失败",
+        "text": f"文件 {filename} {reason}，写作时不能使用该文件内容。",
+        "url": "",
+        "failed_file": filename,
+        "source": "read_error",
+    }
+
+
+def _failed_file_names(materials: list[dict[str, object]]) -> list[str]:
+    return [
+        str(item.get("failed_file", "") or "").strip()
+        for item in materials
+        if item.get("source") == "read_error" and str(item.get("failed_file", "") or "").strip()
+    ]
 
 
 def _policy_materials(
@@ -278,6 +311,18 @@ def _bank_materials(
 
 def _read_file_material(*, file_path: str, input_dir: str, tools: ToolGateway) -> dict[str, object] | None:
     suffix = Path(file_path).suffix.lower()
+    if suffix in {".docx", ".pdf", ".pptx"}:
+        try:
+            return tools.call(
+                "document_reader",
+                file_path,
+                allowed_root=input_dir or str(Path(file_path).parent),
+                work_dir=str(Path(input_dir).parent / "work")
+                if input_dir
+                else str(Path(file_path).parent.parent / "work"),
+            )
+        except (ToolNotAllowedError, KeyError):
+            pass
     if suffix == ".docx":
         return tools.call("word_reader", file_path, allowed_root=input_dir or str(Path(file_path).parent))
     if suffix == ".pdf":

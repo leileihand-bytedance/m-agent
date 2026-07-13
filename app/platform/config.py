@@ -24,6 +24,7 @@ class PlatformConfig:
     chat_log_dir: Path | None = None
     access_policy_path: Path | None = None
     user_registry_path: Path | None = None
+    document_max_bytes: int = 50 * 1024 * 1024
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -125,4 +126,10 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
         chat_log_dir=chat_log_dir,
         access_policy_path=access_policy_path,
         user_registry_path=user_registry_path,
+        document_max_bytes=max(
+            1,
+            int(values.get("M_AGENT_DOCUMENT_MAX_MB", "50") or "50"),
+        )
+        * 1024
+        * 1024,
     )
