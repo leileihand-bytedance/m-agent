@@ -24,11 +24,28 @@ def collect_pending_events(*, events_dir: Path, today: date, state: OpsBotState)
     # 实时通知只处理当天事件。历史事件已进入工作日报，Bot 重启时不再逐条补发，
     # 避免同一批旧故障在周一或迁移后重新刷屏。
     events = read_ops_events(events_dir, today)
-    return [
-        event
+    notified_fingerprints = {
+        _event_fingerprint(event)
         for event in events
-        if event.event_id and event.event_id not in state.notified_event_ids
-    ]
+        if event.event_id in state.notified_event_ids
+    }
+    pending: list[OpsEvent] = []
+    seen_fingerprints = set(notified_fingerprints)
+    for event in events:
+        if not event.event_id or event.event_id in state.notified_event_ids:
+            continue
+        fingerprint = _event_fingerprint(event)
+        if fingerprint in seen_fingerprints:
+            # 同一天内完全相同的事件只提醒一次，其余事件仍保留在日报统计中。
+            state.notified_event_ids.add(event.event_id)
+            continue
+        seen_fingerprints.add(fingerprint)
+        pending.append(event)
+    return pending
+
+
+def _event_fingerprint(event: OpsEvent) -> tuple[str, str, str, str]:
+    return (event.source, event.severity, event.subject, event.detail)
 
 
 def should_send_daily_report(
@@ -91,7 +108,15 @@ def _mark_authenticated(authenticated: asyncio.Event) -> None:
 async def _monitor_events(config: OpsBotConfig, notifier: OpsNotifier, state: OpsBotState) -> None:
     while True:
         today = datetime.now().date()
-        for event in collect_pending_events(events_dir=config.ops_events_dir, today=today, state=state):
+        previous_state_size = len(state.notified_event_ids)
+        pending_events = collect_pending_events(
+            events_dir=config.ops_events_dir,
+            today=today,
+            state=state,
+        )
+        if len(state.notified_event_ids) != previous_state_size:
+            _save_state(config.state_path, state)
+        for event in pending_events:
             sent = await notifier.notify(
                 f"{_severity_label(event.severity)}：{event.subject}",
                 _format_event_detail(event),
