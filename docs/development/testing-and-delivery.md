@@ -50,6 +50,15 @@ python -m pytest tests/test_bot_logging.py tests/test_review_bot.py -v
 
 重点验证按天切换、单文件大小分片、系统日志去重和用户文件句柄上限。
 
+修改本机项目控制台时，至少运行：
+
+```bash
+python -m pytest tests/test_admin_services.py tests/test_admin_server.py -v
+python scripts/project_docs.py check
+```
+
+重点验证 TODO 优先级、Bot 心跳降级、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。
+
 ### 1. 平台单元测试
 
 验证底座区：

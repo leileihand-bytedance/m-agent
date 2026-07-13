@@ -472,6 +472,23 @@ skills/rewrite/
 
 每个 skill 自己负责业务流程、prompt 和结构化 schema，但不能绕过底座权限。
 
+### 16. 本机项目控制台
+
+位置：
+
+```text
+app/admin/services.py
+app/admin/server.py
+```
+
+职责：
+
+- 从 Skill 配置、`TODO.md`、任务目录、知识库、运维心跳和本地 Git 元信息生成项目总览。
+- 展示底座、写作、审核、知识库、入口运维和管理后台六个板块的当前情况、最新提交和首要待办。
+- 保留 Skill 开关、用户权限和最近写作任务摘要管理。
+
+控制台只监听 `127.0.0.1`。Git 查询是代码内固定的只读命令，不接受页面输入、不自动联网；任务和知识库在总览中只统计数量，不读取用户正文。项目状态仍以代码、核心文档和 Git 为唯一事实来源，控制台不维护第二套状态文件。
+
 ## Pydantic AI 在系统里的位置
 
 Pydantic AI 不是可视化平台。它是 Python 代码框架。
@@ -569,7 +586,7 @@ python -m app.platform.demo "帮我根据这个链接写直报：https://..."
   -> 根据材料数量进入 writer1 或 writer2
 ```
 
-该能力目前是本机单进程内存态，默认暂存 1800 秒，可用 `M_AGENT_WRITING_INTAKE_TTL` 调整。它解决的是短任务连续消息场景，不替代 `ConversationStore` 的上一稿改稿能力。
+该能力目前是写作入口内的持久化短任务会话，状态和待组装文件保存在 `M-Agent-Files/runtime/intake/`，默认 1800 秒过期，可用 `M_AGENT_WRITING_INTAKE_TTL` 调整；Bot 重启后可恢复有效会话。它解决的是短任务连续消息场景，不替代 `ConversationStore` 的上一稿改稿能力，跨审核复用仍待下沉为公共接口。
 
 尚未完成：
 

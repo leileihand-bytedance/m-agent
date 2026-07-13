@@ -1,14 +1,19 @@
 from pathlib import Path
+from datetime import datetime
 import json
+import sqlite3
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.admin.services import (  # noqa: E402
     AdminPaths,
+    build_project_overview,
     list_jobs,
     list_policy_users,
+    list_service_health,
     list_skills,
+    list_todos,
     set_skill_enabled,
     set_user_skills,
 )
@@ -127,3 +132,151 @@ def test_list_jobs_reads_recent_job_meta_and_result(tmp_path):
     assert jobs[0].job_id == "20260703-001"
     assert jobs[0].skill_id == "direct_report"
     assert jobs[0].title == "标题"
+
+
+def test_list_todos_parses_fields_and_prioritizes_open_work(tmp_path):
+    todo_path = tmp_path / "TODO.md"
+    todo_path.write_text(
+        """# 待办
+
+### TODO-101：普通优化
+
+状态：未开始
+
+优先级：P2
+
+归属：写作
+
+目标：
+
+- 已完成 v1：搭好基础结构。
+- 待补真实样本回归。
+
+### TODO-102：当前主线
+
+状态：进行中
+
+优先级：P0
+
+归属：审核 / 测试
+
+目标：
+
+- 建立真实样本基线。
+
+### TODO-103：历史任务
+
+状态：已完成
+
+优先级：P1
+
+归属：底座
+""",
+        encoding="utf-8",
+    )
+
+    todos = list_todos(todo_path)
+
+    assert [item.todo_id for item in todos] == ["TODO-102", "TODO-101", "TODO-103"]
+    assert todos[0].title == "当前主线"
+    assert todos[0].owner == "审核 / 测试"
+    assert todos[0].next_action == "建立真实样本基线。"
+    assert todos[1].next_action == "待补真实样本回归。"
+    assert todos[2].is_open is False
+
+
+def test_list_service_health_distinguishes_healthy_stale_and_missing(tmp_path):
+    heartbeat_dir = tmp_path / "heartbeats"
+    heartbeat_dir.mkdir()
+    (heartbeat_dir / "writing_bot.json").write_text(
+        json.dumps({"service": "writing_bot", "updated_at": "2026-07-13 10:00:00"}),
+        encoding="utf-8",
+    )
+    (heartbeat_dir / "review_bot.json").write_text(
+        json.dumps({"service": "review_bot", "updated_at": "2026-07-13 09:50:00"}),
+        encoding="utf-8",
+    )
+
+    services = list_service_health(
+        heartbeat_dir,
+        now=datetime(2026, 7, 13, 10, 2, 0),
+        max_age_seconds=180,
+    )
+
+    assert [(item.service, item.status) for item in services] == [
+        ("writing_bot", "healthy"),
+        ("review_bot", "stale"),
+        ("ops_bot", "missing"),
+    ]
+
+
+def test_list_service_health_treats_malformed_heartbeat_as_missing(tmp_path):
+    heartbeat_dir = tmp_path / "heartbeats"
+    heartbeat_dir.mkdir()
+    (heartbeat_dir / "writing_bot.json").write_text("{incomplete", encoding="utf-8")
+
+    services = list_service_health(heartbeat_dir)
+
+    assert services[0].service == "writing_bot"
+    assert services[0].status == "missing"
+
+
+def test_build_project_overview_uses_runtime_counts_without_reading_content(tmp_path):
+    project_root = tmp_path / "project"
+    skills_dir = project_root / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+    _write_skill(skills_dir, "writer1", enabled=False)
+    todo_path = project_root / "docs" / "development" / "TODO.md"
+    todo_path.parent.mkdir(parents=True)
+    todo_path.write_text(
+        """### TODO-201：审核质量基线
+
+状态：进行中
+
+优先级：P0
+
+归属：审核
+
+目标：
+
+- 固化真实样本。
+""",
+        encoding="utf-8",
+    )
+    writing_job = tmp_path / "data" / "tasks" / "writing" / "2026" / "07" / "job-1"
+    writing_job.mkdir(parents=True)
+    (writing_job / "meta.json").write_text("{}", encoding="utf-8")
+    review_task = tmp_path / "data" / "tasks" / "review" / "2026" / "07" / "review-1"
+    review_task.mkdir(parents=True)
+    (review_task / "meta.json").write_text("{}", encoding="utf-8")
+    policy_db = tmp_path / "data" / "policy.sqlite3"
+    with sqlite3.connect(policy_db) as connection:
+        connection.execute("CREATE TABLE policy_documents (id INTEGER)")
+        connection.executemany("INSERT INTO policy_documents VALUES (?)", [(1,), (2,)])
+    bank_db = tmp_path / "data" / "bank.sqlite3"
+    with sqlite3.connect(bank_db) as connection:
+        connection.execute("CREATE TABLE bank_entries (id INTEGER)")
+        connection.execute("INSERT INTO bank_entries VALUES (1)")
+
+    overview = build_project_overview(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=project_root / "config" / "policy.yaml",
+            jobs_dir=tmp_path / "data" / "tasks" / "writing",
+            project_root=project_root,
+            todo_path=todo_path,
+            review_tasks_dir=tmp_path / "data" / "tasks" / "review",
+            heartbeat_dir=tmp_path / "data" / "heartbeats",
+            policy_db_path=policy_db,
+            bank_db_path=bank_db,
+        )
+    )
+
+    assert overview.enabled_skill_count == 1
+    assert overview.total_skill_count == 2
+    assert overview.open_todo_count == 1
+    assert overview.writing_job_count == 1
+    assert overview.review_task_count == 1
+    assert overview.policy_count == 2
+    assert overview.bank_count == 1
+    assert any(module.name == "审核" and module.next_todo_id == "TODO-201" for module in overview.modules)

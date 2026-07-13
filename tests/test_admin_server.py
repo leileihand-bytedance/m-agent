@@ -75,3 +75,46 @@ def test_render_dashboard_empty_state(tmp_path):
     assert "暂无 Skill" in html
     assert "暂无用户权限配置" in html
     assert "暂无任务记录" in html
+
+
+def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_path):
+    skills_dir = tmp_path / "skills"
+    _write_skill(skills_dir, "direct_report", enabled=True)
+    todo_path = tmp_path / "docs" / "development" / "TODO.md"
+    todo_path.parent.mkdir(parents=True)
+    todo_path.write_text(
+        """### TODO-301：补齐审核质量基线
+
+状态：进行中
+
+优先级：P0
+
+归属：审核
+
+目标：
+
+- 用真实文件回归。
+""",
+        encoding="utf-8",
+    )
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=skills_dir,
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+            todo_path=todo_path,
+            review_tasks_dir=tmp_path / "review",
+            heartbeat_dir=tmp_path / "heartbeats",
+        )
+    )
+
+    assert "项目总览" in html
+    assert "板块进展" in html
+    assert "下一步待办" in html
+    assert "运行状态" in html
+    assert "补齐审核质量基线" in html
+    assert "底座" in html
+    assert "写作" in html
+    assert "审核" in html
