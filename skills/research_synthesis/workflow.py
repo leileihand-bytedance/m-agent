@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from app.platform.tools import ToolGateway
@@ -6,6 +7,8 @@ from skills.writer1.workflow import _has_read_errors, _has_usable_materials, _so
 
 
 OUTLINE_FILENAME_MARKERS = ("提纲", "调研框架", "调查框架", "outline")
+PRIMARY_OUTLINE_STEMS = ("调研提纲", "综合调研提纲", "调研框架", "调查框架", "outline")
+RESPONSE_CONTENT_MARKERS = ("回复：", "回复:", "答复：", "答复:", "反馈内容", "我行", "本部门")
 
 
 def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResult:
@@ -75,9 +78,17 @@ def _select_outline(
         return None, _outline_choice_message(explicitly_named, prefix="说明中同时点到了多份可能的提纲")
 
     candidates = [item for item in materials if _looks_like_outline_filename(_material_name(item))]
+    primary_candidates = [item for item in candidates if _looks_like_primary_outline_filename(_material_name(item))]
+    if len(primary_candidates) == 1:
+        return primary_candidates[0], ""
+    if len(primary_candidates) > 1:
+        return None, _outline_choice_message(primary_candidates, prefix="识别到多份名称明确的调研提纲")
     if len(candidates) == 1:
         return candidates[0], ""
     if len(candidates) > 1:
+        unanswered_candidates = [item for item in candidates if not _contains_response_content(item)]
+        if len(unanswered_candidates) == 1:
+            return unanswered_candidates[0], ""
         return None, _outline_choice_message(candidates, prefix="识别到多份可能的调研提纲")
     return None, _outline_choice_message(materials, prefix="暂时无法确定哪一份是调研提纲")
 
@@ -93,6 +104,16 @@ def _material_named_in_instruction(item: dict[str, object], instruction: str) ->
 def _looks_like_outline_filename(filename: str) -> bool:
     normalized = filename.lower()
     return any(marker in normalized for marker in OUTLINE_FILENAME_MARKERS)
+
+
+def _looks_like_primary_outline_filename(filename: str) -> bool:
+    normalized_stem = re.sub(r"[\s_-]+", "", Path(filename).stem.lower())
+    return normalized_stem in {re.sub(r"[\s_-]+", "", stem) for stem in PRIMARY_OUTLINE_STEMS}
+
+
+def _contains_response_content(item: dict[str, object]) -> bool:
+    text = str(item.get("text") or "")
+    return any(marker in text for marker in RESPONSE_CONTENT_MARKERS)
 
 
 def _outline_choice_message(materials: list[dict[str, object]], *, prefix: str) -> str:

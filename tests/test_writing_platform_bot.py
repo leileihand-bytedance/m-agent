@@ -460,6 +460,93 @@ async def test_handle_text_with_platform_collects_research_synthesis_files_until
     assert [item.filename for item in decision.files] == ["调研提纲.docx", "部门素材.docx"]
 
 
+def test_writing_intake_recognizes_natural_research_summary_wording():
+    intake_store = WritingIntakeStore()
+
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="帮我把下面的调研材料做个汇总",
+    )
+
+    assert decision.action == "wait"
+    assert "调研提纲" in decision.reply
+
+
+@pytest.mark.anyio
+async def test_research_synthesis_clarification_keeps_files_and_followup_resumes(tmp_path):
+    class ClarifyThenSucceedPlatformApp(FakePlatformApp):
+        def handle_structured_request(self, **kwargs) -> PlatformResult:
+            self.structured_calls.append(kwargs)
+            if len(self.structured_calls) == 1:
+                return PlatformResult(
+                    skill_id="research_synthesis",
+                    output={"title": "", "body": "", "sources": []},
+                    needs_clarification=True,
+                    message='请明确回复哪一份是调研提纲，例如“调研提纲.docx 是提纲”。',
+                )
+            return PlatformResult(
+                skill_id="research_synthesis",
+                output={"title": "综合调研材料", "body": "整合正文", "sources": []},
+                needs_clarification=False,
+                message="已完成。",
+            )
+
+    ws_client = FakeWsClient()
+    platform_app = ClarifyThenSucceedPlatformApp(skill_id="research_synthesis")
+    storage_dir = tmp_path / "runtime" / "intake"
+    intake_store = WritingIntakeStore(storage_dir=storage_dir)
+
+    await handle_text_with_platform(
+        frame=_frame("按提纲整合综合调研材料"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-intent",
+        intake_store=intake_store,
+    )
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="调研提纲.docx", content=b"outline"),
+    )
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="部门-调研提纲及回复.docx", content=b"reply"),
+    )
+    stored_files = sorted(storage_dir.glob("**/files/*"))
+
+    await handle_text_with_platform(
+        frame=_frame("开始写"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-start",
+        intake_store=intake_store,
+    )
+
+    assert len(platform_app.structured_calls) == 1
+    assert all(path.exists() for path in stored_files)
+    assert list(storage_dir.glob("*/session.json"))
+
+    await handle_text_with_platform(
+        frame=_frame("调研提纲.docx 是提纲"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-answer",
+        intake_store=intake_store,
+    )
+
+    assert len(platform_app.structured_calls) == 2
+    assert "调研提纲.docx 是提纲" in platform_app.structured_calls[1]["text"]
+    assert [item.filename for item in platform_app.structured_calls[1]["files"]] == [
+        "调研提纲.docx",
+        "部门-调研提纲及回复.docx",
+    ]
+    assert ws_client.stream_replies[-1][2] == "综合调研材料\n\n整合正文"
+    assert not any(path.exists() for path in stored_files)
+    assert not list(storage_dir.glob("*/session.json"))
+
+
 @pytest.mark.anyio
 async def test_handle_text_with_platform_collects_material_before_intent():
     ws_client = FakeWsClient()
@@ -835,6 +922,47 @@ def test_writing_intake_persists_file_and_recovers_after_restart(tmp_path):
     assert decision.files[0].delete_after_read is True
 
 
+def test_writing_intake_recovers_pending_clarification_after_restart(tmp_path):
+    storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
+    first_store = WritingIntakeStore(storage_dir=storage_dir)
+    first_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="按提纲整合综合调研材料",
+    )
+    first_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="调研提纲.docx", content=b"outline"),
+    )
+    first_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="部门-调研提纲及回复.docx", content=b"reply"),
+    )
+    first_store.handle_text(channel="wecom", sender_userid="user-001", text="开始写")
+    first_store.mark_clarification(
+        channel="wecom",
+        sender_userid="user-001",
+        message="请明确哪一份是提纲。",
+    )
+
+    restarted_store = WritingIntakeStore(storage_dir=storage_dir)
+    decision = restarted_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="调研提纲.docx 是提纲",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "research_synthesis"
+    assert "调研提纲.docx 是提纲" in decision.text
+    assert [item.filename for item in decision.files] == [
+        "调研提纲.docx",
+        "部门-调研提纲及回复.docx",
+    ]
+
+
 def test_writing_intake_removes_expired_persisted_sessions_on_startup(tmp_path):
     storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
     store = WritingIntakeStore(storage_dir=storage_dir, ttl_seconds=60)
@@ -875,9 +1003,11 @@ async def test_structured_run_cleans_persisted_intake_file_after_failure(tmp_pat
         sender_userid="user-001",
         sender_name="test-user",
         ops_event_logger=None,
+        intake_store=store,
     )
 
     assert not stored_path.exists()
+    assert not list(storage_dir.glob("*/session.json"))
 
 
 @pytest.mark.anyio

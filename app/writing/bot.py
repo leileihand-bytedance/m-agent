@@ -96,6 +96,7 @@ async def handle_text_with_platform(
                 sender_userid=sender_userid,
                 sender_name=sender_name,
                 ops_event_logger=ops_event_logger,
+                intake_store=intake_store,
             )
             return
 
@@ -304,9 +305,11 @@ async def _run_structured_decision(
     sender_userid: str,
     sender_name: str,
     ops_event_logger: OpsEventLogger | None,
+    intake_store: WritingIntakeStore | None = None,
 ) -> None:
     ack_message = decision.ack_message or "收到，正在按写作流程处理，请稍后……"
     await _reply_stream_safely(ws_client, frame, req_id_factory("writing-platform"), ack_message, True)
+    preserve_files = False
     try:
         print(
             f"写作组装任务开始: user={sender_name}|userid={sender_userid} skill={decision.skill_id or 'none'}",
@@ -327,6 +330,15 @@ async def _run_structured_decision(
             flush=True,
         )
         reply = format_text_reply(result)
+        if result.needs_clarification and intake_store is not None:
+            intake_store.mark_clarification(
+                channel="wecom",
+                sender_userid=sender_userid,
+                message=result.message,
+            )
+            preserve_files = True
+        elif intake_store is not None:
+            intake_store.clear(channel="wecom", sender_userid=sender_userid)
         if ops_event_logger and _is_link_read_failure_result(result):
             _record_ops_event(
                 ops_event_logger,
@@ -350,8 +362,11 @@ async def _run_structured_decision(
                 skill_id=decision.skill_id or "",
             )
         reply = "处理失败，请稍后重试。"
+        if intake_store is not None:
+            intake_store.clear(channel="wecom", sender_userid=sender_userid)
     finally:
-        _cleanup_decision_files(decision.files)
+        if not preserve_files:
+            _cleanup_decision_files(decision.files)
 
     sent = await _reply_stream_safely(
         ws_client,

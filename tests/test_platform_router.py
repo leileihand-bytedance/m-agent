@@ -72,6 +72,15 @@ def test_router_matches_research_synthesis_with_explicit_research_outline_wordin
     assert route.needs_clarification is False
 
 
+def test_router_matches_research_synthesis_for_natural_research_summary_wording():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("帮我把下面的调研材料做个汇总", registry)
+
+    assert route.skill_id == "research_synthesis"
+    assert route.needs_clarification is False
+
+
 def test_router_matches_rewrite_for_inline_text_polish():
     registry = SkillRegistry.from_directory(Path("skills"))
 

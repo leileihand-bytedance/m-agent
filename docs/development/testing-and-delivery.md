@@ -209,7 +209,7 @@ uv run --locked pytest tests/test_direct_report_guardrails.py tests/test_direct_
 uv run --locked pytest tests/test_research_synthesis_workflow.py tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_platform_document_service.py -v
 ```
 
-重点确认：提纲能唯一识别；不按上传顺序猜提纲；只有提纲而没有部门素材时追问；提纲和部门素材角色明确进入模型上下文；文件读取失败时不静默生成；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要用经授权脱敏样本人工检查提纲章节保留、材料归位、重复合并、缺口标记和冲突标记。
+重点确认：自然的“调研材料汇总”说法能进入正确流程；明确总提纲文件名和正文答复特征能排除部门反馈；证据不足时不按上传顺序猜提纲；追问期间原文件保留，用户回答后无需重新上传或再次发送“开始写”即可续跑；只有提纲而没有部门素材时追问；提纲和部门素材角色明确进入模型上下文；文件读取失败时不静默生成；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要用经授权脱敏样本人工检查提纲章节保留、材料归位、重复合并、缺口标记和冲突标记。
 
 写作入口文件数量上限当前为 10 份，总大小上限仍为 20MB。测试必须覆盖前 10 份可接收、第 11 份被拒绝，以及自定义更小上限仍生效。
 

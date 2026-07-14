@@ -40,6 +40,8 @@ class WritingIntakeSession:
     intent: str | None = None
     materials: list[IntakeMaterial] = field(default_factory=list)
     instructions: list[str] = field(default_factory=list)
+    awaiting_clarification: bool = False
+    clarification_message: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -84,6 +86,20 @@ class WritingIntakeStore:
         intent = detect_writing_intent(clean_text)
         urls = extract_urls(clean_text)
         has_material = bool(urls) or looks_like_material_text(clean_text)
+
+        if session is not None and session.awaiting_clarification and clean_text:
+            if has_material:
+                if session.intent == REWRITE_INTENT:
+                    _add_rewrite_text_material(session, clean_text)
+                else:
+                    _add_text_materials(session, clean_text, urls)
+            elif not is_start_signal(clean_text):
+                session.instructions.append(clean_text)
+            session.awaiting_clarification = False
+            session.clarification_message = ""
+            session.updated_at = time.time()
+            self._persist_session(key, session)
+            return self._run_or_ask_more(key, session)
 
         if session is None and intent and has_material:
             return IntakeDecision(action="bypass")
@@ -214,6 +230,22 @@ class WritingIntakeStore:
         self._sessions.pop(key, None)
         self._remove_persisted_session(key, preserve_files=False)
 
+    def mark_clarification(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        message: str,
+    ) -> None:
+        key = (channel, sender_userid)
+        session = self._get_active_session(key)
+        if session is None:
+            return
+        session.awaiting_clarification = True
+        session.clarification_message = message.strip()
+        session.updated_at = time.time()
+        self._persist_session(key, session)
+
     def _get_active_session(self, key: tuple[str, str]) -> WritingIntakeSession | None:
         session = self._sessions.get(key)
         if session is None:
@@ -253,8 +285,6 @@ class WritingIntakeStore:
         else:
             urls = tuple(item.url for item in session.materials if item.kind == "url" and item.url)
             files = tuple(item.file for item in session.materials if item.kind == "file" and item.file is not None)
-        self._sessions.pop(key, None)
-        self._remove_persisted_session(key, preserve_files=True)
         return IntakeDecision(
             action="run",
             skill_id=skill_id,
@@ -291,6 +321,8 @@ class WritingIntakeStore:
             "sender_userid": key[1],
             "intent": session.intent,
             "instructions": list(session.instructions),
+            "awaiting_clarification": session.awaiting_clarification,
+            "clarification_message": session.clarification_message,
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "materials": [_material_to_dict(item) for item in session.materials],
@@ -314,6 +346,8 @@ class WritingIntakeStore:
                 intent=str(payload.get("intent")) if payload.get("intent") else None,
                 materials=[item for item in materials if item is not None],
                 instructions=[str(item) for item in payload.get("instructions", [])],
+                awaiting_clarification=bool(payload.get("awaiting_clarification", False)),
+                clarification_message=str(payload.get("clarification_message", "")),
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )
@@ -390,7 +424,9 @@ class WritingIntakeStore:
 
 
 def detect_writing_intent(text: str) -> str | None:
-    if any(marker in text for marker in ("综合调研", "调研材料整合", "按提纲整合", "按提纲汇总", "按调研提纲整合", "按调研提纲汇总")):
+    if any(marker in text for marker in ("综合调研", "调研材料整合", "调研材料汇总", "调研材料做个汇总", "按提纲整合", "按提纲汇总", "按调研提纲整合", "按调研提纲汇总")):
+        return RESEARCH_SYNTHESIS_INTENT
+    if "调研材料" in text and any(marker in text for marker in ("整合", "汇总")):
         return RESEARCH_SYNTHESIS_INTENT
     if "直报" in text:
         return DIRECT_REPORT_INTENT

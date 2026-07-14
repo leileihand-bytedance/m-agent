@@ -122,6 +122,77 @@ def test_research_synthesis_allows_user_to_name_outline_file(tmp_path):
     assert llm_payload["materials"][0]["title"] == "框架版本.docx"
 
 
+def test_research_synthesis_prefers_exact_outline_filename_over_department_replies(tmp_path):
+    files = [
+        tmp_path / "调研提纲.docx",
+        tmp_path / "个体工商-调研提纲_个体工商金融项目组.docx",
+        tmp_path / "企业风险-调研提纲及反馈内容汇总.docx",
+    ]
+    tools, calls = _gateway(
+        documents={
+            "调研提纲.docx": {
+                "title": "调研提纲.docx",
+                "text": "调研提纲\n一、政策落实情况\n二、存在问题",
+                "source": "uploaded_file",
+            },
+            "个体工商-调研提纲_个体工商金融项目组.docx": {
+                "title": "个体工商-调研提纲_个体工商金融项目组.docx",
+                "text": "调研提纲\n一、政策落实情况\n回复：我行已完成相关工作。",
+                "source": "uploaded_file",
+            },
+            "企业风险-调研提纲及反馈内容汇总.docx": {
+                "title": "企业风险-调研提纲及反馈内容汇总.docx",
+                "text": "调研提纲及反馈内容\n一、政策落实情况\n我行反馈如下。",
+                "source": "uploaded_file",
+            },
+        }
+    )
+
+    result = run(
+        inputs={
+            "text": "请按提纲整合综合调研材料",
+            "files": [str(path) for path in files],
+            "input_dir": str(tmp_path),
+        },
+        tools=tools,
+    )
+
+    assert result.needs_clarification is False
+    llm_payload = next(payload for name, payload in calls if name == "llm_writer")
+    assert llm_payload["materials"][0]["title"] == "调研提纲.docx"
+
+
+def test_research_synthesis_uses_response_content_to_distinguish_outline(tmp_path):
+    files = [tmp_path / "附件1-调研框架.docx", tmp_path / "部门甲-调研提纲.docx"]
+    tools, calls = _gateway(
+        documents={
+            "附件1-调研框架.docx": {
+                "title": "附件1-调研框架.docx",
+                "text": "一、政策落实情况\n二、存在问题",
+                "source": "uploaded_file",
+            },
+            "部门甲-调研提纲.docx": {
+                "title": "部门甲-调研提纲.docx",
+                "text": "一、政策落实情况\n回复：我行已完成相关工作。",
+                "source": "uploaded_file",
+            },
+        }
+    )
+
+    result = run(
+        inputs={
+            "text": "请按提纲整合综合调研材料",
+            "files": [str(path) for path in files],
+            "input_dir": str(tmp_path),
+        },
+        tools=tools,
+    )
+
+    assert result.needs_clarification is False
+    llm_payload = next(payload for name, payload in calls if name == "llm_writer")
+    assert llm_payload["materials"][0]["title"] == "附件1-调研框架.docx"
+
+
 def test_research_synthesis_requires_at_least_one_material_beyond_outline(tmp_path):
     outline = tmp_path / "调研提纲.docx"
     tools, calls = _gateway(
