@@ -310,6 +310,7 @@ async def _run_structured_decision(
     ack_message = decision.ack_message or "收到，正在按写作流程处理，请稍后……"
     await _reply_stream_safely(ws_client, frame, req_id_factory("writing-platform"), ack_message, True)
     preserve_files = False
+    output_file: Path | None = None
     try:
         print(
             f"写作组装任务开始: user={sender_name}|userid={sender_userid} skill={decision.skill_id or 'none'}",
@@ -329,7 +330,8 @@ async def _run_structured_decision(
             f"写作组装任务完成: user={sender_name}|userid={sender_userid} skill={result.skill_id or 'none'} clarification={result.needs_clarification}",
             flush=True,
         )
-        reply = format_text_reply(result)
+        output_file = _result_output_file(result)
+        reply = (result.message or "已生成综合调研 Word 初稿。").strip() if output_file else format_text_reply(result)
         if result.needs_clarification and intake_store is not None:
             intake_store.mark_clarification(
                 channel="wecom",
@@ -384,6 +386,18 @@ async def _run_structured_decision(
             sender_userid=sender_userid,
             sender_name=sender_name,
         )
+    if output_file is not None:
+        file_sent = await _reply_file_safely(ws_client, frame, output_file)
+        if not file_sent and ops_event_logger:
+            _record_ops_event(
+                ops_event_logger,
+                severity="error",
+                subject="写作结果文件发送失败",
+                detail=f"生成结果未能作为企业微信文件发送：{output_file.name}",
+                sender_userid=sender_userid,
+                sender_name=sender_name,
+                skill_id=decision.skill_id or "",
+            )
 
 
 async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, finish: bool) -> bool:
@@ -396,6 +410,41 @@ async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, f
         return True
     except Exception as exc:
         print(f"企业微信回复发送失败:{type(exc).__name__}: {exc}", flush=True)
+        return False
+
+
+def _result_output_file(result: PlatformResult) -> Path | None:
+    if result.needs_clarification or result.skill_id != "research_synthesis":
+        return None
+    raw_path = str(result.output.get("output_file", "") or "").strip()
+    if not raw_path:
+        return None
+    path = Path(raw_path).resolve()
+    if path.suffix.lower() != ".docx" or path.parent.name != "output":
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if not path.is_file() or size <= 0 or size > MAX_WRITING_FILE_BYTES:
+        return None
+    return path
+
+
+async def _reply_file_safely(ws_client, frame, path: Path) -> bool:
+    try:
+        upload_result = await asyncio.wait_for(
+            ws_client.upload_media(path.read_bytes(), type="file", filename=path.name),
+            timeout=60,
+        )
+        media_id = str(upload_result.get("media_id", "") or "")
+        if not media_id:
+            raise ValueError("企业微信上传结果缺少 media_id")
+        await asyncio.wait_for(ws_client.reply_media(frame, "file", media_id), timeout=15)
+        print(f"企业微信结果文件发送成功:{path.name}", flush=True)
+        return True
+    except Exception as exc:
+        print(f"企业微信结果文件发送失败:{type(exc).__name__}: {exc}", flush=True)
         return False
 
 

@@ -22,6 +22,8 @@ class FakeWsClient:
     def __init__(self):
         self.stream_replies = []
         self.sent_messages = []
+        self.uploaded_media = []
+        self.media_replies = []
 
     async def reply_stream(self, frame, stream_id, message, finish):
         self.stream_replies.append((frame, stream_id, message, finish))
@@ -31,6 +33,13 @@ class FakeWsClient:
 
     async def download_file(self, url, aes_key):
         return {"buffer": b"fake docx", "filename": "material.docx"}
+
+    async def upload_media(self, content, *, type, filename):
+        self.uploaded_media.append((content, type, filename))
+        return {"media_id": "media-001"}
+
+    async def reply_media(self, frame, media_type, media_id):
+        self.media_replies.append((frame, media_type, media_id))
 
 
 class FailingFinalReplyWsClient(FakeWsClient):
@@ -1008,6 +1017,40 @@ async def test_structured_run_cleans_persisted_intake_file_after_failure(tmp_pat
 
     assert not stored_path.exists()
     assert not list(storage_dir.glob("*/session.json"))
+
+
+@pytest.mark.anyio
+async def test_structured_research_synthesis_returns_generated_word_file(tmp_path):
+    output_path = tmp_path / "tasks" / "job-001" / "output" / "综合调研材料初稿.docx"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_bytes(b"generated-word")
+    result = PlatformResult(
+        skill_id="research_synthesis",
+        output={
+            "title": "综合调研材料",
+            "body": "一、总体情况\n整合正文",
+            "sources": ["调研提纲.docx", "科技部素材.docx"],
+            "output_file": str(output_path),
+        },
+        needs_clarification=False,
+        message="已生成综合调研 Word 初稿。",
+    )
+    ws_client = FakeWsClient()
+
+    await writing_bot._run_structured_decision(
+        decision=writing_bot.IntakeDecision(action="run", skill_id="research_synthesis"),
+        frame=_frame("开始写"),
+        ws_client=ws_client,
+        platform_app=FakePlatformApp(result=result, skill_id="research_synthesis"),
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        sender_userid="user-001",
+        sender_name="test-user",
+        ops_event_logger=None,
+    )
+
+    assert ws_client.stream_replies[-1][2] == "已生成综合调研 Word 初稿。"
+    assert ws_client.uploaded_media == [(b"generated-word", "file", "综合调研材料初稿.docx")]
+    assert ws_client.media_replies[-1][1:] == ("file", "media-001")
 
 
 @pytest.mark.anyio

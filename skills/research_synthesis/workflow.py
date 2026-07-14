@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 from app.platform.tools import ToolGateway
+from skills.research_synthesis.docx_output import write_research_synthesis_docx
 from skills.research_synthesis.schema import ResearchSynthesisResult
 from skills.writer1.workflow import _has_read_errors, _has_usable_materials, _source_materials
 
@@ -33,7 +34,14 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
 
     ordered_materials = [
         {**outline, "material_role": "outline"},
-        *[{**item, "material_role": "source"} for item in source_materials],
+        *[
+            {
+                **item,
+                "material_role": "source",
+                "source_label": _source_label(item),
+            }
+            for item in source_materials
+        ],
     ]
     source_names = _material_names(ordered_materials)
     draft = tools.call(
@@ -58,12 +66,22 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
             needs_clarification=True,
             message=str(draft.get("message", "") or "请补充模型指出的缺失材料后再整合。"),
         )
+    output_file = ""
+    if str(inputs.get("output_dir", "") or "").strip():
+        output_file = str(
+            write_research_synthesis_docx(
+                title=title,
+                body=body,
+                output_dir=str(inputs["output_dir"]),
+            )
+        )
     return ResearchSynthesisResult(
         title=title,
         body=body,
         sources=source_names,
         needs_clarification=False,
-        message=str(draft.get("message", "") or "已按现成提纲完成综合调研材料初稿。"),
+        message=str(draft.get("message", "") or "已生成综合调研 Word 初稿。"),
+        output_file=output_file,
     )
 
 
@@ -124,14 +142,34 @@ def _outline_choice_message(materials: list[dict[str, object]], *, prefix: str) 
 
 def _planning_note(outline: dict[str, object], sources: list[dict[str, object]]) -> str:
     source_names = "、".join(_material_names(sources))
+    source_labels = "、".join(_source_label(item) for item in sources)
+    reminders = _image_reminders(sources)
+    image_note = (
+        "图片提醒（必须原样放在对应材料所支撑的正文位置）：\n" + "\n".join(reminders) + "\n"
+        if reminders
+        else "本次未检测到需要保留的图片提醒。\n"
+    )
     return (
         f"调研提纲：{_material_name(outline)}\n"
         f"部门素材：{source_names}\n"
+        f"部门来源标签：{source_labels}\n"
         "严格保留提纲层级、顺序和章节名称，不自行另起结构。\n"
         "逐章归集部门素材；重复事实合并，来源口径冲突时在对应位置标注“【口径待确认】”。\n"
         "提纲章节没有材料支撑时保留该章节并标注“【材料待补充】”，不得用空话或虚构事实填满。\n"
-        "第一版以忠实整合为目标，只做必要的衔接和去重，不进行宣传化润色。"
+        "第一版以忠实整合为目标，只做必要的衔接和去重，不进行宣传化润色。\n"
+        "第一步保留部门来源标签，归并后的事实段落继续使用“【来源：部门来源标签】”，方便用户回溯；不要输出本机路径。\n"
+        "不要读取、描述或猜测图片内容，也不要把图片插入汇总稿；只保留下列人工评估提醒。\n"
+        f"{image_note}"
+        "不要撰写报告开头和结尾；Word 生成阶段会在开头和末尾加入待用户补充的备注。"
     )
+
+
+def _image_reminders(materials: list[dict[str, object]]) -> list[str]:
+    reminders: list[str] = []
+    pattern = re.compile(r"【提醒：[^】]*素材含图片，请评估是否需要】")
+    for item in materials:
+        reminders.extend(pattern.findall(str(item.get("text") or "")))
+    return reminders
 
 
 def _failed_material_names(materials: list[dict[str, object]]) -> list[str]:
@@ -156,6 +194,14 @@ def _material_names(materials: list[dict[str, object]]) -> list[str]:
 
 def _material_name(item: dict[str, object]) -> str:
     return str(item.get("title") or item.get("failed_file") or "未命名材料").strip()
+
+
+def _source_label(item: dict[str, object]) -> str:
+    stem = Path(_material_name(item)).stem.strip()
+    department_matches = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,20}部", stem)
+    if department_matches:
+        return department_matches[-1]
+    return re.sub(r"(?:素材|材料)$", "", stem) or stem or "未命名部门"
 
 
 def _clarification(message: str) -> ResearchSynthesisResult:

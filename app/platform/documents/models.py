@@ -79,6 +79,7 @@ class DocumentArtifact:
             "content_complete": complete,
             "warnings": [warning.message for warning in self.warnings],
             "warning_codes": [warning.code for warning in self.warnings],
+            "asset_count": len(self.assets),
         }
 
 
@@ -104,12 +105,25 @@ def _sample_blocks(
         round(index * (len(nonempty) - 1) / max(1, target_count - 1))
         for index in range(target_count)
     }
+    indices.update(
+        index
+        for index, block in enumerate(nonempty)
+        if block.kind == "image_reminder"
+    )
     selected = [nonempty[index] for index in sorted(indices)]
-    per_block = max(32, budget // max(1, len(selected)))
-    snippets = [
-        f"[{block.location}] {block.text.strip()[:per_block]}"
-        for block in selected
-    ]
+    required = [block for block in selected if block.kind == "image_reminder"]
+    regular = [block for block in selected if block.kind != "image_reminder"]
+    location_cost = sum(len(block.location) + 3 for block in selected)
+    required_text_cost = sum(len(block.text.strip()) for block in required)
+    separator_cost = max(0, len(selected) - 1) * 2
+    regular_budget = max(1, budget - location_cost - required_text_cost - separator_cost)
+    per_regular_block = max(1, regular_budget // max(1, len(regular)))
+    snippets = []
+    for block in selected:
+        text = block.text.strip()
+        if block.kind != "image_reminder":
+            text = text[:per_regular_block]
+        snippets.append(f"[{block.location}] {text}")
     midpoint = max(1, len(snippets) // 2)
     sampled = "\n\n".join(snippets[:midpoint]) + marker + "\n\n".join(snippets[midpoint:])
     return sampled[:max_chars], False

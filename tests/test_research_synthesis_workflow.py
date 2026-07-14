@@ -1,5 +1,9 @@
 from pathlib import Path
+import zipfile
 
+from docx import Document
+
+from app.review.official_format_checker import review_official_format
 from app.platform.tools import ToolGateway
 from skills.research_synthesis.schema import ResearchSynthesisResult
 from skills.research_synthesis.workflow import run
@@ -97,6 +101,71 @@ def test_research_synthesis_uses_named_outline_and_preserves_material_roles(tmp_
     assert llm_payload["materials"][0]["material_role"] == "outline"
     assert [item["material_role"] for item in llm_payload["materials"][1:]] == ["source", "source"]
     assert "严格保留提纲层级、顺序和章节名称" in llm_payload["planning_note"]
+    assert llm_payload["materials"][1]["source_label"] == "科技部"
+    assert "保留部门来源标签" in llm_payload["planning_note"]
+
+
+def test_research_synthesis_creates_official_format_word_with_notes_and_no_images(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    files = [input_dir / "调研提纲.docx", input_dir / "科技部素材.docx"]
+    reminder = "【提醒：科技部素材含图片，请评估是否需要】"
+    tools, calls = _gateway(
+        documents={
+            "调研提纲.docx": {
+                "title": "调研提纲.docx",
+                "text": "一、总体情况\n（一）主要做法\n1.具体情况",
+                "source": "uploaded_file",
+            },
+            "科技部素材.docx": {
+                "title": "科技部素材.docx",
+                "text": f"已完成系统建设。\n{reminder}\n后续持续优化。",
+                "source": "uploaded_file",
+                "warning_codes": ["embedded_image_unread"],
+            },
+        },
+        draft={
+            "title": "关于数字化转型工作的综合调研材料",
+            "body": (
+                "一、总体情况\n"
+                "（一）主要做法\n"
+                "1.具体情况\n"
+                f"科技部已完成系统建设。【来源：科技部素材】\n{reminder}"
+            ),
+            "sources": [],
+            "needs_clarification": False,
+            "message": "",
+        },
+    )
+
+    result = run(
+        inputs={
+            "text": "请按提纲整合",
+            "files": [str(path) for path in files],
+            "input_dir": str(input_dir),
+            "output_dir": str(output_dir),
+        },
+        tools=tools,
+    )
+
+    output_path = Path(result.output_file)
+    assert output_path.exists()
+    assert output_path.parent == output_dir
+    assert output_path.suffix == ".docx"
+    document = Document(output_path)
+    paragraphs = [paragraph.text for paragraph in document.paragraphs]
+    assert paragraphs[0] == "关于数字化转型工作的综合调研材料"
+    assert paragraphs[1] == "【备注：请根据实际报送对象和通知要求补充报告开头。】"
+    assert "科技部已完成系统建设。【来源：科技部素材】" in paragraphs
+    assert reminder in paragraphs
+    assert paragraphs[-1] == "【备注：请根据实际报送要求补充报告结尾、附件、联系人、落款和日期。】"
+    with zipfile.ZipFile(output_path) as archive:
+        assert not any(name.startswith("word/media/") for name in archive.namelist())
+    assert review_official_format(output_path, output_path.name).findings == []
+    llm_payload = next(payload for name, payload in calls if name == "llm_writer")
+    assert reminder in llm_payload["planning_note"]
+    assert "不要撰写报告开头和结尾" in llm_payload["planning_note"]
 
 
 def test_research_synthesis_allows_user_to_name_outline_file(tmp_path):

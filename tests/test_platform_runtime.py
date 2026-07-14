@@ -1,10 +1,14 @@
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.registry import SkillRegistry
+from app.platform.models import RoutedRequest
 from app.platform.router import route_message
 from app.platform.runtime import PlatformRuntime
+from skills.research_synthesis.schema import ResearchSynthesisResult
 
 
 def test_runtime_executes_routed_direct_report_skill():
@@ -42,3 +46,56 @@ def test_runtime_returns_clarification_for_unknown_route():
     assert result.skill_id is None
     assert result.needs_clarification is True
     assert "写直报" in result.message
+
+
+def test_runtime_preserves_generated_output_file(monkeypatch, tmp_path):
+    output_path = tmp_path / "output" / "综合调研材料初稿.docx"
+    output_path.parent.mkdir()
+    output_path.write_bytes(b"word")
+    monkeypatch.setattr(
+        "skills.research_synthesis.workflow.run",
+        lambda inputs, tools: ResearchSynthesisResult(
+            title="综合调研材料",
+            body="一、总体情况\n正文",
+            sources=["调研提纲.docx", "科技部素材.docx"],
+            message="已生成综合调研 Word 初稿。",
+            output_file=str(output_path),
+        ),
+    )
+    runtime = PlatformRuntime(registry=SkillRegistry.from_directory(Path("skills")), tools={})
+
+    result = runtime.run(
+        RoutedRequest(
+            skill_id="research_synthesis",
+            confidence=1.0,
+            needs_clarification=False,
+            message="",
+            inputs={"output_dir": str(output_path.parent)},
+        )
+    )
+
+    assert result.output["output_file"] == str(output_path)
+
+
+def test_runtime_rejects_generated_output_file_outside_job_output(monkeypatch, tmp_path):
+    unsafe_path = tmp_path / "outside" / "综合调研材料初稿.docx"
+    monkeypatch.setattr(
+        "skills.research_synthesis.workflow.run",
+        lambda inputs, tools: ResearchSynthesisResult(
+            title="综合调研材料",
+            body="正文",
+            output_file=str(unsafe_path),
+        ),
+    )
+    runtime = PlatformRuntime(registry=SkillRegistry.from_directory(Path("skills")), tools={})
+
+    with pytest.raises(ValueError, match="当前任务 output 目录"):
+        runtime.run(
+            RoutedRequest(
+                skill_id="research_synthesis",
+                confidence=1.0,
+                needs_clarification=False,
+                message="",
+                inputs={"output_dir": str(tmp_path / "job" / "output")},
+            )
+        )

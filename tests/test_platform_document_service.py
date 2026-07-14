@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 import json
 from pathlib import Path
 import zipfile
 
 import pytest
 from docx import Document
+from docx.shared import Inches
 from pypdf import PdfWriter
 
 from app.platform.documents import (
@@ -25,6 +28,13 @@ def _make_docx(path: Path) -> None:
     section = document.sections[0]
     section.header.paragraphs[0].text = "页眉文字"
     document.save(path)
+
+
+def _tiny_png() -> BytesIO:
+    payload = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    return BytesIO(payload)
 
 
 def _make_blank_pdf(path: Path, pages: int = 2) -> None:
@@ -74,6 +84,31 @@ def test_document_service_parses_docx_and_persists_complete_artifact(tmp_path):
     assert payload["format"] == "docx"
     assert payload["full_text"] == artifact.full_text
     assert payload["source"]["original_name"] == "材料.docx"
+
+
+def test_document_service_marks_embedded_docx_images_at_original_position(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "科技部素材.docx"
+    document = Document()
+    document.add_paragraph("图片前的事实。")
+    image_paragraph = document.add_paragraph()
+    image_paragraph.add_run().add_picture(_tiny_png(), width=Inches(0.1))
+    document.add_paragraph("图片后的事实。")
+    document.save(path)
+
+    artifact = DocumentService().parse(path, allowed_root=input_dir, work_dir=tmp_path / "work")
+
+    reminder = "【提醒：科技部素材含图片，请评估是否需要】"
+    assert reminder in artifact.full_text
+    assert artifact.full_text.index("图片前的事实") < artifact.full_text.index(reminder)
+    assert artifact.full_text.index(reminder) < artifact.full_text.index("图片后的事实")
+    assert len(artifact.assets) == 1
+    assert Path(artifact.assets[0].path).exists()
+    assert {warning.code for warning in artifact.warnings} == {"embedded_image_unread"}
+    material = artifact.to_material()
+    assert material["asset_count"] == 1
+    assert material["warning_codes"] == ["embedded_image_unread"]
 
 
 def test_document_service_marks_textless_pdf_pages_for_ocr(tmp_path):
@@ -205,3 +240,21 @@ def test_prompt_material_samples_across_long_document_instead_of_prefix_only(tmp
     assert "第30段" in material["text"]
     assert "中间内容已按位置抽样" in material["text"]
     assert Path(str(material["artifact_path"])).is_relative_to(tmp_path / "work")
+
+
+def test_long_docx_material_sampling_never_drops_image_reminder(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "科技部素材.docx"
+    document = Document()
+    for index in range(1, 41):
+        document.add_paragraph(f"第{index}段-" + str(index) * 80)
+        if index == 13:
+            image_paragraph = document.add_paragraph()
+            image_paragraph.add_run().add_picture(_tiny_png(), width=Inches(0.1))
+    document.save(path)
+
+    artifact = DocumentService().parse(path, allowed_root=input_dir, work_dir=tmp_path / "work")
+    material = artifact.to_material(max_chars=1200)
+
+    assert "【提醒：科技部素材含图片，请评估是否需要】" in material["text"]
