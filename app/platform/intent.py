@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 import re
 
-from app.platform.router import URL_RE
+from app.platform.router import URL_RE, looks_like_inline_rewrite_task
 
 
 class ConversationIntent(str, Enum):
@@ -184,7 +184,7 @@ def _looks_like_revision_request(text: str) -> bool:
 
 
 def _looks_like_explicit_new_task_request(text: str) -> bool:
-    if _looks_like_inline_rewrite_task(text):
+    if looks_like_inline_rewrite_task(text):
         return True
     if URL_RE.search(text):
         return True
@@ -193,23 +193,6 @@ def _looks_like_explicit_new_task_request(text: str) -> bool:
     ):
         return True
     return text.startswith(("帮我写", "请帮我写", "请写"))
-
-
-def _looks_like_inline_rewrite_task(text: str) -> bool:
-    if not any(marker in text for marker in ("润色", "改写", "优化", "更正式", "更简洁", "口语化", "顺一下")):
-        return False
-    if not any(marker in text for marker in ("这段", "下面", "以下", "原文", "文字", "这句话")):
-        return False
-    separators = ["：", ":"]
-    for separator in separators:
-        if separator not in text:
-            continue
-        _, content = text.split(separator, 1)
-        if len(content.strip()) >= 8:
-            return True
-    return "\n\n" in text
-
-
 def _looks_like_neutral_message(text: str) -> bool:
     if len(text) > 12:
         return False

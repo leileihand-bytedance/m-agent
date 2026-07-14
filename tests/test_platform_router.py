@@ -70,3 +70,15 @@ def test_router_matches_rewrite_for_inline_text_without_word_ruse():
 
     assert route.skill_id == "rewrite"
     assert route.needs_clarification is False
+
+
+def test_router_matches_rewrite_when_material_comes_before_request():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message(
+        "这是一段新的材料文字，不要沿着上一稿继续改。\n\n帮我整体润色一下",
+        registry,
+    )
+
+    assert route.skill_id == "rewrite"
+    assert route.needs_clarification is False

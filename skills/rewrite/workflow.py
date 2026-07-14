@@ -77,6 +77,11 @@ def _resolve_source_and_request(inputs: dict[str, object]) -> tuple[str, str]:
         request = blank_line_split[0].strip()
         source_text = blank_line_split[1].strip()
         return source_text, request
+    if len(blank_line_split) == 2 and _looks_like_instruction(blank_line_split[1]):
+        source_text = blank_line_split[0].strip()
+        request = blank_line_split[1].strip()
+        if len(source_text) >= 8:
+            return source_text, request
 
     colon_index = _find_instruction_separator(text)
     if colon_index >= 0:

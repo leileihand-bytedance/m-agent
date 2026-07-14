@@ -44,6 +44,36 @@ def test_rewrite_workflow_asks_for_source_text_when_missing():
     assert "原文" in result.message
 
 
+def test_rewrite_workflow_accepts_material_before_request():
+    seen_payloads = []
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {
+                "title": "",
+                "body": "润色后的正文内容。",
+                "revision_note": "我按新贴原文做了整体润色。",
+            },
+        },
+    )
+
+    result = run(
+        inputs={
+            "text": (
+                "县域经济作为国民经济的基本单元，是国家推动乡村振兴的重要切入点。"
+                "微众银行持续完善县域金融服务供给。\n\n帮我整体润色一下"
+            )
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert result.body == "润色后的正文内容。"
+    assert seen_payloads[0]["instruction"] == "帮我整体润色一下"
+    assert "县域经济作为国民经济的基本单元" in seen_payloads[0]["materials"][0]["text"]
+
+
 def test_rewrite_workflow_revises_previous_result():
     seen_payloads = []
     gateway = ToolGateway(

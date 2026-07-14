@@ -977,3 +977,55 @@ def test_platform_app_starts_new_rewrite_task_instead_of_revising_active_direct_
     assert rewrite_payload.get("revision") is not True
     assert rewrite_payload["materials"][0]["source"] == "user_text"
     assert "这个表述现在有点口语化" in rewrite_payload["materials"][0]["text"]
+
+
+def test_platform_app_starts_new_rewrite_task_when_material_precedes_request(tmp_path):
+    seen_payloads = []
+    app = PlatformApp(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={
+            "web_reader": lambda url: {
+                "title": "网页标题",
+                "text": "网页正文，包含可供简报写作的核心事实。",
+                "url": url,
+            },
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or (
+                {
+                    "title": "微众银行简报标题",
+                    "body": "深圳前海微众银行（以下简称“我行”）持续提升服务能力。",
+                }
+                if payload.get("task") != "rewrite"
+                else {
+                    "title": "",
+                    "body": "这是润色后的新正文。",
+                    "revision_note": "我按新的原文重新做了润色，没有沿用上一稿。",
+                }
+            ),
+        },
+        job_store=JobStore(tmp_path / "jobs"),
+        conversation_store=ConversationStore(tmp_path / "conversations"),
+        access_policy=AccessPolicy.allow_all_for_skills(["writer1", "rewrite"]),
+    )
+
+    first = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="帮我根据这个链接写简报：https://example.com/news",
+    )
+    second = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text=(
+            "县域经济作为国民经济的基本单元，是国家推动乡村振兴的重要切入点。"
+            "微众银行持续完善县域金融服务供给。\n\n帮我整体润色一下"
+        ),
+    )
+
+    assert first.skill_id == "writer1"
+    assert second.skill_id == "rewrite"
+    assert second.output["body"] == "这是润色后的新正文。"
+    rewrite_payload = next(payload for payload in seen_payloads if payload.get("task") == "rewrite")
+    assert rewrite_payload.get("revision") is not True
+    assert rewrite_payload["materials"][0]["source"] == "user_text"
+    assert "县域经济作为国民经济的基本单元" in rewrite_payload["materials"][0]["text"]

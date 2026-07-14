@@ -63,6 +63,31 @@ def test_classifies_inline_formalize_request_with_new_text_as_new_task():
     assert intent == ConversationIntent.NEW_TASK
 
 
+def test_classifies_rewrite_request_after_new_material_as_new_task():
+    intent = classify_conversation_intent(
+        text="这是一段新的材料文字，不要沿着上一稿继续改。\n\n帮我整体润色一下",
+        has_active_conversation=True,
+        route_skill_id="rewrite",
+        route_needs_clarification=False,
+    )
+
+    assert intent == ConversationIntent.NEW_TASK
+
+
+def test_classifies_realistic_polish_request_after_pasted_material_as_new_task():
+    intent = classify_conversation_intent(
+        text=(
+            "县域经济作为国民经济的基本单元，是国家推动乡村振兴的重要切入点。"
+            "微众银行持续完善县域金融服务供给。\n\n帮我整体润色一下"
+        ),
+        has_active_conversation=True,
+        route_skill_id="rewrite",
+        route_needs_clarification=False,
+    )
+
+    assert intent == ConversationIntent.NEW_TASK
+
+
 def test_classifies_thanks_as_clarify_even_with_active_conversation():
     intent = classify_conversation_intent(
         text="谢谢，我先看看",
