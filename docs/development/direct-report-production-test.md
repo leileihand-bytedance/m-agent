@@ -101,7 +101,7 @@ config/platform-policy.example.yaml
 先运行：
 
 ```bash
-python -m app.writing.bot --check-config
+uv run --locked python -m app.writing.bot --check-config
 ```
 
 通过标准：
@@ -115,7 +115,7 @@ python -m app.writing.bot --check-config
 再运行自动化测试：
 
 ```bash
-pytest tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py -v
+uv run --locked pytest tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py -v
 ```
 
 通过标准：
@@ -125,13 +125,13 @@ pytest tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_
 ## 启动命令
 
 ```bash
-python -m app.writing.bot
+uv run --locked python -m app.writing.bot
 ```
 
 建议正式测试时把输出保存到日志，例如：
 
 ```bash
-python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
+uv run --locked python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
 ```
 
 ## 企业微信测试用例
@@ -156,7 +156,7 @@ python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
 
 前提：
 
-- 本机已启动 `python -m app.writing.bot`
+- 本机已启动 `uv run --locked python -m app.writing.bot`
 - `--check-config` 输出中能看到 `素材入口`
 
 操作：
@@ -229,7 +229,7 @@ python -m app.writing.bot 2>&1 | tee logs/direct-report-bot.log
 7. 旧审核 Bot 测试仍通过：
 
 ```bash
-python tests/test_review_bot.py
+uv run --locked python tests/test_review_bot.py
 ```
 
 ## 当前风险

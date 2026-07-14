@@ -37,7 +37,7 @@ M-Agent 本机管理后台。
 ## 启动
 
 ```bash
-python -m app.admin.server --port 8787
+uv run --locked python -m app.admin.server --port 8787
 ```
 
 打开：
@@ -49,5 +49,5 @@ http://127.0.0.1:8787
 ## 测试
 
 ```bash
-pytest tests/test_admin_services.py tests/test_admin_server.py -v
+uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -v
 ```

@@ -42,6 +42,9 @@ def test_core_document_gate_recognizes_versioned_document_changes():
 
 def test_document_gate_covers_dependencies_hooks_and_relevant_module_docs():
     assert requires_core_document_change(["app/requirements.txt"])
+    assert requires_core_document_change(["pyproject.toml"])
+    assert requires_core_document_change(["uv.lock"])
+    assert requires_core_document_change([".python-version"])
     assert requires_core_document_change([".githooks/pre-commit"])
 
     assert documentation_sync_errors(
@@ -63,6 +66,9 @@ def test_document_gate_covers_dependencies_hooks_and_relevant_module_docs():
     assert documentation_sync_errors(
         ["app/requirements.txt", "docs/development/testing-and-delivery.md"]
     ) == []
+    assert documentation_sync_errors(
+        ["pyproject.toml", "docs/development/testing-and-delivery.md"]
+    ) == []
 
 
 def test_git_sync_status_reports_ahead_behind_and_synced_states():
@@ -72,14 +78,25 @@ def test_git_sync_status_reports_ahead_behind_and_synced_states():
     assert "远端有 2 个新提交" in build_sync_status_message(behind=2, ahead=0)
 
 
+def test_change_area_classifies_uv_environment_files():
+    assert classify_changed_areas(
+        (".python-version", "pyproject.toml", "uv.lock")
+    ) == ("依赖与交付",)
+
+
 def test_git_hooks_remind_after_commit_and_validate_before_push():
+    pre_commit = (ROOT / ".githooks/pre-commit").read_text(encoding="utf-8")
     post_commit = (ROOT / ".githooks/post-commit").read_text(encoding="utf-8")
     pre_push = ROOT / ".githooks/pre-push"
 
+    assert "uv run --locked python" in pre_commit
+    assert "uv run --locked python" in post_commit
     assert "check-sync --warn-only" in post_commit
     assert pre_push.exists()
-    assert "project_docs.py check" in pre_push.read_text(encoding="utf-8")
-    assert "M_AGENT_MANAGED_PUSH" in pre_push.read_text(encoding="utf-8")
+    pre_push_text = pre_push.read_text(encoding="utf-8")
+    assert "uv run --locked python" in pre_push_text
+    assert "project_docs.py check" in pre_push_text
+    assert "M_AGENT_MANAGED_PUSH" in pre_push_text
 
 
 def test_push_record_describes_changes_and_is_idempotent(tmp_path: Path):

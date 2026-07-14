@@ -17,6 +17,20 @@ M-Agent 的目标是让用户通过一个企业微信入口，自然表达需求
 系统：识别为 review -> 调用审核 skill
 ```
 
+## Python 运行基线
+
+M-Agent 的底座、skills、写作 Bot、审核 Bot、运维 Bot 和管理后台共用同一套项目环境：
+
+```text
+uv 管理的 CPython 3.13.14
+  -> 项目根目录 .venv
+  -> pyproject.toml 声明直接依赖
+  -> uv.lock 固定全部依赖版本
+  -> uv run --locked 启动所有入口
+```
+
+这套环境与终端默认的 pyenv、Homebrew Python 和 macOS Python 隔离。`.env` 仍只保存模型和 Bot 配置，与存放 Python 依赖的 `.venv` 无关。Pydantic AI 的 Anthropic 和 OpenAI 兼容通道都已作为正式依赖声明，避免依赖全局环境中碰巧存在的包。
+
 ## 架构总览
 
 ```text
@@ -322,7 +336,7 @@ app/platform/ops/
 职责：
 
 - 写作 Bot 和审核 Bot 在运行异常时写入本地运维事件日志。
-- 独立运维 Bot 通过 `python -m app.platform.ops.bot` 长期运行。
+- 独立运维 Bot 通过 `uv run --locked python -m app.platform.ops.bot` 长期运行。
 - 运维 Bot 使用独立企业微信机器人凭证，不依赖写作 Bot 或审核 Bot 的长连接。
 - 运维 Bot 轮询当天的 `ops_events`，把未通知过的异常和提醒发送给管理员。
 - 实时通知不回看昨天或前一个工作日，避免 Bot 重启、周一启动或运行数据迁移后逐条补发历史告警；历史事件统一进入工作日报。
@@ -542,7 +556,7 @@ shell
 已验证链路：
 
 ```text
-python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 ```
 
 执行过程：

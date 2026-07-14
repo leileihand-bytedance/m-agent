@@ -542,7 +542,7 @@ async def run_bot(config) -> None:
         from wecom_aibot_sdk import WSClient, generate_req_id
     except ImportError as exc:
         raise RuntimeError(
-            "缺少依赖 wecom-aibot-sdk。请先安装：pip install wecom-aibot-sdk"
+            "缺少依赖 wecom-aibot-sdk。请在项目根目录运行：uv sync --locked"
         ) from exc
 
     platform_app = PlatformApp.from_config(build_platform_config(config))

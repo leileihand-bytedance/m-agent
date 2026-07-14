@@ -35,7 +35,7 @@ tests/test_direct_report_quality_regression.py
 运行：
 
 ```bash
-python -m pytest tests/test_direct_report_quality_regression.py -q
+uv run --locked pytest tests/test_direct_report_quality_regression.py -q
 ```
 
 ## 自动化测试不覆盖什么

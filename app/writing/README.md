@@ -86,6 +86,6 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 ## 测试
 
 ```bash
-python -m pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py -v
-python -m app.writing.bot --check-config
+uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py -v
+uv run --locked python -m app.writing.bot --check-config
 ```

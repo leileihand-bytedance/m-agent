@@ -965,7 +965,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         from wecom_aibot_sdk import WSClient, generate_req_id
     except ImportError as exc:
         raise RuntimeError(
-            "缺少依赖 wecom-aibot-sdk。请先安装:python -m pip install -r app/requirements.txt"
+            "缺少依赖 wecom-aibot-sdk。请在项目根目录运行：uv sync --locked"
         ) from exc
 
     global _pending_queue

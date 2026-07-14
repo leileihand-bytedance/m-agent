@@ -74,7 +74,7 @@
 ## 本地更新
 
 ```bash
-python -m app.policy_knowledge.cli update
+uv run --locked python -m app.policy_knowledge.cli update
 ```
 
 这是建议的每周更新入口，默认执行：
@@ -92,8 +92,8 @@ python -m app.policy_knowledge.cli update
 如需分别调试数据源，可单独运行：
 
 ```bash
-python -m app.policy_knowledge.cli update-nfra --days 92 --max-pages 8
-python -m app.policy_knowledge.cli update-govcn --max-pages 1 --page-size 10
+uv run --locked python -m app.policy_knowledge.cli update-nfra --days 92 --max-pages 8
+uv run --locked python -m app.policy_knowledge.cli update-govcn --max-pages 1 --page-size 10
 ```
 
 说明：
@@ -108,11 +108,11 @@ python -m app.policy_knowledge.cli update-govcn --max-pages 1 --page-size 10
 ## 本地检索
 
 ```bash
-python -m app.policy_knowledge.cli search "小微企业金融服务" --limit 3
-python -m app.policy_knowledge.cli search "小微企业金融服务" --limit 3 --category policy_original
-python -m app.policy_knowledge.cli search "人工智能 银行业保险业" --limit 3
-python -m app.policy_knowledge.cli search "促进消费 实体经济" --limit 3
-python -m app.policy_knowledge.cli search "未来产业 人工智能" --limit 3
+uv run --locked python -m app.policy_knowledge.cli search "小微企业金融服务" --limit 3
+uv run --locked python -m app.policy_knowledge.cli search "小微企业金融服务" --limit 3 --category policy_original
+uv run --locked python -m app.policy_knowledge.cli search "人工智能 银行业保险业" --limit 3
+uv run --locked python -m app.policy_knowledge.cli search "促进消费 实体经济" --limit 3
+uv run --locked python -m app.policy_knowledge.cli search "未来产业 人工智能" --limit 3
 ```
 
 平台内置工具名：
@@ -248,7 +248,7 @@ writer1 / writer2：
 
 ## 后续增强
 
-1. 增加每周一次的自动更新任务，建议固定在周一运行 `python -m app.policy_knowledge.cli update`。
+1. 增加每周一次的自动更新任务，建议固定在周一运行 `uv run --locked python -m app.policy_knowledge.cli update`。
 2. 增加管理后台里的政策库数据管理页，支持查看、筛选、勾选删除和自动备份。
 3. 增加管理后台里的“更新政策库 / 查看数据源 / 开关政策库”。
 4. 增加更细的标签：小微、普惠、数字金融、科技金融、人工智能、消保、风险防控、广东/深圳等。

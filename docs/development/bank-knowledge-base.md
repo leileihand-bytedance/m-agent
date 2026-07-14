@@ -96,31 +96,31 @@ bank_search
 导入一个本地文件夹：
 
 ```bash
-python -m app.bank_knowledge.cli import-folder "/path/to/authorized-bank-knowledge"
+uv run --locked python -m app.bank_knowledge.cli import-folder "/path/to/authorized-bank-knowledge"
 ```
 
 检索小微企业/微业贷：
 
 ```bash
-python -m app.bank_knowledge.cli search "小微企业 微业贷 普惠金融" --limit 5
+uv run --locked python -m app.bank_knowledge.cli search "小微企业 微业贷 普惠金融" --limit 5
 ```
 
 检索人工智能：
 
 ```bash
-python -m app.bank_knowledge.cli search "人工智能 大模型 智能体 数字员工" --limit 5
+uv run --locked python -m app.bank_knowledge.cli search "人工智能 大模型 智能体 数字员工" --limit 5
 ```
 
 检索国补商户/促消费：
 
 ```bash
-python -m app.bank_knowledge.cli search "国补商户 促消费 以旧换新" --limit 5
+uv run --locked python -m app.bank_knowledge.cli search "国补商户 促消费 以旧换新" --limit 5
 ```
 
-如果本机 Python 缺少 PDF 解析库，请先按 `app/requirements.txt` 安装项目依赖，再执行导入。不要把个人运行时路径写入项目文档。
+如果提示缺少 PDF 解析库，请先在项目根目录运行 `uv sync --locked`，再执行导入。不要使用全局 `pip` 补装，也不要把个人运行时路径写入项目文档。
 
 ```bash
-python -m app.bank_knowledge.cli import-folder "/path/to/authorized-bank-knowledge"
+uv run --locked python -m app.bank_knowledge.cli import-folder "/path/to/authorized-bank-knowledge"
 ```
 
 ## Skill 接入状态

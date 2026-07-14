@@ -1,6 +1,6 @@
 #!/bin/sh
-python3 scripts/project_docs.py check || exit 1
+uv run --locked python scripts/project_docs.py check || exit 1
 if [ "${M_AGENT_MANAGED_PUSH:-}" != "1" ]; then
-  echo "请使用 python3 scripts/project_docs.py push --summary \"本次改动说明\"，确保推送成功后同步记录 STATUS-REPORT.md。" >&2
+  echo "请使用 uv run --locked python scripts/project_docs.py push --summary \"本次改动说明\"，确保推送成功后同步记录 STATUS-REPORT.md。" >&2
   exit 1
 fi

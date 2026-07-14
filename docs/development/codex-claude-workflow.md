@@ -15,6 +15,27 @@
 验收标准是什么：
 ```
 
+## 统一开发环境
+
+Codex 和 Claude Code 进入项目后先运行：
+
+```bash
+uv sync --locked
+```
+
+之后所有代码、测试、脚本和 Bot 使用 `uv run --locked ...`。不要根据当前终端里的 `python`、`python3`、`pip` 或 `pytest` 猜测项目环境，也不要把依赖装进 pyenv、Homebrew 或 macOS Python。
+
+环境事实来源固定为：
+
+```text
+.python-version  # Python 3.13.14
+pyproject.toml   # 直接依赖声明
+uv.lock          # 全部依赖准确版本
+.venv/           # 本机独立环境，不进入 Git
+```
+
+依赖变更必须同时更新 `pyproject.toml` 和 `uv.lock`，并运行完整自动化回归；不要恢复已删除的 `app/requirements*.txt` 形成第二套依赖来源。
+
 ## 新增 Skill 的标准流程
 
 示例需求：
@@ -111,7 +132,7 @@ llm_writer
 接企业微信前，必须先保证本地 demo 可用：
 
 ```bash
-python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 ```
 
 企业微信统一入口应放在：
@@ -159,25 +180,25 @@ handle_text_frame_with_app(frame, app)
 平台测试：
 
 ```bash
-pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
 ```
 
 底座配置检查：
 
 ```bash
-python -m app.platform.cli --check-config
+uv run --locked python -m app.platform.cli --check-config
 ```
 
 旧审核 Bot 存档测试：
 
 ```bash
-python tests/test_review_bot.py
+uv run --locked python tests/test_review_bot.py
 ```
 
 真实本地 demo：
 
 ```bash
-python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 ```
 
 真实 demo 需要：
@@ -198,15 +219,15 @@ python -m app.platform.demo "帮我根据这个链接写直报：https://..."
 3. 是否跑过相关测试。
 4. 是否更新了文档。
 5. 是否没有输出或提交密钥。
-6. 是否运行了 `python scripts/project_docs.py check`。
+6. 是否运行了 `uv run --locked python scripts/project_docs.py check`。
 7. 是否确认 `STATUS-REPORT.md`、`config/platform-policy.yaml`、真实用户材料和本机路径没有进入暂存区。
-8. 是否已按逻辑创建提交，并使用 `python scripts/project_docs.py push --summary "本次做了什么改动"` 完成受管推送。
-9. 是否已在本机 `STATUS-REPORT.md` 自动生成本次“Git 推送”记录，且 `python scripts/project_docs.py check-sync` 显示本地与远端同步。
+8. 是否已按逻辑创建提交，并使用 `uv run --locked python scripts/project_docs.py push --summary "本次做了什么改动"` 完成受管推送。
+9. 是否已在本机 `STATUS-REPORT.md` 自动生成本次“Git 推送”记录，且 `uv run --locked python scripts/project_docs.py check-sync` 显示本地与远端同步。
 
 首次克隆后运行：
 
 ```bash
-python scripts/project_docs.py install-hooks
+uv run --locked python scripts/project_docs.py install-hooks
 ```
 
 pre-commit hook 会读取暂存区版本，检查 TODO 编号和状态、本机文件/路径，并按模块要求代码、依赖、hooks、配置同步对应核心文档；无关计划文档不能充当核心文档。post-commit hook 会把本地提交摘要写入 `STATUS-REPORT.md` 并提醒未推送提交；pre-push hook 会再次检查文档并拒绝直接 `git push`。受管推送成功后再追加独立的“Git 推送”记录。行为已变化但核心文档未同步，或本地提交尚未推送且没有说明时，不允许交付。

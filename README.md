@@ -33,37 +33,53 @@ docs/archive/  # 历史方案，不作为新开发依据
 archive/inactive-2026-07-04/ # 已归档停滞模块，不作为开发入口
 ```
 
+## Python 环境
+
+M-Agent 统一使用 uv 管理的 Python 3.13.14 和项目根目录 `.venv`。首次拉取项目或依赖发生变化后，在项目根目录运行：
+
+```bash
+uv sync --locked
+```
+
+项目依赖以 `pyproject.toml` 为声明、以 `uv.lock` 为准确版本记录。不要使用系统 `python` 或全局 `pip` 给 M-Agent 安装依赖；开发、测试和 Bot 均通过 `uv run --locked ...` 启动。
+
+检查实际解释器：
+
+```bash
+uv run --locked python -c "import sys; print(sys.executable); print(sys.version)"
+```
+
 ## 常用入口
 
 检查新底座配置：
 
 ```bash
-python -m app.platform.cli --check-config
+uv run --locked python -m app.platform.cli --check-config
 ```
 
 本地测试一条消息：
 
 ```bash
-python -m app.platform.demo "帮我根据这个链接写直报：https://example.com"
+uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://example.com"
 ```
 
 检查直报 Bot 配置：
 
 ```bash
-python -m app.writing.bot --check-config
+uv run --locked python -m app.writing.bot --check-config
 ```
 
 启动本机管理后台：
 
 ```bash
-python -m app.admin.server --port 8787
+uv run --locked python -m app.admin.server --port 8787
 ```
 
 旧审核 Bot：
 
 ```bash
-python -m app.review.main --check-config
-python -m app.review.main
+uv run --locked python -m app.review.main --check-config
+uv run --locked python -m app.review.main
 ```
 
 ## 开发前阅读
@@ -79,23 +95,23 @@ python -m app.review.main
 平台和直报入口：
 
 ```bash
-python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
 ```
 
 管理后台：
 
 ```bash
-python -m pytest tests/test_admin_services.py tests/test_admin_server.py -v
+uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -v
 ```
 
 旧审核入口保护：
 
 ```bash
-python tests/test_review_bot.py
+uv run --locked python tests/test_review_bot.py
 ```
 
 全仓回归：
 
 ```bash
-python -m pytest tests -q
+uv run --locked pytest tests -q
 ```

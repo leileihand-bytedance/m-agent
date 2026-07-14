@@ -11,6 +11,8 @@ STATUS-REPORT.md              # 本机自动开发日志，不进入 Git
 docs/development/README.md    # 总指南和文档地图
 ```
 
+项目运行环境已统一为 uv 管理的 Python 3.13.14、根目录 `.venv` 和 `uv.lock`；这是已完成的交付基线，不作为待办重复维护。所有后续待办的测试和脚本都使用 `uv run --locked ...`。
+
 规则：
 
 1. 新增待办时，优先写入本文档，不要只写在聊天记录、状态报告或零散文档里。
@@ -872,5 +874,5 @@ AI 工具新增待办时，应先判断：
 1. 将本文档中对应状态改为 `已完成`，并简要写明完成日期和验证方式。
 2. 更新相关模块文档和 Git 提交说明。
 3. 如涉及代码，补充或更新测试。
-4. 运行 `python scripts/project_docs.py check`。
+4. 运行 `uv run --locked python scripts/project_docs.py check`。
 5. 清理临时脚本、缓存和临时输出；本机 `STATUS-REPORT.md` 由 post-commit hook 自动记录安全摘要。

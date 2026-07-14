@@ -29,7 +29,7 @@
 ## 启动
 
 ```bash
-python -m app.admin.server --port 8787
+uv run --locked python -m app.admin.server --port 8787
 ```
 
 打开：
@@ -252,7 +252,7 @@ skills/<skill_id>/
 管理后台相关测试：
 
 ```bash
-pytest tests/test_admin_services.py tests/test_admin_server.py -v
+uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -v
 ```
 
 测试至少覆盖：
@@ -277,5 +277,5 @@ pytest tests/test_admin_services.py tests/test_admin_server.py -v
 涉及底座联动时再跑：
 
 ```bash
-pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_writing_platform_bot.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_writing_platform_bot.py -v
 ```

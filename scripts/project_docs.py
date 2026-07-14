@@ -38,6 +38,11 @@ CORE_DOCUMENTS = {
 SOURCE_SUFFIXES = (".py", ".yaml", ".yml", ".json", ".env", ".txt")
 MAC_HOME_PREFIX = "/" + "Users" + "/"
 CHANGE_AREA_RULES = (
+    (
+        "依赖与交付",
+        lambda path: path in {".python-version", "pyproject.toml", "uv.lock"}
+        or path.startswith("app/requirements"),
+    ),
     ("运维", lambda path: path.startswith("app/platform/ops/")),
     ("底座", lambda path: path.startswith("app/platform/") and not path.startswith("app/platform/ops/")),
     ("写作入口", lambda path: path.startswith("app/writing/")),
@@ -151,6 +156,7 @@ def documentation_sync_errors(paths: Iterable[str]) -> list[str]:
         any(
             path.startswith(("scripts/", ".githooks/"))
             or path.startswith("app/requirements")
+            or path in {"pyproject.toml", "uv.lock", ".python-version"}
             for path in behavior_paths
         ),
         {
@@ -203,6 +209,8 @@ def documentation_sync_errors(paths: Iterable[str]) -> list[str]:
 
 def _is_behavior_change(path: str) -> bool:
     normalized = path.replace("\\", "/")
+    if normalized in {"pyproject.toml", "uv.lock", ".python-version"}:
+        return True
     if normalized.startswith(("app/", "skills/", "scripts/", "config/")):
         return normalized.endswith(SOURCE_SUFFIXES) or normalized.startswith("app/requirements")
     return normalized.startswith(".githooks/")

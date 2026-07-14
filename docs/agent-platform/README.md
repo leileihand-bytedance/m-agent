@@ -40,12 +40,14 @@ app/writing/    # 写作 Bot
 底座区推荐采用：
 
 ```text
-Python
+uv 管理的 Python 3.13.14 和项目独立 .venv
 + Pydantic AI
 + MCP / 现成工具
 + 文件化 Skill Registry
 + 后续按需引入 LangGraph
 ```
+
+项目依赖由 `pyproject.toml` 声明、`uv.lock` 锁定，所有底座入口统一通过 `uv run --locked ...` 启动。这样写作、审核、运维和管理后台不会因为终端默认 Python 或其他项目升级依赖而发生变化。
 
 ### Pydantic AI 的角色
 

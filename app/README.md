@@ -74,21 +74,23 @@ archive/inactive-2026-07-04/
 新底座入口优先使用：
 
 ```bash
-python -m app.platform.cli --check-config
-python -m app.platform.demo "帮我根据这个链接写直报：https://..."
-python -m app.writing.bot --check-config
+uv run --locked python -m app.platform.cli --check-config
+uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+uv run --locked python -m app.writing.bot --check-config
 ```
+
+以上入口统一使用项目根目录 `.venv`。首次运行先在仓库根目录执行 `uv sync --locked`；不要在 `app/` 下另建虚拟环境，也不要使用全局 `pip` 安装依赖。
 
 ## 常用验证
 
 平台和直报入口：
 
 ```bash
-python -m pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
 ```
 
 旧审核入口保护：
 
 ```bash
-python tests/test_review_bot.py
+uv run --locked python tests/test_review_bot.py
 ```

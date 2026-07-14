@@ -69,8 +69,10 @@ app/review/
 ### 1. 安装依赖
 
 ```bash
-python -m pip install -r app/requirements.txt
+uv sync --locked
 ```
+
+审核 Bot 与写作、底座、运维和管理后台共用项目根目录 `.venv`，不要单独使用全局 `pip` 安装依赖。
 
 ### 2. 配置凭证
 
@@ -84,34 +86,34 @@ cp app/review/config.example.env .env
 
 ```bash
 # 检查配置(不连企微)
-python -m app.review.main --check-config
+uv run --locked python -m app.review.main --check-config
 
 # 启动 Bot
-python -m app.review.main
+uv run --locked python -m app.review.main
 ```
 
 ### 4. 测试
 
 ```bash
 # 单元 + 端到端测试
-python tests/test_reviewer.py
-pytest tests/test_review_main_flow_optimization.py -q
+uv run --locked python tests/test_reviewer.py
+uv run --locked pytest tests/test_review_main_flow_optimization.py -q
 
 # Bot 存档 + 配置测试
-python tests/test_review_bot.py
+uv run --locked python tests/test_review_bot.py
 
 # 半月报测试
-pytest tests/test_review_halfmonthly.py -q
+uv run --locked pytest tests/test_review_halfmonthly.py -q
 
 # 通用审核测试
-pytest tests/test_review_general.py -q
-pytest tests/test_review_general_rules.py -q
+uv run --locked pytest tests/test_review_general.py -q
+uv run --locked pytest tests/test_review_general_rules.py -q
 
 # 独立公文格式审核测试
-pytest tests/test_official_format_review.py -q
+uv run --locked pytest tests/test_official_format_review.py -q
 
 # 文件/指令衔接和多文件联合审核测试
-pytest tests/test_review_intake.py tests/test_review_multi_file.py -q
+uv run --locked pytest tests/test_review_intake.py tests/test_review_multi_file.py -q
 ```
 
 ## 文档类型识别
@@ -476,7 +478,7 @@ app/review/general_term_checker.py
 运行：
 
 ```bash
-pytest tests/test_error_marker.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_term_library.py tests/test_review_bot.py tests/test_review_main_flow_optimization.py tests/test_bot_logging.py tests/test_notification.py tests/test_user_registry.py -v
+uv run --locked pytest tests/test_error_marker.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_term_library.py tests/test_review_bot.py tests/test_review_main_flow_optimization.py tests/test_bot_logging.py tests/test_notification.py tests/test_user_registry.py -v
 ```
 
 ## 规则管理
