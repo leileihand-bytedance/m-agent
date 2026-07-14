@@ -6,7 +6,7 @@ M-Agent 本机管理后台。
 
 - 通过可缩放关系图和状态清单查看项目总览，包括五层整体架构、能力依赖及稳定运行、上线优化、建设、规划、暂缓或关闭状态。
 - 查看六个板块的最新情况和首要待办。
-- 查看开放 TODO、最近 Git 更新和写作/审核任务数量。
+- 查看开放 TODO、最近 Git 更新和写作/审核任务状态统计。
 - 查看写作 Bot、审核 Bot、运维 Bot 心跳状态。
 - 查看已安装 skill。
 - 开启或关闭 skill。
@@ -33,6 +33,12 @@ M-Agent 本机管理后台。
 交互图使用本地固化的 `vis-network 10.1.0`，文件和 MIT/Apache-2.0 许可证位于 `app/admin/static/vendor/`。页面不从 CDN 加载脚本，因此断网时仍可使用，也不会把项目架构信息发送到第三方站点。
 
 用户权限和最近任务属于按需敏感区。默认访问 `/` 时不会读取或生成这两块内容；只有管理员主动点击“显示用户权限与任务记录”，进入 `/?show_sensitive=1` 后才加载。隐藏按钮会返回默认页面。
+
+## 任务统计口径
+
+- 写作任务总数按 `meta.json` 统计，成稿、待补充、失败、处理中或中断按不含正文的 `status.json` 分类。
+- 审核任务总数兼容历史 `meta.md`、当前 `meta.json` 和已有 `output/report.md` 的归档；“已生成审核报告”只表示本机报告文件存在，不等于企业微信已成功发给用户。
+- 管理台默认总览不读取 `output/result.json` 或材料正文。历史状态使用 `uv run --locked python scripts/backfill_task_status.py` 预演，确认后执行 `uv run --locked python scripts/backfill_task_status.py --apply`。
 
 ## 启动
 

@@ -16,6 +16,8 @@ from app.admin.services import (  # noqa: E402
     list_todos,
     set_skill_enabled,
     set_user_skills,
+    summarize_review_tasks,
+    summarize_writing_tasks,
 )
 
 
@@ -132,6 +134,67 @@ def test_list_jobs_reads_recent_job_meta_and_result(tmp_path):
     assert jobs[0].job_id == "20260703-001"
     assert jobs[0].skill_id == "direct_report"
     assert jobs[0].title == "标题"
+
+
+def test_summarize_writing_tasks_uses_content_free_status_files(tmp_path):
+    root = tmp_path / "writing"
+
+    def write_job(job_id: str, status: str | None) -> None:
+        job_dir = root / "2026" / "07" / job_id
+        (job_dir / "output").mkdir(parents=True)
+        (job_dir / "meta.json").write_text("{}", encoding="utf-8")
+        if status is not None:
+            (job_dir / "status.json").write_text(
+                json.dumps({"processing_status": status}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+    write_job("20260714-completed", "completed")
+    write_job("20260714-clarify", "needs_input")
+    write_job("20260714-failed", "failed")
+    write_job("20260714-incomplete", "processing")
+    write_job("20260714-no-result", None)
+
+    summary = summarize_writing_tasks(root)
+
+    assert summary.total == 5
+    assert summary.completed == 1
+    assert summary.needs_input == 1
+    assert summary.failed == 1
+    assert summary.incomplete == 1
+    assert summary.unknown == 1
+    assert summary.legacy == 0
+
+
+def test_summarize_review_tasks_supports_legacy_and_current_archives(tmp_path):
+    root = tmp_path / "review"
+
+    legacy = root / "2026" / "07" / "20260708-001"
+    (legacy / "output").mkdir(parents=True)
+    (legacy / "meta.md").write_text("旧审核元信息", encoding="utf-8")
+    (legacy / "output" / "report.md").write_text("审核结果", encoding="utf-8")
+
+    current = root / "2026" / "07" / "20260714-001"
+    (current / "output").mkdir(parents=True)
+    (current / "meta.json").write_text("{}", encoding="utf-8")
+    (current / "output" / "report.md").write_text("审核结果", encoding="utf-8")
+
+    incomplete = root / "2026" / "07" / "20260714-002"
+    incomplete.mkdir(parents=True)
+    (incomplete / "meta.json").write_text("{}", encoding="utf-8")
+
+    output_only = root / "2026" / "07" / "20260714-003"
+    (output_only / "output").mkdir(parents=True)
+    (output_only / "output" / "report.md").write_text("审核结果", encoding="utf-8")
+
+    summary = summarize_review_tasks(root)
+
+    assert summary.total == 4
+    assert summary.completed == 3
+    assert summary.needs_input == 0
+    assert summary.incomplete == 1
+    assert summary.unknown == 0
+    assert summary.legacy == 1
 
 
 def test_list_todos_parses_fields_and_prioritizes_open_work(tmp_path):
@@ -277,6 +340,10 @@ def test_build_project_overview_uses_runtime_counts_without_reading_content(tmp_
     assert overview.open_todo_count == 1
     assert overview.writing_job_count == 1
     assert overview.review_task_count == 1
+    assert overview.writing_task_stats.total == 1
+    assert overview.writing_task_stats.completed == 0
+    assert overview.review_task_stats.total == 1
+    assert overview.review_task_stats.completed == 0
     assert overview.policy_count == 2
     assert overview.bank_count == 1
     assert any(module.name == "审核" and module.next_todo_id == "TODO-201" for module in overview.modules)

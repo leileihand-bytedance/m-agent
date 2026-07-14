@@ -141,6 +141,9 @@ def test_archive_multi_file_review_creates_one_task_and_marked_outputs(tmp_path:
     assert meta["primary_file_index"] == 0
     assert meta["files"][0]["is_primary"] is True
     assert meta["files"][1]["is_primary"] is False
+    status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["processing_status"] == "completed"
+    assert status["delivery_status"] == "unknown"
     report = (task_dir / "output" / "report.md").read_text(encoding="utf-8")
     assert "主文件：正文.docx" in report
 
@@ -252,6 +255,9 @@ def test_save_review_creates_directory():
         assert (review_dir / "input" / "测试报告.docx").exists()
         assert (review_dir / "output" / "report.md").exists()
         assert (review_dir / "meta.json").exists()
+        status = json.loads((review_dir / "status.json").read_text(encoding="utf-8"))
+        assert status["processing_status"] == "completed"
+        assert status["delivery_status"] == "unknown"
 
         # 验证 report.md 内容
         report = (review_dir / "output" / "report.md").read_text(encoding="utf-8")

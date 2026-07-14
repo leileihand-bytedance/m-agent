@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.platform.models import PlatformResult
+from app.platform.task_status import classify_writing_result, write_task_status
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class JobContext:
     work_dir: Path
     output_dir: Path
     meta_path: Path
+    status_path: Path
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class JobStore:
             ),
             encoding="utf-8",
         )
+        status_path = write_task_status(job_dir, processing_status="processing")
 
         return JobContext(
             job_id=job_id,
@@ -79,6 +82,7 @@ class JobStore:
             work_dir=work_dir,
             output_dir=output_dir,
             meta_path=meta_path,
+            status_path=status_path,
         )
 
     def write_result(self, job: JobContext, result: PlatformResult) -> Path:
@@ -95,6 +99,15 @@ class JobStore:
                 indent=2,
             ),
             encoding="utf-8",
+        )
+        write_task_status(
+            job.job_dir,
+            processing_status=classify_writing_result(
+                {
+                    "needs_clarification": result.needs_clarification,
+                    "output": result.output,
+                }
+            ),
         )
         return result_path
 

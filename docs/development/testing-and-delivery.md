@@ -55,10 +55,12 @@ post-commit hook 会记录本地提交并在存在未推送提交时告警；pre
 运行数据目录或迁移逻辑变更时，至少运行：
 
 ```bash
-uv run --locked pytest tests/test_platform_data_paths.py tests/test_runtime_data_migration.py tests/test_platform_storage.py tests/test_review_bot.py tests/test_admin_services.py -v
+uv run --locked pytest tests/test_platform_data_paths.py tests/test_runtime_data_migration.py tests/test_task_status_backfill.py tests/test_platform_storage.py tests/test_review_bot.py tests/test_admin_services.py -v
 ```
 
 真实迁移必须先运行 `uv run --locked python scripts/migrate_runtime_data.py` 预演，再加 `--apply` 执行；迁移工具只复制和校验，不自动删除旧数据。
+
+历史任务状态补齐必须先运行 `uv run --locked python scripts/backfill_task_status.py` 预演，再加 `--apply` 执行。重点确认重复执行时 `planned` 和 `written` 均为 0，且状态文件不含用户材料正文。
 
 修改审核日志切分、文件命名或日志配置时，至少运行：
 
@@ -75,7 +77,7 @@ uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -
 uv run --locked python scripts/project_docs.py check
 ```
 
-重点验证五层架构完整性、关系端点全部属于已登记能力、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、任务和知识库只统计数量、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
+重点验证五层架构完整性、关系端点全部属于已登记能力、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核统计兼容 `meta.md`/`meta.json`/`output/report.md`、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
 
 ### 1. 平台单元测试
 

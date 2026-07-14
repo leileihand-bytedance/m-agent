@@ -126,6 +126,17 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
 """,
         encoding="utf-8",
     )
+    writing_job = tmp_path / "jobs" / "2026" / "07" / "20260714-writing"
+    writing_job.mkdir(parents=True)
+    (writing_job / "meta.json").write_text("{}", encoding="utf-8")
+    (writing_job / "status.json").write_text(
+        '{"processing_status": "completed"}',
+        encoding="utf-8",
+    )
+    legacy_review = tmp_path / "review" / "2026" / "07" / "20260714-001"
+    (legacy_review / "output").mkdir(parents=True)
+    (legacy_review / "meta.md").write_text("历史元信息", encoding="utf-8")
+    (legacy_review / "output" / "report.md").write_text("审核报告", encoding="utf-8")
 
     html = render_dashboard(
         AdminPaths(
@@ -153,6 +164,9 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
     assert "底座" in html
     assert "写作" in html
     assert "审核" in html
+    assert "累计创建 1 个写作任务，完成成稿 1 个" in html
+    assert "累计归档 1 个审核任务，已生成审核报告 1 个" in html
+    assert "旧格式历史归档 1 个" in html
 
 
 def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(tmp_path):

@@ -145,6 +145,17 @@ class ArchitectureRelationSummary:
 
 
 @dataclass(frozen=True)
+class TaskStatistics:
+    total: int = 0
+    completed: int = 0
+    needs_input: int = 0
+    failed: int = 0
+    incomplete: int = 0
+    unknown: int = 0
+    legacy: int = 0
+
+
+@dataclass(frozen=True)
 class ProjectOverview:
     generated_at: str
     enabled_skill_count: int
@@ -153,6 +164,8 @@ class ProjectOverview:
     urgent_todo_count: int
     writing_job_count: int
     review_task_count: int
+    writing_task_stats: TaskStatistics
+    review_task_stats: TaskStatistics
     policy_count: int | None
     bank_count: int | None
     repository: RepositoryAdminSummary
@@ -655,6 +668,73 @@ def list_jobs(paths: AdminPaths, limit: int = 20) -> list[JobAdminSummary]:
     return summaries
 
 
+def summarize_writing_tasks(root: Path | None) -> TaskStatistics:
+    if root is None or not root.exists():
+        return TaskStatistics()
+
+    total = 0
+    completed = 0
+    needs_input = 0
+    failed = 0
+    incomplete = 0
+    unknown = 0
+    for meta_path in root.glob("**/meta.json"):
+        total += 1
+        status = str(_read_json(meta_path.parent / "status.json").get("processing_status", ""))
+        if status == "completed":
+            completed += 1
+        elif status == "needs_input":
+            needs_input += 1
+        elif status == "failed":
+            failed += 1
+        elif status in {"processing", "incomplete"}:
+            incomplete += 1
+        else:
+            unknown += 1
+
+    return TaskStatistics(
+        total=total,
+        completed=completed,
+        needs_input=needs_input,
+        failed=failed,
+        incomplete=incomplete,
+        unknown=unknown,
+    )
+
+
+def summarize_review_tasks(root: Path | None) -> TaskStatistics:
+    if root is None or not root.exists():
+        return TaskStatistics()
+
+    task_dirs = {path.parent for path in root.glob("**/meta.json")}
+    task_dirs.update(path.parent for path in root.glob("**/meta.md"))
+    task_dirs.update(path.parent.parent for path in root.glob("**/output/report.md"))
+
+    completed = 0
+    failed = 0
+    incomplete = 0
+    for task_dir in task_dirs:
+        status = str(_read_json(task_dir / "status.json").get("processing_status", ""))
+        if status == "completed" or (task_dir / "output" / "report.md").is_file():
+            completed += 1
+        elif status == "failed":
+            failed += 1
+        else:
+            incomplete += 1
+    legacy = sum(
+        (task_dir / "meta.md").is_file() and not (task_dir / "meta.json").is_file()
+        for task_dir in task_dirs
+    )
+    total = len(task_dirs)
+    return TaskStatistics(
+        total=total,
+        completed=completed,
+        failed=failed,
+        incomplete=incomplete,
+        legacy=legacy,
+    )
+
+
 def list_todos(todo_path: Path) -> list[TodoAdminSummary]:
     if not todo_path.exists():
         return []
@@ -722,8 +802,10 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         paths.heartbeat_dir,
         max_age_seconds=paths.heartbeat_max_age_seconds,
     )
-    writing_job_count = _count_meta_files(paths.jobs_dir)
-    review_task_count = _count_meta_files(paths.review_tasks_dir)
+    writing_task_stats = summarize_writing_tasks(paths.jobs_dir)
+    review_task_stats = summarize_review_tasks(paths.review_tasks_dir)
+    writing_job_count = writing_task_stats.total
+    review_task_count = review_task_stats.total
     policy_count = _sqlite_table_count(paths.policy_db_path, "policy_documents")
     bank_count = _sqlite_table_count(paths.bank_db_path, "bank_entries")
     repository = repository_summary(project_root)
@@ -745,8 +827,8 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
             skills=skills,
             todos=open_todos,
             services=services,
-            writing_job_count=writing_job_count,
-            review_task_count=review_task_count,
+            writing_task_stats=writing_task_stats,
+            review_task_stats=review_task_stats,
             policy_count=policy_count,
             bank_count=bank_count,
         )
@@ -759,6 +841,8 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         urgent_todo_count=sum(1 for todo in open_todos if todo.priority in {"P0", "P1"}),
         writing_job_count=writing_job_count,
         review_task_count=review_task_count,
+        writing_task_stats=writing_task_stats,
+        review_task_stats=review_task_stats,
         policy_count=policy_count,
         bank_count=bank_count,
         repository=repository,
@@ -983,18 +1067,30 @@ def _build_module_summaries(
     skills: list[SkillAdminSummary],
     todos: list[TodoAdminSummary],
     services: list[ServiceHealthSummary],
-    writing_job_count: int,
-    review_task_count: int,
+    writing_task_stats: TaskStatistics,
+    review_task_stats: TaskStatistics,
     policy_count: int | None,
     bank_count: int | None,
 ) -> list[ModuleAdminSummary]:
     enabled_skills = [skill.name for skill in skills if skill.enabled]
     healthy_services = sum(1 for service in services if service.status == "healthy")
     service_total = len(services)
+    writing_summary = (
+        f"已启用 {len(enabled_skills)} 个 skill；累计创建 {writing_task_stats.total} 个写作任务，"
+        f"完成成稿 {writing_task_stats.completed} 个，待补充 {writing_task_stats.needs_input} 个，"
+        f"失败 {writing_task_stats.failed} 个，处理中或中断 {writing_task_stats.incomplete} 个，"
+        f"历史状态待补齐 {writing_task_stats.unknown} 个。"
+    )
+    review_summary = (
+        f"独立审核 Bot 继续运行；累计归档 {review_task_stats.total} 个审核任务，"
+        f"已生成审核报告 {review_task_stats.completed} 个，失败 {review_task_stats.failed} 个，"
+        f"未形成报告 {review_task_stats.incomplete} 个"
+        f"（含旧格式历史归档 {review_task_stats.legacy} 个）。"
+    )
     current_summaries = {
         "platform": "统一路由、权限、ToolGateway、会话和 DOCX/PDF/PPTX 文档服务已可用。",
-        "writing": f"已启用 {len(enabled_skills)} 个 skill；累计记录 {writing_job_count} 个写作任务。",
-        "review": f"独立审核 Bot 继续运行；累计归档 {review_task_count} 个审核任务。",
+        "writing": writing_summary,
+        "review": review_summary,
         "knowledge": f"政策库 {_display_count(policy_count)} 条，微众银行信息库 {_display_count(bank_count)} 条。",
         "operations": f"写作、审核、运维共 {service_total} 个服务，当前 {healthy_services} 个心跳正常。",
         "admin": "本机控制台提供项目观察、Skill 开关、用户权限和任务摘要。",
@@ -1061,12 +1157,6 @@ def _parse_datetime(value: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _count_meta_files(root: Path | None) -> int:
-    if root is None or not root.exists():
-        return 0
-    return sum(1 for _ in root.glob("**/meta.json"))
 
 
 def _sqlite_table_count(path: Path | None, table: str) -> int | None:

@@ -299,7 +299,8 @@ users:
     ├── input/
     ├── work/
     ├── output/
-    └── meta.json
+    ├── meta.json
+    └── status.json
 ```
 
 skill 和工具只能访问当前任务目录。
@@ -311,6 +312,8 @@ skill 和工具只能访问当前任务目录。
 统一文档服务当前边界：原生文字 PDF 可按页解析，疑似扫描 PDF 会记录 `ocr_required` 告警，但尚未自动 OCR；PPTX 可提取文本、表格、图表、备注、图片、对象位置和基础样式，但尚未进行页面渲染、视觉版式审核或批注回传。
 
 当前已由 `app/platform/storage.py` 实现，实际目录名使用时间戳和随机短 ID，避免并发冲突。
+
+`status.json` 是不含材料正文的任务状态索引。写作任务创建时为 `processing`，随后按实际结果更新为 `completed`、`needs_input` 或 `failed`；审核任务生成 `output/report.md` 后记为 `completed`。处理状态与企业微信交付状态分别记录，未验证是否送达时保持 `delivery_status: unknown`。本机控制台只读取该索引和必要的文件存在性，不读取结果正文来做总览统计。历史数据使用 `uv run --locked python scripts/backfill_task_status.py` 预演，确认后加 `--apply` 补齐。
 
 ## 当前成熟底座形态
 
@@ -341,7 +344,7 @@ skill 和工具只能访问当前任务目录。
 - 审核能力包装为 `review` skill。
 - 复杂多轮任务上下文和人工确认。
 
-审核旧模块已接入统一数据根目录，任务写入 `../M-Agent-Files/tasks/review/YYYY/MM/`；原件和系统生成文件不再混放。
+审核旧模块已接入统一数据根目录，任务写入 `../M-Agent-Files/tasks/review/YYYY/MM/`；原件和系统生成文件不再混放。统计同时识别历史 `meta.md`、当前 `meta.json` 和 `output/report.md`，避免历史审核任务因元信息格式不同而漏计。
 
 ### 8. 会话和任务记录
 

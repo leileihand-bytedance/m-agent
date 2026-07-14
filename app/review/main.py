@@ -39,6 +39,7 @@ from app.platform.models import UploadedFile  # noqa: E402
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
 from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
+from app.platform.task_status import write_task_status  # noqa: E402
 
 
 # 全局 logger,在 main() 中初始化
@@ -367,6 +368,7 @@ def save_review(
         ),
         encoding="utf-8",
     )
+    write_task_status(review_dir, processing_status="completed")
 
     return review_dir
 
@@ -457,6 +459,7 @@ def archive_multi_file_review(
         ),
         encoding="utf-8",
     )
+    write_task_status(task_dir, processing_status="completed")
     return task_dir, marked_paths
 
 
