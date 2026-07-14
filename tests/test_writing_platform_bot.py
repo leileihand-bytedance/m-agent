@@ -11,7 +11,7 @@ import app.writing.config as writing_config  # noqa: E402
 import app.writing.bot as writing_bot  # noqa: E402
 from app.platform.config import PlatformConfig  # noqa: E402
 from app.platform.intent import ConversationIntent  # noqa: E402
-from app.platform.models import PlatformResult, RoutedRequest  # noqa: E402
+from app.platform.models import PlatformResult, RoutedRequest, UploadedFile  # noqa: E402
 from app.platform.ops.events import OpsEventLogger, read_ops_events  # noqa: E402
 from app.writing.bot import build_platform_config, handle_file_with_platform, handle_text_with_platform, mask_config_value  # noqa: E402
 from app.writing.config import WritingBotConfig, load_config  # noqa: E402
@@ -421,6 +421,43 @@ async def test_handle_text_with_platform_uses_multi_brief_ack_for_writer2():
 
     assert platform_app.calls == [("wecom", "user-001", "写简报：https://example.com/a https://example.com/b")]
     assert ws_client.stream_replies[0][2] == "收到，正在按多素材简报写作流程处理，请稍后……"
+
+
+@pytest.mark.anyio
+async def test_handle_text_with_platform_collects_research_synthesis_files_until_start():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="research_synthesis")
+    intake_store = WritingIntakeStore()
+
+    await handle_text_with_platform(
+        frame=_frame("帮我做综合调研材料整合"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+    )
+    first_file = intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="调研提纲.docx", content=b"outline"),
+    )
+    second_file = intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="部门素材.docx", content=b"material"),
+    )
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="开始写",
+    )
+
+    assert first_file.action == "wait"
+    assert second_file.action == "wait"
+    assert decision.action == "run"
+    assert decision.skill_id == "research_synthesis"
+    assert decision.ack_message == "收到，正在按综合调研整合流程处理，请稍后……"
+    assert [item.filename for item in decision.files] == ["调研提纲.docx", "部门素材.docx"]
 
 
 @pytest.mark.anyio

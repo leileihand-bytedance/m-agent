@@ -469,6 +469,7 @@ def _ack_label_for_skill(skill_id: str | None) -> str:
         "writer2": "多素材简报写作",
         "review": "审核",
         "rewrite": "材料润色",
+        "research_synthesis": "综合调研整合",
     }
     return labels.get(str(skill_id or ""), "写作")
 

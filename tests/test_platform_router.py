@@ -54,6 +54,24 @@ def test_router_uses_writer2_for_brief_with_multiple_links_even_without_explicit
     assert route.needs_clarification is False
 
 
+def test_router_matches_research_synthesis_before_multi_material_brief():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("请把各部门材料按调研提纲整合成综合调研材料", registry)
+
+    assert route.skill_id == "research_synthesis"
+    assert route.needs_clarification is False
+
+
+def test_router_matches_research_synthesis_with_explicit_research_outline_wording():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("请按调研提纲整合各部门上传的素材", registry)
+
+    assert route.skill_id == "research_synthesis"
+    assert route.needs_clarification is False
+
+
 def test_router_matches_rewrite_for_inline_text_polish():
     registry = SkillRegistry.from_directory(Path("skills"))
 

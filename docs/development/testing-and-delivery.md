@@ -92,7 +92,7 @@ uv run --locked pytest tests/test_platform_registry.py tests/test_platform_route
 验证具体业务能力：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
 ```
 
 后续新增 skill 后，新增对应测试。
@@ -200,6 +200,16 @@ uv run --locked pytest tests/test_direct_report_guardrails.py tests/test_direct_
 - 人工回归：用固定 4 个链接看初稿是否像直报、政策是否自然、案件细节是否压缩得当。
 
 只改 prompt 或规则时，可以先跑离线自动化测试，不需要每次都连接企业微信 Bot。准备上线前再做真实 Bot 手动验证。
+
+### 修改综合调研整合 skill
+
+至少跑：
+
+```bash
+uv run --locked pytest tests/test_research_synthesis_workflow.py tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_platform_document_service.py -v
+```
+
+重点确认：提纲能唯一识别；不按上传顺序猜提纲；只有提纲而没有部门素材时追问；提纲和部门素材角色明确进入模型上下文；文件读取失败时不静默生成；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要用经授权脱敏样本人工检查提纲章节保留、材料归位、重复合并、缺口标记和冲突标记。
 
 ### 修改路由
 

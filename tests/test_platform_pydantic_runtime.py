@@ -235,6 +235,39 @@ def test_pydantic_writer_balances_long_uploaded_document_material():
     assert "长文档已均衡取样" in fake_agent.last_prompt
 
 
+def test_pydantic_writer_keeps_outline_role_visible_and_uses_larger_outline_budget():
+    fake_agent = _FakeAgent(
+        DirectReportResult(title="结构化标题", body="结构化正文", sources=[])
+    )
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills/direct_report"),
+        agent_factory=lambda model, output_type, instructions, model_settings=None: fake_agent,
+    )
+    long_outline = "提纲开头" + "甲" * 7000 + "提纲结尾"
+
+    writer.write(
+        {
+            "task": "direct_report",
+            "instruction": "请按提纲整合",
+            "materials": [
+                {
+                    "title": "综合调研提纲.docx",
+                    "text": long_outline,
+                    "source": "uploaded_file",
+                    "material_role": "outline",
+                }
+            ],
+        }
+    )
+
+    assert "材料角色：outline" in fake_agent.last_prompt
+    assert "提纲开头" in fake_agent.last_prompt
+    assert "提纲结尾" in fake_agent.last_prompt
+
+
 def test_pydantic_writer_instructions_limit_supplementary_material_scope():
     fake_agent = _FakeAgent(
         DirectReportResult(

@@ -31,6 +31,18 @@ def test_registry_loads_enabled_rewrite_skill():
     assert skill.supports_revision is True
 
 
+def test_registry_loads_enabled_research_synthesis_skill():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    skill = registry.get("research_synthesis")
+
+    assert skill.name == "综合调研整合"
+    assert skill.enabled is True
+    assert skill.allowed_tools == ("document_reader", "word_reader", "pdf_reader", "llm_writer")
+    assert skill.workflow == "skills.research_synthesis.workflow:run"
+    assert skill.supports_revision is False
+
+
 def test_registry_lists_only_enabled_skills(tmp_path):
     skills_dir = tmp_path / "skills"
     enabled = skills_dir / "enabled_skill"

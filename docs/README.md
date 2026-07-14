@@ -94,7 +94,8 @@ skills/                # 正式功能区
 ├── direct_report/
 ├── writer1/
 ├── writer2/
-└── rewrite/
+├── rewrite/
+└── research_synthesis/
 ```
 
 当前直报、单素材简报、多素材简报和文字润色能力已进入 `skills/`。早期 `app/agent/` 已归档到 `archive/inactive-2026-07-04/`，不再作为开发入口。

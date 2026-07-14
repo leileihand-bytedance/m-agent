@@ -174,7 +174,11 @@ class PydanticAIWriter:
                 continue
             text = str(item.get("text", "") or "")
             source = str(item.get("source", "") or "")
-            if source == "previous_draft":
+            material_role = str(item.get("material_role", "") or "")
+            material_role_line = f"材料角色：{material_role}\n" if material_role else ""
+            if material_role == "outline":
+                text = _trim_material_text(text, max_chars=12000, balanced=True)
+            elif source == "previous_draft":
                 text = _trim_material_text(text, max_chars=12000)
             elif source == "uploaded_file":
                 text = _trim_material_text(text, max_chars=6000, balanced=True)
@@ -185,6 +189,7 @@ class PydanticAIWriter:
                 f"标题：{item.get('title', '')}\n"
                 f"来源：{item.get('url', '')}\n"
                 f"材料类型：{source}\n"
+                f"{material_role_line}"
                 f"政策分类：{item.get('category', '')}\n"
                 f"发布日期：{item.get('publish_date', '')}\n"
                 f"正文：{text}"

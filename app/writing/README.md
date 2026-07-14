@@ -13,15 +13,15 @@
   -> app/writing/bot.py
   -> app/writing/portal.py      # 结构化素材页与本地预览入口
   -> app/platform/app.py
-  -> skills/direct_report/、skills/writer1/、skills/writer2/ 或 skills/rewrite/
+  -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/ 或 skills/rewrite/
 ```
 
 当前入口形态：
 
 - 企业微信会话欢迎语当前默认引导用户直接发送链接，并说明是写简报还是写直报。
 - 用户可直接粘贴文字并选择润色；`rewrite` 当前不接收文件或链接。
-- 如果用户手里有多个素材文档，欢迎语会提示先整合成一个文档再发送，减少处理歧义。
-- 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报分别使用不同话术。
+- 多份素材写简报时，入口按素材数量选择 `writer1` 或 `writer2`；做综合调研整合时，用户可连续发送 1 份现成提纲和多份部门素材，最后回复“开始写”。
+- 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报和综合调研整合分别使用不同话术。
 - 开发者可在本机素材页一次性上传多个 Word/PDF/PPTX、粘贴链接、补充要求或文字素材。
 - 服务端会拒绝非 `.docx` / `.pdf` / `.pptx` 文件，避免“上传成功但实际无法解析”。HTML 文件上传暂缓，网页仍通过链接读取。
 - 提交后结果直接返回企业微信对话。
@@ -79,13 +79,13 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 
 程序不会自动把素材页链接发给企业微信用户。若显式开放局域网访问，必须同时评估鉴权、网络边界和运维风险；不要把 `preview=1` 当作远程入口。
 
-本地预览调试如果走 `local-preview-user`，也需要在 `config/platform-policy.yaml` 中给它授权 `direct_report`、`writer1`、`writer2`。
+本地预览调试如果走 `local-preview-user`，也需要在 `config/platform-policy.yaml` 中给它授权 `direct_report`、`writer1`、`writer2`。需要调试综合调研整合时，再显式增加 `research_synthesis` 权限。
 
 审核 Bot 使用 `app/review/` 的独立配置。
 
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py -v
+uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

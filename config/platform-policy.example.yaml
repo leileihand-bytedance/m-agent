@@ -8,8 +8,10 @@ users:
       - writer1
       - writer2
       - rewrite
+      - research_synthesis
   local-preview-user:
     allowed_skills:
       - direct_report
       - writer1
       - writer2
+      - research_synthesis

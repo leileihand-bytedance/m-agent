@@ -10,6 +10,7 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     writer1 = Path("skills/writer1")
     writer2 = Path("skills/writer2")
     rewrite = Path("skills/rewrite")
+    research_synthesis = Path("skills/research_synthesis")
 
     assert (writer1 / "SKILL.md").exists()
     assert (writer1 / "config.yaml").exists()
@@ -24,6 +25,10 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     assert (rewrite / "SKILL.md").exists()
     assert (rewrite / "config.yaml").exists()
     assert (rewrite / "workflow.py").exists()
+    assert (research_synthesis / "SKILL.md").exists()
+    assert (research_synthesis / "config.yaml").exists()
+    assert (research_synthesis / "schema.py").exists()
+    assert (research_synthesis / "workflow.py").exists()
 
     registry = SkillRegistry.from_directory(Path("skills"))
     enabled_skill_ids = {skill.id for skill in registry.list_enabled()}
@@ -31,3 +36,4 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     assert "writer2" in enabled_skill_ids
     assert "direct_report" in enabled_skill_ids
     assert "rewrite" in enabled_skill_ids
+    assert "research_synthesis" in enabled_skill_ids

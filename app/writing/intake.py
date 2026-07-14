@@ -22,6 +22,7 @@ from app.platform.router import URL_RE
 BRIEF_INTENT = "brief"
 DIRECT_REPORT_INTENT = "direct_report"
 REWRITE_INTENT = "rewrite"
+RESEARCH_SYNTHESIS_INTENT = "research_synthesis"
 DEFAULT_MAX_FILES = 5
 DEFAULT_MAX_TOTAL_FILE_BYTES = 20 * 1024 * 1024
 
@@ -138,7 +139,7 @@ class WritingIntakeStore:
                     reply=f"已收到第 {len(session.materials)} 份材料。可以继续发送材料，发完后回复“开始写”。",
                 )
             can_rewrite = any(item.kind == "text" for item in session.materials)
-            options = "写简报、写直报或润色" if can_rewrite else "写简报或写直报"
+            options = "写简报、写直报、做综合调研整合或润色" if can_rewrite else "写简报、写直报或做综合调研整合"
             return IntakeDecision(action="wait", reply=f"已收到 {added or 1} 份材料。你希望我怎么处理？可以回复：{options}。")
 
         session.instructions.append(clean_text)
@@ -181,7 +182,7 @@ class WritingIntakeStore:
             )
         return IntakeDecision(
             action="wait",
-            reply="已收到文件。你希望我怎么处理？可以回复：写简报或写直报。如需润色，请直接粘贴原文。",
+            reply="已收到文件。你希望我怎么处理？可以回复：写简报、写直报或做综合调研整合。如需润色，请直接粘贴原文。",
         )
 
     def file_limit_message(
@@ -229,7 +230,7 @@ class WritingIntakeStore:
 
     def _run_or_ask_more(self, key: tuple[str, str], session: WritingIntakeSession) -> IntakeDecision:
         if not session.intent:
-            options = "写简报、写直报，还是润色" if any(item.kind == "text" for item in session.materials) else "写简报还是写直报"
+            options = "写简报、写直报、做综合调研整合，还是润色" if any(item.kind == "text" for item in session.materials) else "写简报、写直报，还是做综合调研整合"
             return IntakeDecision(
                 action="wait",
                 reply=f"材料已收到。请再告诉我你要{options}。",
@@ -389,6 +390,8 @@ class WritingIntakeStore:
 
 
 def detect_writing_intent(text: str) -> str | None:
+    if any(marker in text for marker in ("综合调研", "调研材料整合", "按提纲整合", "按提纲汇总", "按调研提纲整合", "按调研提纲汇总")):
+        return RESEARCH_SYNTHESIS_INTENT
     if "直报" in text:
         return DIRECT_REPORT_INTENT
     if "简报" in text:
@@ -436,6 +439,8 @@ def is_start_signal(text: str) -> bool:
 
 
 def resolve_skill_id(session: WritingIntakeSession) -> str:
+    if session.intent == RESEARCH_SYNTHESIS_INTENT:
+        return RESEARCH_SYNTHESIS_INTENT
     if session.intent == DIRECT_REPORT_INTENT:
         return "direct_report"
     if session.intent == REWRITE_INTENT:
@@ -470,11 +475,14 @@ def _is_pure_intent_text(text: str, intent: str) -> bool:
         DIRECT_REPORT_INTENT: {"写直报", "帮我写直报", "做直报", "写一个直报"},
         BRIEF_INTENT: {"写简报", "帮我写简报", "做简报", "写一个简报"},
         REWRITE_INTENT: {"改写", "帮我改写", "润色", "帮我润色", "修改", "改稿"},
+        RESEARCH_SYNTHESIS_INTENT: {"综合调研", "做综合调研", "综合调研材料整合", "帮我做综合调研材料整合", "按提纲整合"},
     }
     return normalized in pure_values.get(intent, set())
 
 
 def _reply_for_waiting_material(intent: str) -> str:
+    if intent == RESEARCH_SYNTHESIS_INTENT:
+        return "收到，准备做综合调研整合。请发送 1 份调研提纲和各部门 Word/PDF/PPTX 素材，发完后回复“开始写”。"
     if intent == DIRECT_REPORT_INTENT:
         return "收到，准备写直报。请继续发送链接、文字或文件素材，发完后回复“开始写”。"
     if intent == REWRITE_INTENT:
@@ -488,6 +496,7 @@ def _skill_label(skill_id: str) -> str:
         "writer1": "简报写作",
         "writer2": "多素材简报写作",
         "rewrite": "材料润色",
+        "research_synthesis": "综合调研整合",
     }
     return labels.get(skill_id, "写作")
 
