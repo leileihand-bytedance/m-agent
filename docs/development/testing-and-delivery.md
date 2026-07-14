@@ -209,7 +209,7 @@ uv run --locked pytest tests/test_direct_report_guardrails.py tests/test_direct_
 uv run --locked pytest tests/test_research_synthesis_workflow.py tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_platform_document_service.py -v
 ```
 
-重点确认：自然的“调研材料汇总”说法能进入正确流程；明确总提纲文件名和正文答复特征能排除部门反馈；证据不足时不按上传顺序猜提纲；追问期间原文件保留，用户回答后无需重新上传或再次发送“开始写”即可续跑；只有提纲而没有部门素材时追问；提纲和部门素材角色明确进入模型上下文；文件读取失败时不静默生成；部门来源标签和每一处图片提醒在长材料抽样后仍保留；Word 不嵌入源图片，含开头结尾待补备注并通过现有公文格式检查；企业微信成功回传文件；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要用经授权脱敏样本人工检查提纲章节保留、材料归位、重复合并、缺口标记和冲突标记，并逐页渲染检查 Word 版式。
+重点确认：自然的“调研材料汇总”说法能进入正确流程；明确总提纲文件名和正文答复特征能排除部门反馈；证据不足时不按上传顺序猜提纲；追问期间原文件保留，用户回答后无需重新上传或再次发送“开始写”即可续跑；只有提纲而没有部门素材时追问；提纲和部门素材角色、规范化来源标签明确进入模型上下文；文件读取失败时不静默生成；先调用材料台账规划、再调用正文生成；标题统一为“一、”“（一）”，遗漏的提纲一级主题会补回并提示核对；来源长文件名被清理且多个来源合并到事实段末；图片提醒按部门核对总数并合并连续重复项；Word 不嵌入源图片，含开头结尾待补备注并通过现有公文格式检查；企业微信成功回传文件；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要用经授权脱敏样本人工检查提纲问题覆盖、跨部门归并、安全合计、缺口标记和冲突标记，并逐页渲染检查 Word 版式。
 
 写作入口文件数量上限当前为 10 份，总大小上限仍为 20MB。测试必须覆盖前 10 份可接收、第 11 份被拒绝，以及自定义更小上限仍生效。
 

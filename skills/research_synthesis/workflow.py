@@ -1,9 +1,10 @@
 import re
+from collections import Counter
 from pathlib import Path
 
 from app.platform.tools import ToolGateway
 from skills.research_synthesis.docx_output import write_research_synthesis_docx
-from skills.research_synthesis.schema import ResearchSynthesisResult
+from skills.research_synthesis.schema import ResearchSynthesisPlan, ResearchSynthesisResult
 from skills.writer1.workflow import _has_read_errors, _has_usable_materials, _source_materials
 
 
@@ -44,6 +45,28 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
         ],
     ]
     source_names = _material_names(ordered_materials)
+    plan_data = tools.call(
+        "llm_writer",
+        {
+            "skill_id": "research_synthesis",
+            "task": "research_synthesis_plan",
+            "instruction": str(inputs.get("text", "") or ""),
+            "materials": ordered_materials,
+            "planning_note": _plan_stage_note(outline, source_materials),
+            "prompt_path": "prompts/plan.md",
+            "output_type": ResearchSynthesisPlan,
+        },
+    )
+    plan = ResearchSynthesisPlan.model_validate(plan_data)
+    if plan.needs_clarification and not plan.sections:
+        return ResearchSynthesisResult(
+            title=plan.title,
+            body="",
+            sources=source_names,
+            needs_clarification=True,
+            message=plan.message or "提纲结构仍无法可靠识别，请明确提纲层级后再整合。",
+        )
+
     draft = tools.call(
         "llm_writer",
         {
@@ -51,12 +74,19 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
             "task": "research_synthesis",
             "instruction": str(inputs.get("text", "") or ""),
             "materials": ordered_materials,
-            "planning_note": _planning_note(outline, source_materials),
+            "planning_note": _drafting_note(plan, outline, source_materials),
             "output_type": ResearchSynthesisResult,
         },
     )
-    title = str(draft.get("title", "") or "")
-    body = str(draft.get("body", "") or "")
+    title = _replace_raw_material_names(
+        str(draft.get("title", "") or plan.title or ""),
+        source_materials,
+    )
+    body = _normalize_draft_body(
+        str(draft.get("body", "") or ""),
+        outline=outline,
+        sources=source_materials,
+    )
     needs_clarification = bool(draft.get("needs_clarification", False)) and not (title.strip() or body.strip())
     if needs_clarification:
         return ResearchSynthesisResult(
@@ -75,12 +105,13 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
                 output_dir=str(inputs["output_dir"]),
             )
         )
+    completion_message = f"已按1份提纲和{len(source_materials)}份部门素材生成综合调研 Word 初稿。"
     return ResearchSynthesisResult(
         title=title,
         body=body,
         sources=source_names,
         needs_clarification=False,
-        message=str(draft.get("message", "") or "已生成综合调研 Word 初稿。"),
+        message=completion_message,
         output_file=output_file,
     )
 
@@ -140,7 +171,7 @@ def _outline_choice_message(materials: list[dict[str, object]], *, prefix: str) 
     return f"{prefix}。请明确回复哪一份是调研提纲，例如“{names[0] if names else 'XX.docx'} 是提纲”。当前文件：{listing}。"
 
 
-def _planning_note(outline: dict[str, object], sources: list[dict[str, object]]) -> str:
+def _plan_stage_note(outline: dict[str, object], sources: list[dict[str, object]]) -> str:
     source_names = "、".join(_material_names(sources))
     source_labels = "、".join(_source_label(item) for item in sources)
     reminders = _image_reminders(sources)
@@ -150,16 +181,36 @@ def _planning_note(outline: dict[str, object], sources: list[dict[str, object]])
         else "本次未检测到需要保留的图片提醒。\n"
     )
     return (
+        "先做材料台账，不写最终正文。以提纲问题为中心，把不同部门的同类事实放进同一个 evidence point。\n"
         f"调研提纲：{_material_name(outline)}\n"
         f"部门素材：{source_names}\n"
         f"部门来源标签：{source_labels}\n"
-        "严格保留提纲层级、顺序和章节名称，不自行另起结构。\n"
-        "逐章归集部门素材；重复事实合并，来源口径冲突时在对应位置标注“【口径待确认】”。\n"
-        "提纲章节没有材料支撑时保留该章节并标注“【材料待补充】”，不得用空话或虚构事实填满。\n"
-        "第一版以忠实整合为目标，只做必要的衔接和去重，不进行宣传化润色。\n"
-        "第一步保留部门来源标签，归并后的事实段落继续使用“【来源：部门来源标签】”，方便用户回溯；不要输出本机路径。\n"
+        "保留提纲一级主题和顺序；删除题号后的牵头部门说明，围绕具体问题合并或拆分二级结构。\n"
+        "重复事实要跨部门合并；只有对象、时间、单位和口径一致时才能计算合计，并在 derivation_note 写清算式。\n"
+        "逐项登记缺口和冲突，不得用空话、推断或虚构事实填满。\n"
+        "台账只能使用上面的规范化部门来源标签，不要复制文件名或本机路径。\n"
         "不要读取、描述或猜测图片内容，也不要把图片插入汇总稿；只保留下列人工评估提醒。\n"
         f"{image_note}"
+        "把图片提醒映射到其前后文字所对应的小节，连续同部门提醒可以合并计数。"
+    )
+
+
+def _drafting_note(
+    plan: ResearchSynthesisPlan,
+    outline: dict[str, object],
+    sources: list[dict[str, object]],
+) -> str:
+    source_labels = _unique_source_labels(sources)
+    image_counts = _image_reminder_counts(sources)
+    image_note = "、".join(f"{label}{count}张" for label, count in image_counts.items()) or "无"
+    return (
+        "按提纲章节综合表达，不要再按部门分别堆叠。以下材料台账是本轮正文的直接写作依据：\n"
+        f"{plan.model_dump_json(indent=2)}\n\n"
+        f"提纲一级主题：{'、'.join(_outline_top_headings(str(outline.get('text') or '')))}\n"
+        f"正文允许使用的来源标签：{'、'.join(source_labels)}\n"
+        f"图片核对总数：{image_note}。图片提醒要放在台账对应小节；连续提醒合并计数，不插入或描述图片。\n"
+        "综合事实写成一个连贯段落，在段末只保留一次合并后的来源标签，例如“【来源：甲部、乙部】”。\n"
+        "一级标题统一使用“一、”，二级标题统一使用“（一）”；正文列举使用“一是、二是”，不要使用阿拉伯数字充当一级、二级标题。\n"
         "不要撰写报告开头和结尾；Word 生成阶段会在开头和末尾加入待用户补充的备注。"
     )
 
@@ -170,6 +221,16 @@ def _image_reminders(materials: list[dict[str, object]]) -> list[str]:
     for item in materials:
         reminders.extend(pattern.findall(str(item.get("text") or "")))
     return reminders
+
+
+def _image_reminder_counts(materials: list[dict[str, object]]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    pattern = re.compile(r"【提醒：[^】]*素材含图片，请评估是否需要】")
+    for item in materials:
+        count = len(pattern.findall(str(item.get("text") or "")))
+        if count:
+            counts[_source_label(item)] += count
+    return counts
 
 
 def _failed_material_names(materials: list[dict[str, object]]) -> list[str]:
@@ -197,11 +258,266 @@ def _material_name(item: dict[str, object]) -> str:
 
 
 def _source_label(item: dict[str, object]) -> str:
+    reminder_match = re.search(r"【提醒：([^】]+?)素材含图片，请评估是否需要】", str(item.get("text") or ""))
+    if reminder_match:
+        return _clean_source_label(reminder_match.group(1))
+
     stem = Path(_material_name(item)).stem.strip()
-    department_matches = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,20}部", stem)
-    if department_matches:
-        return department_matches[-1]
-    return re.sub(r"(?:素材|材料)$", "", stem) or stem or "未命名部门"
+    stem = re.sub(r"(?:素材|材料|文件)$", "", stem).strip(" _-")
+    parts = [part for part in re.split(r"[-_—]+", stem) if part]
+    suffix_pattern = re.compile(r"([\u4e00-\u9fff]{2,20}(?:项目组|办公室|中心|部门|部))$")
+    for part in reversed(parts or [stem]):
+        cleaned_part = re.sub(r"^\d{6,14}", "", part).strip()
+        match = suffix_pattern.search(cleaned_part)
+        if match:
+            return _clean_source_label(match.group(1))
+
+    for part_index, part in enumerate(parts or [stem]):
+        cleaned_part = re.sub(r"[（(].*$", "", part).strip()
+        if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", cleaned_part) and not any(
+            marker in cleaned_part for marker in ("提纲", "反馈", "汇总", "附件", "材料")
+        ):
+            if cleaned_part.endswith("金融"):
+                return cleaned_part + "部"
+            remaining_name = "".join(parts[part_index + 1 :])
+            if remaining_name and any(marker in remaining_name for marker in ("提纲", "反馈", "汇总")):
+                return cleaned_part + "部"
+            return cleaned_part
+    return _clean_source_label(stem) or "未命名部门"
+
+
+def _clean_source_label(label: str) -> str:
+    clean = re.sub(r"^\d{6,14}", "", label).strip(" _-—")
+    clean = re.sub(r"(?:素材|材料|文件)$", "", clean).strip()
+    return clean
+
+
+def _unique_source_labels(materials: list[dict[str, object]]) -> list[str]:
+    labels: list[str] = []
+    for item in materials:
+        label = _source_label(item)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _normalize_draft_body(
+    body: str,
+    *,
+    outline: dict[str, object],
+    sources: list[dict[str, object]],
+) -> str:
+    clean = _replace_raw_material_names(body, sources)
+    allowed_labels = _unique_source_labels(sources)
+    top_headings = _outline_top_headings(str(outline.get("text") or ""))
+    lines = [line.strip() for line in clean.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+    normalized_lines = [_normalize_heading_line(line, top_headings) for line in lines]
+    normalized_lines = _ensure_outline_headings(normalized_lines, top_headings)
+    normalized_lines = [_normalize_source_tags(line, allowed_labels) for line in normalized_lines]
+    normalized_lines = _collapse_consecutive_image_reminders(normalized_lines, allowed_labels)
+    normalized_lines = _ensure_image_reminders(
+        normalized_lines,
+        expected_counts=_image_reminder_counts(sources),
+    )
+    return "\n".join(normalized_lines).strip()
+
+
+def _ensure_outline_headings(lines: list[str], top_headings: list[str]) -> list[str]:
+    complete = list(lines)
+    expected = [f"{_chinese_number(index)}、{heading}" for index, heading in enumerate(top_headings, start=1)]
+    for index, heading in enumerate(expected):
+        if heading in complete:
+            continue
+        next_heading = next((candidate for candidate in expected[index + 1 :] if candidate in complete), "")
+        insert_at = complete.index(next_heading) if next_heading else len(complete)
+        complete[insert_at:insert_at] = [
+            heading,
+            "【材料待补充：该提纲主题未在模型初稿中形成内容，请人工核对。】",
+        ]
+    return complete
+
+
+def _replace_raw_material_names(text: str, sources: list[dict[str, object]]) -> str:
+    clean = text
+    replacements: list[tuple[str, str]] = []
+    for item in sources:
+        name = _material_name(item)
+        stem = Path(name).stem
+        label = _source_label(item)
+        replacements.extend(((name, label), (stem, label)))
+    for raw, label in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
+        if raw and raw != label:
+            clean = clean.replace(raw, label)
+    return clean
+
+
+def _outline_top_headings(text: str) -> list[str]:
+    lines = [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+    chinese_headings: list[str] = []
+    for line in lines:
+        match = re.match(r"^[一二三四五六七八九十百零〇]+、\s*(.+)$", line)
+        if match:
+            chinese_headings.append(_clean_outline_heading(match.group(1)))
+    if chinese_headings:
+        return chinese_headings
+
+    headings: list[str] = []
+    expected_number = 1
+    for line in lines:
+        match = re.match(r"^(\d+)[.．、]\s*(.+)$", line)
+        if not match or int(match.group(1)) != expected_number:
+            continue
+        headings.append(_clean_outline_heading(match.group(2)))
+        expected_number += 1
+    return headings
+
+
+def _clean_outline_heading(text: str) -> str:
+    clean = re.split(r"[—－-]{2,}\s*(?:牵头|责任|负责)部门", text, maxsplit=1)[0]
+    clean = re.sub(r"(?:牵头|责任|负责)部门\s*[:：].*$", "", clean)
+    return clean.strip().rstrip("。；;：:").strip()
+
+
+def _normalize_heading_line(line: str, top_headings: list[str]) -> str:
+    chinese_top = re.match(r"^([一二三四五六七八九十百零〇]+)、\s*(.+)$", line)
+    if chinese_top:
+        return f"{chinese_top.group(1)}、{_clean_outline_heading(chinese_top.group(2))}"
+
+    arabic = re.match(r"^(\d+)[.．、]\s*(.+)$", line)
+    if arabic:
+        number = int(arabic.group(1))
+        heading = _clean_outline_heading(arabic.group(2))
+        if 1 <= number <= len(top_headings) and _headings_match(heading, top_headings[number - 1]):
+            return f"{_chinese_number(number)}、{top_headings[number - 1]}"
+        if 1 <= number <= 10:
+            return f"{_chinese_number(number)}是{arabic.group(2).strip()}"
+
+    chinese_sub = re.match(r"^（([一二三四五六七八九十百零〇]+)）\s*(.+)$", line)
+    if chinese_sub:
+        return f"（{chinese_sub.group(1)}）{_clean_outline_heading(chinese_sub.group(2))}"
+
+    arabic_sub = re.match(r"^[（(](\d+)[）)]\s*(.+)$", line)
+    if arabic_sub:
+        number = int(arabic_sub.group(1))
+        content = arabic_sub.group(2).strip()
+        if len(content) <= 40 and not content.endswith(("。", "；", ";")):
+            return f"（{_chinese_number(number)}）{_clean_outline_heading(content)}"
+        if 1 <= number <= 10:
+            return f"{_chinese_number(number)}是{content}"
+    return line
+
+
+def _headings_match(left: str, right: str) -> bool:
+    normalize = lambda value: re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", value)
+    left_key = normalize(left)
+    right_key = normalize(right)
+    return bool(left_key and right_key and (left_key == right_key or left_key.startswith(right_key) or right_key.startswith(left_key)))
+
+
+def _chinese_number(number: int) -> str:
+    digits = "零一二三四五六七八九"
+    if number < 10:
+        return digits[number]
+    if number == 10:
+        return "十"
+    if number < 20:
+        return "十" + digits[number % 10]
+    tens, ones = divmod(number, 10)
+    return digits[tens] + "十" + (digits[ones] if ones else "")
+
+
+def _normalize_source_tags(line: str, allowed_labels: list[str]) -> str:
+    matches = re.findall(r"【来源：([^】]+)】", line)
+    if not matches:
+        return line
+    labels: list[str] = []
+    for match in matches:
+        for raw_label in re.split(r"[、,，/；;]+", match):
+            label = _match_allowed_source_label(raw_label, allowed_labels)
+            if label and label not in labels:
+                labels.append(label)
+    text = re.sub(r"\s*【来源：[^】]+】\s*", "", line).strip()
+    if not text or text.startswith(("一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、", "（")):
+        return text
+    tag = f"【来源：{'、'.join(labels)}】" if labels else "【来源：待核对】"
+    return f"{text.rstrip()}{tag}"
+
+
+def _match_allowed_source_label(raw_label: str, allowed_labels: list[str]) -> str:
+    clean = _clean_source_label(raw_label)
+    for label in allowed_labels:
+        if clean == label:
+            return label
+    for label in allowed_labels:
+        if label in clean or clean in label:
+            return label
+    return ""
+
+
+def _collapse_consecutive_image_reminders(lines: list[str], allowed_labels: list[str]) -> list[str]:
+    pattern = re.compile(r"^【提醒：([^】]+?)(?:素材)?含图片，请评估是否需要】$")
+    collapsed: list[str] = []
+    index = 0
+    while index < len(lines):
+        match = pattern.match(lines[index])
+        if not match:
+            collapsed.append(lines[index])
+            index += 1
+            continue
+        raw_label = match.group(1)
+        label = _match_allowed_source_label(raw_label, allowed_labels) or _clean_source_label(raw_label)
+        count = 1
+        while index + count < len(lines):
+            next_match = pattern.match(lines[index + count])
+            if not next_match:
+                break
+            next_label = _match_allowed_source_label(next_match.group(1), allowed_labels) or _clean_source_label(next_match.group(1))
+            if next_label != label:
+                break
+            count += 1
+        collapsed.append(f"【图片提醒：{label}本节素材包含{count}张图片，请评估是否需要】")
+        index += count
+    return collapsed
+
+
+def _ensure_image_reminders(lines: list[str], *, expected_counts: Counter[str]) -> list[str]:
+    complete = list(lines)
+    for label, count in expected_counts.items():
+        covered = _covered_image_count(complete, label)
+        if covered >= count:
+            continue
+        missing = count - covered
+        reminder = (
+            f"【图片提醒：{label}素材共含{count}张图片，请结合原材料位置评估是否需要】"
+            if covered == 0
+            else f"【图片提醒：{label}素材另有{missing}张图片未在正文中定位，请结合原材料评估是否需要】"
+        )
+        insert_at = next(
+            (index + 1 for index, line in enumerate(complete) if f"【来源：{label}" in line or f"、{label}】" in line),
+            len(complete),
+        )
+        complete.insert(insert_at, reminder)
+    return complete
+
+
+def _covered_image_count(lines: list[str], label: str) -> int:
+    count = 0
+    escaped_label = re.escape(label)
+    patterns = (
+        re.compile(rf"^【图片提醒：{escaped_label}本节素材包含(\d+)张图片"),
+        re.compile(rf"^【图片提醒：{escaped_label}素材共含(\d+)张图片"),
+    )
+    for line in lines:
+        matched = None
+        for pattern in patterns:
+            matched = pattern.match(line)
+            if matched:
+                break
+        if matched:
+            count += int(matched.group(1))
+        elif line.startswith(f"【提醒：{label}"):
+            count += 1
+    return count
 
 
 def _clarification(message: str) -> ResearchSynthesisResult:

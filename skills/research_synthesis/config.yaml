@@ -1,6 +1,6 @@
 id: research_synthesis
 name: 综合调研整合
-description: 以用户提供的调研提纲为固定骨架，将多部门材料归入对应章节并形成综合调研初稿。
+description: 以用户提供的调研提纲为骨架，先建立可追溯材料台账，再跨部门归并形成综合调研 Word 初稿。
 enabled: true
 triggers:
   - 综合调研

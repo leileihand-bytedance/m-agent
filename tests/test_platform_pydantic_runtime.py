@@ -258,12 +258,14 @@ def test_pydantic_writer_keeps_outline_role_visible_and_uses_larger_outline_budg
                     "text": long_outline,
                     "source": "uploaded_file",
                     "material_role": "outline",
+                    "source_label": "办公室",
                 }
             ],
         }
     )
 
     assert "材料角色：outline" in fake_agent.last_prompt
+    assert "来源标签：办公室" in fake_agent.last_prompt
     assert "提纲开头" in fake_agent.last_prompt
     assert "提纲结尾" in fake_agent.last_prompt
 

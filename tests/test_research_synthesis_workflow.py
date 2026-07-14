@@ -5,11 +5,16 @@ from docx import Document
 
 from app.review.official_format_checker import review_official_format
 from app.platform.tools import ToolGateway
-from skills.research_synthesis.schema import ResearchSynthesisResult
-from skills.research_synthesis.workflow import run
+from skills.research_synthesis.schema import ResearchSynthesisPlan, ResearchSynthesisResult
+from skills.research_synthesis.workflow import _source_label, run
 
 
-def _gateway(*, documents: dict[str, dict[str, object]], draft: dict[str, object] | None = None):
+def _gateway(
+    *,
+    documents: dict[str, dict[str, object]],
+    plan: dict[str, object] | None = None,
+    draft: dict[str, object] | None = None,
+):
     calls: list[tuple[str, object]] = []
 
     def document_reader(path, **kwargs):
@@ -18,6 +23,30 @@ def _gateway(*, documents: dict[str, dict[str, object]], draft: dict[str, object
 
     def llm_writer(payload):
         calls.append(("llm_writer", payload))
+        if payload["output_type"] is ResearchSynthesisPlan:
+            return plan or {
+                "title": "关于数字化转型工作的综合调研材料",
+                "sections": [
+                    {
+                        "heading": "总体情况",
+                        "subsections": [
+                            {
+                                "heading": "主要做法",
+                                "evidence_points": [
+                                    {
+                                        "content": "科技部和运营部共同推进有关工作。",
+                                        "source_labels": ["科技部", "运营部"],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+                "unresolved_conflicts": [],
+                "missing_items": [],
+                "needs_clarification": False,
+                "message": "",
+            }
         return draft or {
             "title": "关于数字化转型工作的综合调研材料",
             "body": "一、总体情况\n整合后的正文。",
@@ -96,13 +125,19 @@ def test_research_synthesis_uses_named_outline_and_preserves_material_roles(tmp_
     assert isinstance(result, ResearchSynthesisResult)
     assert result.needs_clarification is False
     assert result.sources == ["综合调研提纲.docx", "科技部素材.docx", "运营部素材.pdf"]
-    llm_payload = next(payload for name, payload in calls if name == "llm_writer")
-    assert llm_payload["output_type"] is ResearchSynthesisResult
-    assert llm_payload["materials"][0]["material_role"] == "outline"
-    assert [item["material_role"] for item in llm_payload["materials"][1:]] == ["source", "source"]
-    assert "严格保留提纲层级、顺序和章节名称" in llm_payload["planning_note"]
-    assert llm_payload["materials"][1]["source_label"] == "科技部"
-    assert "保留部门来源标签" in llm_payload["planning_note"]
+    llm_payloads = [payload for name, payload in calls if name == "llm_writer"]
+    assert [payload["output_type"] for payload in llm_payloads] == [
+        ResearchSynthesisPlan,
+        ResearchSynthesisResult,
+    ]
+    plan_payload, draft_payload = llm_payloads
+    assert plan_payload["prompt_path"] == "prompts/plan.md"
+    assert plan_payload["materials"][0]["material_role"] == "outline"
+    assert [item["material_role"] for item in plan_payload["materials"][1:]] == ["source", "source"]
+    assert plan_payload["materials"][1]["source_label"] == "科技部"
+    assert "先做材料台账" in plan_payload["planning_note"]
+    assert "科技部和运营部共同推进有关工作" in draft_payload["planning_note"]
+    assert "按提纲章节综合表达" in draft_payload["planning_note"]
 
 
 def test_research_synthesis_creates_official_format_word_with_notes_and_no_images(tmp_path):
@@ -157,15 +192,15 @@ def test_research_synthesis_creates_official_format_word_with_notes_and_no_image
     paragraphs = [paragraph.text for paragraph in document.paragraphs]
     assert paragraphs[0] == "关于数字化转型工作的综合调研材料"
     assert paragraphs[1] == "【备注：请根据实际报送对象和通知要求补充报告开头。】"
-    assert "科技部已完成系统建设。【来源：科技部素材】" in paragraphs
-    assert reminder in paragraphs
+    assert "科技部已完成系统建设。【来源：科技部】" in paragraphs
+    assert "【图片提醒：科技部本节素材包含1张图片，请评估是否需要】" in paragraphs
     assert paragraphs[-1] == "【备注：请根据实际报送要求补充报告结尾、附件、联系人、落款和日期。】"
     with zipfile.ZipFile(output_path) as archive:
         assert not any(name.startswith("word/media/") for name in archive.namelist())
     assert review_official_format(output_path, output_path.name).findings == []
-    llm_payload = next(payload for name, payload in calls if name == "llm_writer")
-    assert reminder in llm_payload["planning_note"]
-    assert "不要撰写报告开头和结尾" in llm_payload["planning_note"]
+    llm_payloads = [payload for name, payload in calls if name == "llm_writer"]
+    assert reminder in llm_payloads[0]["planning_note"]
+    assert "不要撰写报告开头和结尾" in llm_payloads[1]["planning_note"]
 
 
 def test_research_synthesis_allows_user_to_name_outline_file(tmp_path):
@@ -278,3 +313,103 @@ def test_research_synthesis_requires_at_least_one_material_beyond_outline(tmp_pa
     assert result.needs_clarification is True
     assert "部门素材" in result.message
     assert not any(name == "llm_writer" for name, _ in calls)
+
+
+def test_research_synthesis_normalizes_real_world_department_filenames():
+    assert _source_label({"title": "个体工商-调研提纲_个体工商金融项目组.docx"}) == "个体工商金融项目组"
+    assert _source_label({"title": "零售信贷-附件1-20220722零售信贷部.docx"}) == "零售信贷部"
+    assert _source_label({"title": "生活金融-调研提纲（1）.docx"}) == "生活金融部"
+    assert _source_label({"title": "汽车金融部-调研反馈.docx"}) == "汽车金融部"
+    assert _source_label({"title": "企业风险-调研提纲及反馈内容汇总.docx"}) == "企业风险部"
+
+
+def test_research_synthesis_repairs_heading_source_and_duplicate_image_labels(tmp_path):
+    files = [
+        tmp_path / "调研提纲.docx",
+        tmp_path / "企业风险-调研提纲及反馈内容汇总.docx",
+        tmp_path / "汽车金融部-调研反馈.docx",
+    ]
+    enterprise_reminder = "【提醒：企业风险部素材含图片，请评估是否需要】"
+    auto_reminder = "【提醒：汽车金融部素材含图片，请评估是否需要】"
+    tools, calls = _gateway(
+        documents={
+            "调研提纲.docx": {
+                "title": "调研提纲.docx",
+                "text": "1.总体情况——牵头部门：办公室\n2.主要做法。——牵头部门：办公室",
+                "source": "uploaded_file",
+            },
+            "企业风险-调研提纲及反馈内容汇总.docx": {
+                "title": "企业风险-调研提纲及反馈内容汇总.docx",
+                "text": f"已服务100户。\n{enterprise_reminder}",
+                "source": "uploaded_file",
+            },
+            "汽车金融部-调研反馈.docx": {
+                "title": "汽车金融部-调研反馈.docx",
+                "text": f"已服务200户。\n{auto_reminder}\n{auto_reminder}",
+                "source": "uploaded_file",
+            },
+        },
+        draft={
+            "title": "综合调研材料",
+            "body": (
+                "1.总体情况——牵头部门：办公室\n"
+                "（1）服务进展\n"
+                "【来源：企业风险-调研提纲及反馈内容汇总】已服务100户，汽车金融部已服务200户。"
+                "【来源：汽车金融部-调研反馈】\n"
+                f"{auto_reminder}\n{auto_reminder}\n"
+                "2.主要做法。——牵头部门：办公室\n"
+                "【材料待补充】"
+            ),
+            "sources": [],
+            "needs_clarification": False,
+            "message": "模型原始消息",
+        },
+    )
+
+    result = run(
+        inputs={"text": "请按提纲整合", "files": [str(path) for path in files], "input_dir": str(tmp_path)},
+        tools=tools,
+    )
+
+    assert result.body.startswith("一、总体情况\n（一）服务进展")
+    assert "二、主要做法" in result.body
+    assert "牵头部门" not in result.body
+    assert "企业风险-调研提纲及反馈内容汇总" not in result.body
+    assert "汽车金融部-调研反馈" not in result.body
+    assert "已服务100户，汽车金融部已服务200户。【来源：企业风险部、汽车金融部】" in result.body
+    assert result.body.count("【图片提醒：汽车金融部本节素材包含2张图片，请评估是否需要】") == 1
+    assert result.message == "已按1份提纲和2份部门素材生成综合调研 Word 初稿。"
+    assert len([payload for name, payload in calls if name == "llm_writer"]) == 2
+
+
+def test_research_synthesis_keeps_missing_outline_topic_visible(tmp_path):
+    files = [tmp_path / "调研提纲.docx", tmp_path / "运营部素材.docx"]
+    tools, _ = _gateway(
+        documents={
+            "调研提纲.docx": {
+                "title": "调研提纲.docx",
+                "text": "1.总体情况\n2.存在问题\n3.工作建议",
+                "source": "uploaded_file",
+            },
+            "运营部素材.docx": {
+                "title": "运营部素材.docx",
+                "text": "已完成有关工作。",
+                "source": "uploaded_file",
+            },
+        },
+        draft={
+            "title": "综合调研材料",
+            "body": "1.总体情况\n已完成有关工作。【来源：运营部】\n3.工作建议\n【材料待补充】",
+            "sources": [],
+            "needs_clarification": False,
+            "message": "",
+        },
+    )
+
+    result = run(
+        inputs={"text": "请按提纲整合", "files": [str(path) for path in files], "input_dir": str(tmp_path)},
+        tools=tools,
+    )
+
+    assert result.body.index("一、总体情况") < result.body.index("二、存在问题") < result.body.index("三、工作建议")
+    assert "二、存在问题\n【材料待补充：该提纲主题未在模型初稿中形成内容，请人工核对。】" in result.body

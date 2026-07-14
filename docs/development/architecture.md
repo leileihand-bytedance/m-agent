@@ -265,7 +265,9 @@ M_AGENT_MODEL_MAX_TOKENS=4096
 
 `deepseek-v4-flash` 默认可能进入 thinking mode，而 Pydantic AI 结构化输出依赖 tool_choice。写作底座对 DeepSeek 模型应通过 `extra_body={"thinking": {"type": "disabled"}}` 关闭 thinking mode，不能只传布尔值 `thinking=False`。
 
-综合调研整合给模型材料增加 `material_role`：`outline` 表示唯一提纲，`source` 表示部门素材；来源材料同时增加简洁 `source_label`，第一阶段在正文保留“【来源：XX部】”供用户回溯。Pydantic AI prompt 会显式展示这些角色；提纲使用更大的均衡取样预算，避免普通上传材料的较短上下文预算截断提纲尾部。该标记只影响模型材料编排，不放宽文件访问范围。
+综合调研整合给模型材料增加 `material_role`：`outline` 表示唯一提纲，`source` 表示部门素材；来源材料同时增加规范化 `source_label`。`PydanticAIWriter` 会把角色和来源标签都显式写入模型材料，避免模型只能从长文件名反推部门。提纲使用更大的均衡取样预算，避免普通上传材料的较短上下文预算截断提纲尾部。该标记只影响模型材料编排，不放宽文件访问范围。
+
+综合调研工作流采用两阶段模型调用：第一阶段通过 `ResearchSynthesisPlan` 生成“提纲问题—综合事实—来源—缺口—冲突—图片位置”材料台账；第二阶段根据台账形成正文。正文生成后再做不依赖模型的确定性校正，包括统一一、二级标题编号、规范化并后置来源标签、移除原始文件名、补回遗漏的提纲一级主题、合并连续图片提醒和核对图片部门数量。这样可以降低一次调用按文件顺序堆叠、模型与格式检查共享同一误判规则的问题。
 
 ### 8. 任务存储层
 
