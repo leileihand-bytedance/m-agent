@@ -781,6 +781,27 @@ def test_writing_intake_limits_file_count_and_total_bytes():
     assert "最多接收 1 个文件" in second.reply
 
 
+def test_writing_intake_default_allows_ten_files_and_rejects_eleventh():
+    store = WritingIntakeStore()
+
+    accepted = [
+        store.add_file(
+            channel="wecom",
+            sender_userid="user-001",
+            file=UploadedFile(filename=f"材料-{index}.docx", content=b"x"),
+        )
+        for index in range(1, 11)
+    ]
+    blocked = store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="材料-11.docx", content=b"x"),
+    )
+
+    assert all("最多接收" not in decision.reply for decision in accepted)
+    assert "最多接收 10 个文件" in blocked.reply
+
+
 def test_writing_intake_persists_file_and_recovers_after_restart(tmp_path):
     storage_dir = tmp_path / "M-Agent-Files" / "runtime" / "intake"
     first_store = WritingIntakeStore(storage_dir=storage_dir)

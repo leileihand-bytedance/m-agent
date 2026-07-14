@@ -131,7 +131,7 @@ P3  # 可观察、可优化、可后续讨论
 - `docs/development/architecture.md`
 - `docs/development/testing-and-delivery.md`
 
-备注：v1 当前只输出文本初稿，沿用写作入口一次最多 5 份文件、总计不超过 20MB 的上限。扫描 PDF 自动 OCR 依赖 `TODO-024`，Word/大文件稳定回传依赖 `TODO-017`。该能力作为 P2 并行建设，不改变当前审核质量产品化主线。
+备注：v1 当前只输出文本初稿，沿用写作入口一次最多 10 份文件、总计不超过 20MB 的上限。扫描 PDF 自动 OCR 依赖 `TODO-024`，Word/大文件稳定回传依赖 `TODO-017`。该能力作为 P2 并行建设，不改变当前审核质量产品化主线。
 
 ### TODO-025：建设跨 Skill 的任务关系识别层
 
