@@ -1,19 +1,179 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
 import time
-from typing import Mapping
+from typing import Any, Mapping
 from uuid import uuid4
 
 from app.platform.models import UploadedFile
 
 
 IntakeKey = tuple[str, str]
+
+
+class IntakeAction(StrEnum):
+    WAIT = "wait"
+    SUBMIT = "submit"
+    CANCEL = "cancel"
+    BYPASS = "bypass"
+
+
+class IntakeMaterialKind(StrEnum):
+    TEXT = "text"
+    URL = "url"
+    FILE = "file"
+
+
+@dataclass(frozen=True)
+class IntakeMaterialRef:
+    kind: IntakeMaterialKind
+    text_value: str = ""
+    url_value: str = ""
+    uploaded_file: UploadedFile | None = None
+
+    @classmethod
+    def text(cls, value: str) -> "IntakeMaterialRef":
+        clean = value.strip()
+        if not clean:
+            raise ValueError("文字材料不能为空")
+        return cls(kind=IntakeMaterialKind.TEXT, text_value=clean)
+
+    @classmethod
+    def url(cls, value: str) -> "IntakeMaterialRef":
+        clean = value.strip()
+        if not re.match(r"^https?://", clean, flags=re.IGNORECASE):
+            raise ValueError("URL 材料必须使用 http 或 https")
+        return cls(kind=IntakeMaterialKind.URL, url_value=clean)
+
+    @classmethod
+    def file(cls, value: UploadedFile) -> "IntakeMaterialRef":
+        if not value.stored_path:
+            raise ValueError("文件材料提交前必须先持久化")
+        return cls(kind=IntakeMaterialKind.FILE, uploaded_file=value)
+
+    def to_payload(self) -> dict[str, object]:
+        if self.kind is IntakeMaterialKind.TEXT:
+            return {"kind": self.kind.value, "text": self.text_value}
+        if self.kind is IntakeMaterialKind.URL:
+            return {"kind": self.kind.value, "url": self.url_value}
+        if self.uploaded_file is None:
+            raise ValueError("文件材料缺少持久化引用")
+        return {
+            "kind": self.kind.value,
+            "filename": self.uploaded_file.filename,
+            "content_type": self.uploaded_file.content_type,
+            "stored_path": self.uploaded_file.stored_path,
+            "size_bytes": self.uploaded_file.size_bytes,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> "IntakeMaterialRef":
+        kind = str(payload.get("kind", ""))
+        if kind == IntakeMaterialKind.TEXT.value:
+            return cls.text(str(payload.get("text", "")))
+        if kind == IntakeMaterialKind.URL.value:
+            return cls.url(str(payload.get("url", "")))
+        if kind == IntakeMaterialKind.FILE.value:
+            stored_path = str(payload.get("stored_path", "") or "").strip()
+            if not stored_path:
+                raise ValueError("文件材料缺少持久化路径")
+            return cls.file(
+                UploadedFile(
+                    filename=str(payload.get("filename", "upload.bin") or "upload.bin"),
+                    content_type=str(payload.get("content_type", "") or ""),
+                    stored_path=stored_path,
+                    delete_after_read=True,
+                )
+            )
+        raise ValueError(f"未知的材料类型：{kind}")
+
+
+@dataclass(frozen=True)
+class IntakeTaskSubmission:
+    channel: str
+    sender_userid: str
+    task_type: str
+    instructions: tuple[str, ...] = ()
+    materials: tuple[IntakeMaterialRef, ...] = ()
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.channel.strip() or not self.sender_userid.strip():
+            raise ValueError("任务提交必须包含入口和用户")
+        if not self.task_type.strip():
+            raise ValueError("任务提交必须包含 task_type")
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "channel": self.channel,
+            "sender_userid": self.sender_userid,
+            "task_type": self.task_type,
+            "instructions": [item for item in self.instructions if item.strip()],
+            "materials": [item.to_payload() for item in self.materials],
+            "metadata": dict(self.metadata or {}),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> "IntakeTaskSubmission":
+        raw_materials = payload.get("materials", [])
+        raw_instructions = payload.get("instructions", [])
+        raw_metadata = payload.get("metadata", {})
+        if not isinstance(raw_materials, list):
+            raise ValueError("任务材料必须是列表")
+        if not isinstance(raw_instructions, list):
+            raise ValueError("任务要求必须是列表")
+        if not isinstance(raw_metadata, Mapping):
+            raise ValueError("任务 metadata 必须是对象")
+        materials = tuple(
+            IntakeMaterialRef.from_payload(item)
+            for item in raw_materials
+            if isinstance(item, Mapping)
+        )
+        if len(materials) != len(raw_materials):
+            raise ValueError("任务材料项必须是对象")
+        return cls(
+            channel=str(payload.get("channel", "")),
+            sender_userid=str(payload.get("sender_userid", "")),
+            task_type=str(payload.get("task_type", "")),
+            instructions=tuple(str(item) for item in raw_instructions if str(item).strip()),
+            materials=materials,
+            metadata=dict(raw_metadata),
+        )
+
+
+@dataclass(frozen=True)
+class IntakeOutcome:
+    action: IntakeAction
+    reply: str = ""
+    submission: IntakeTaskSubmission | None = None
+
+    def __post_init__(self) -> None:
+        if self.action is IntakeAction.SUBMIT and self.submission is None:
+            raise ValueError("submit outcome requires submission")
+        if self.action is not IntakeAction.SUBMIT and self.submission is not None:
+            raise ValueError("only submit outcome accepts submission")
+
+    @classmethod
+    def wait(cls, reply: str) -> "IntakeOutcome":
+        return cls(action=IntakeAction.WAIT, reply=reply)
+
+    @classmethod
+    def submit(cls, submission: IntakeTaskSubmission, reply: str = "") -> "IntakeOutcome":
+        return cls(action=IntakeAction.SUBMIT, reply=reply, submission=submission)
+
+    @classmethod
+    def cancelled(cls, reply: str) -> "IntakeOutcome":
+        return cls(action=IntakeAction.CANCEL, reply=reply)
+
+    @classmethod
+    def bypass(cls) -> "IntakeOutcome":
+        return cls(action=IntakeAction.BYPASS)
 
 
 @dataclass(frozen=True)

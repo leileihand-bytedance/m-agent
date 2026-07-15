@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from app.platform.models import PlatformResult
@@ -8,6 +8,22 @@ from app.platform.models import PlatformResult
 class WeComTextMessage:
     sender_userid: str
     content: str
+
+
+def extract_message_id(frame: Mapping[str, object]) -> str:
+    """提取企业微信稳定消息标识，供幂等任务键复用。"""
+
+    candidates: list[object] = [frame.get("msgid")]
+    body = frame.get("body")
+    headers = frame.get("headers")
+    if isinstance(body, Mapping):
+        candidates.append(body.get("msgid"))
+    if isinstance(headers, Mapping):
+        candidates.append(headers.get("req_id"))
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def extract_text_message(frame: dict[str, object]) -> WeComTextMessage:

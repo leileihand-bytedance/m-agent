@@ -408,12 +408,33 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
 目标：
 
 - 完成真实材料验收。
-""",
+
+### TODO-017：公共附件回传
+
+状态：未开始
+
+优先级：P1
+
+归属：底座
+
+### TODO-027：后台任务执行
+
+状态：未开始
+
+优先级：P1
+
+归属：底座
+    """,
         encoding="utf-8",
     )
     multi_file_reviewer = project_root / "app" / "review" / "multi_file_reviewer.py"
     multi_file_reviewer.parent.mkdir(parents=True)
     multi_file_reviewer.write_text("# implementation started\n", encoding="utf-8")
+    task_execution = project_root / "app" / "platform" / "task_execution.py"
+    task_execution.parent.mkdir(parents=True, exist_ok=True)
+    task_execution.write_text("# persistent task execution\n", encoding="utf-8")
+    attachment_delivery = project_root / "app" / "platform" / "attachment_delivery.py"
+    attachment_delivery.write_text("# shared attachment delivery\n", encoding="utf-8")
     heartbeat_dir = tmp_path / "heartbeats"
     heartbeat_dir.mkdir()
     (heartbeat_dir / "writing_bot.json").write_text(
@@ -452,8 +473,8 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["official_format_review"].status == "stable"
     assert capabilities["ppt_review"].status == "building"
     assert capabilities["multi_file_review"].status == "building"
-    assert capabilities["attachment_delivery"].status == "planned"
-    assert capabilities["task_execution"].status == "planned"
+    assert capabilities["attachment_delivery"].status == "building"
+    assert capabilities["task_execution"].status == "building"
     assert overview.capability_status_counts["building"] >= 1
     assert overview.capability_status_counts["stable"] >= 1
 

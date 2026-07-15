@@ -17,6 +17,7 @@ def test_data_paths_default_to_visible_desktop_sibling(tmp_path: Path):
     assert paths.chat_logs == paths.root / "runtime" / "chat-logs"
     assert paths.conversations == paths.root / "runtime" / "conversations"
     assert paths.intake == paths.root / "runtime" / "intake"
+    assert paths.task_queue_db == paths.root / "runtime" / "task-execution" / "tasks.sqlite3"
     assert paths.ops_events == paths.root / "runtime" / "ops" / "events"
     assert paths.ops_state == paths.root / "runtime" / "ops" / "state.json"
     assert paths.heartbeats == paths.root / "runtime" / "ops" / "heartbeats"
@@ -50,6 +51,7 @@ def test_data_paths_prepare_creates_private_visible_structure(tmp_path: Path):
     assert paths.review_tasks.is_dir()
     assert paths.logs.is_dir()
     assert paths.intake.is_dir()
+    assert paths.task_queue_db.parent.is_dir()
     assert paths.root.stat().st_mode & 0o777 == 0o700
     readme = (paths.root / "README.txt").read_text(encoding="utf-8")
     assert "不纳入 Git" in readme

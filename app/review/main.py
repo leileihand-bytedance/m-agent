@@ -36,9 +36,11 @@ from app.review.reviewer import ReviewResult, Finding  # noqa: E402
 from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
 from app.review.intake import ReviewIntakeStore, is_format_review_request  # noqa: E402
 from app.platform.models import UploadedFile  # noqa: E402
+from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest  # noqa: E402
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
 from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
+from app.platform.gateway.wecom import extract_message_id  # noqa: E402
 from app.platform.task_status import write_task_status  # noqa: E402
 
 
@@ -502,23 +504,6 @@ def get_sender_id(frame: Mapping[str, object]) -> str:
     return "unknown"
 
 
-def get_message_id(frame: Mapping[str, object]) -> str:
-    body = frame.get("body")
-    headers = frame.get("headers")
-    top_level_msgid = frame.get("msgid")
-    if isinstance(top_level_msgid, str) and top_level_msgid.strip():
-        return top_level_msgid.strip()
-    if isinstance(body, Mapping):
-        value = body.get("msgid")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    if isinstance(headers, Mapping):
-        value = headers.get("req_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
 def get_string_value(values: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
     for key in keys:
         value = values.get(key)
@@ -950,6 +935,53 @@ async def _reply_delivery_failure_to_user(
         )
 
 
+async def _deliver_review_attachment(
+    *,
+    attachment_delivery: AttachmentDelivery,
+    ws_client: object,
+    frame: object,
+    path: Path,
+    sender: str,
+    sender_name: str,
+    label: str,
+    req_id_factory,
+) -> bool:
+    task_dir = path.parent.parent if path.parent.name == "output" else path.parent
+    result = await attachment_delivery.deliver(
+        ws_client=ws_client,
+        request=DeliveryRequest(
+            file_path=path,
+            allowed_root=task_dir,
+            frame=frame,
+            task_dir=task_dir,
+            source="review_bot",
+            sender_userid=sender,
+            sender_name=sender_name,
+            skill_id=label,
+            job_id=task_dir.name,
+        ),
+    )
+    if result.delivered:
+        return True
+    try:
+        await asyncio.wait_for(
+            ws_client.reply_stream(
+                frame,
+                req_id_factory("review-send-failed"),
+                result.user_message,
+                True,
+            ),
+            timeout=30.0,
+        )
+    except Exception as exc:
+        logger.warning(
+            "审核附件失败提示未能发送: %s",
+            type(exc).__name__,
+            extra=log_extra(sender, sender_name),
+        )
+    return False
+
+
 async def _heartbeat_loop(root_dir: Path, service: str) -> None:
     while True:
         try:
@@ -1012,6 +1044,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         reply_ack_timeout_seconds=config.reply_ack_timeout_seconds,
     )
     ops_event_logger = OpsEventLogger(config.ops_events_dir)
+    attachment_delivery = AttachmentDelivery(ops_event_logger=ops_event_logger)
     heartbeat_task = asyncio.create_task(
         _heartbeat_loop(config.ops_heartbeat_dir, "review_bot"),
         name="review-bot-heartbeat",
@@ -1099,40 +1132,16 @@ async def run_review_bot(config: ReviewConfig) -> None:
         return False
 
     async def send_review_file(frame, path: Path, *, sender: str, label: str) -> bool:
-        last_error: BaseException | None = None
-        for retry in range(3):
-            try:
-                upload_result = await asyncio.wait_for(
-                    ws_client.upload_media(path.read_bytes(), type="file", filename=path.name),
-                    timeout=60.0,
-                )
-                await asyncio.wait_for(
-                    ws_client.reply_media(frame, "file", upload_result["media_id"]),
-                    timeout=30.0,
-                )
-                return True
-            except Exception as exc:
-                last_error = exc
-                logger.warning(
-                    "%s发送失败 to %s: %s, 第 %d 次重试",
-                    label,
-                    sender,
-                    exc,
-                    retry + 1,
-                    extra=log_extra(sender, registry.get_name(sender) or sender),
-                )
-                if retry < 2:
-                    await asyncio.sleep(2 * (retry + 1))
-        send_error = last_error or Exception("发送失败（已重试3次）")
-        await notifier.notify_send_failure(sender, label, send_error)
-        await _reply_delivery_failure_to_user(
-            ws_client,
-            frame,
-            generate_req_id("review-send-failed"),
-            label,
-            send_error,
+        return await _deliver_review_attachment(
+            attachment_delivery=attachment_delivery,
+            ws_client=ws_client,
+            frame=frame,
+            path=path,
+            sender=sender,
+            sender_name=registry.get_name(sender) or sender,
+            label=label,
+            req_id_factory=generate_req_id,
         )
-        return False
 
     async def run_official_format_decision(frame, sender: str, decision) -> None:
         file = decision.files[0]
@@ -1160,7 +1169,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 file_bytes=buffer,
                 original_filename=filename,
                 sender=sender,
-                msgid=get_message_id(frame),
+                msgid=extract_message_id(frame),
                 result=result,
                 parsed_paragraphs=parsed.paragraphs,
                 doc_type=DocumentType.OFFICIAL_FORMAT,
@@ -1226,7 +1235,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             task_dir, marked_paths = archive_multi_file_review(
                 reviews_dir=config.reviews_dir,
                 sender=sender,
-                msgid=get_message_id(frame),
+                msgid=extract_message_id(frame),
                 bundle=bundle,
             )
             logger.info(
@@ -1368,7 +1377,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
                         file_bytes=None,
                         original_filename="文字消息.txt",
                         sender=sender,
-                        msgid=get_message_id(frame),
+                        msgid=extract_message_id(frame),
                         result=result,
                         parsed_paragraphs=paragraphs,
                         text_content=content,
@@ -1676,48 +1685,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     await notifier.notify_send_failure(sender, "半月报结果", Exception("发送失败（已重试3次）"))
 
             if reply_file_path is not None:
-                file_sent = False
-                last_send_error: BaseException | None = None
-                for retry in range(3):
-                    try:
-                        file_bytes = reply_file_path.read_bytes()
-                        upload_result = await asyncio.wait_for(
-                            ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
-                            timeout=60.0,
-                        )
-                        media_id = upload_result["media_id"]
-                        await asyncio.wait_for(
-                            ws_client.reply_media(frame, "file", media_id),
-                            timeout=30.0,
-                        )
-                        logger.info("半月报文档已发送: %s", reply_file_path.name, extra=extra)
-                        file_sent = True
-                        break
-                    except asyncio.TimeoutError as exc:
-                        last_send_error = exc
-                        logger.warning("半月报文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
-                    except Exception as exc:
-                        last_send_error = exc
-                        logger.warning(
-                            "半月报文档发送失败 to %s: %s, 第 %d 次重试",
-                            sender,
-                            exc,
-                            retry + 1,
-                            extra=extra,
-                        )
-                    if retry < 2:
-                        await asyncio.sleep(2 * (retry + 1))
-                if not file_sent:
-                    logger.error("半月报文档发送失败（已重试3次） to %s", sender, extra=extra)
-                    send_error = last_send_error or Exception("发送失败（已重试3次）")
-                    await notifier.notify_send_failure(sender, "半月报文档", send_error)
-                    await _reply_delivery_failure_to_user(
-                        ws_client,
-                        frame,
-                        generate_req_id("review-send-failed"),
-                        "半月报文档",
-                        send_error,
-                    )
+                await send_review_file(
+                    frame,
+                    reply_file_path,
+                    sender=sender,
+                    label="半月报文档",
+                )
             return
 
         if doc_type in {DocumentType.GENERAL, DocumentType.OFFICIAL_FORMAT}:
@@ -1815,48 +1788,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     await notifier.notify_send_failure(sender, f"{review_label}结果", Exception("发送失败（已重试3次）"))
 
             if reply_file_path is not None:
-                file_sent = False
-                last_send_error: BaseException | None = None
-                for retry in range(3):
-                    try:
-                        file_bytes = reply_file_path.read_bytes()
-                        upload_result = await asyncio.wait_for(
-                            ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
-                            timeout=60.0,
-                        )
-                        media_id = upload_result["media_id"]
-                        await asyncio.wait_for(
-                            ws_client.reply_media(frame, "file", media_id),
-                            timeout=30.0,
-                        )
-                        logger.info("标注文档已发送: %s", reply_file_path.name, extra=extra)
-                        file_sent = True
-                        break
-                    except asyncio.TimeoutError as exc:
-                        last_send_error = exc
-                        logger.warning("标注文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
-                    except Exception as exc:
-                        last_send_error = exc
-                        logger.warning(
-                            "标注文档发送失败 to %s: %s, 第 %d 次重试",
-                            sender,
-                            exc,
-                            retry + 1,
-                            extra=extra,
-                        )
-                    if retry < 2:
-                        await asyncio.sleep(2 * (retry + 1))
-                if not file_sent:
-                    logger.error("标注文档发送失败（已重试3次） to %s", sender, extra=extra)
-                    send_error = last_send_error or Exception("发送失败（已重试3次）")
-                    await notifier.notify_send_failure(sender, "标注文档", send_error)
-                    await _reply_delivery_failure_to_user(
-                        ws_client,
-                        frame,
-                        generate_req_id("review-send-failed"),
-                        "标注文档",
-                        send_error,
-                    )
+                await send_review_file(
+                    frame,
+                    reply_file_path,
+                    sender=sender,
+                    label="标注文档",
+                )
 
             return
 
@@ -1986,48 +1923,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 await notifier.notify_send_failure(sender, "内参审核通过提示", Exception("发送失败（已重试3次）"))
 
         if reply_file_path is not None:
-            file_sent = False
-            last_send_error: BaseException | None = None
-            for retry in range(3):
-                try:
-                    file_bytes = reply_file_path.read_bytes()
-                    upload_result = await asyncio.wait_for(
-                        ws_client.upload_media(file_bytes, type="file", filename=reply_file_path.name),
-                        timeout=60.0,
-                    )
-                    media_id = upload_result["media_id"]
-                    await asyncio.wait_for(
-                        ws_client.reply_media(frame, "file", media_id),
-                        timeout=30.0,
-                    )
-                    logger.info("内参审核文档已发送: %s", reply_file_path.name, extra=extra)
-                    file_sent = True
-                    break
-                except asyncio.TimeoutError as exc:
-                    last_send_error = exc
-                    logger.warning("内参审核文档发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
-                except Exception as exc:
-                    last_send_error = exc
-                    logger.warning(
-                        "内参审核文档发送失败 to %s: %s, 第 %d 次重试",
-                        sender,
-                        exc,
-                        retry + 1,
-                        extra=extra,
-                    )
-                if retry < 2:
-                    await asyncio.sleep(2 * (retry + 1))
-            if not file_sent:
-                logger.error("内参审核文档发送失败（已重试3次） to %s", sender, extra=extra)
-                send_error = last_send_error or Exception("发送失败（已重试3次）")
-                await notifier.notify_send_failure(sender, "内参审核文档", send_error)
-                await _reply_delivery_failure_to_user(
-                    ws_client,
-                    frame,
-                    generate_req_id("review-send-failed"),
-                    "内参审核文档",
-                    send_error,
-                )
+            await send_review_file(
+                frame,
+                reply_file_path,
+                sender=sender,
+                label="内参审核文档",
+            )
 
         # 清理临时文件（内参正文格式检查用完后释放）
         tmp_path.unlink(missing_ok=True)

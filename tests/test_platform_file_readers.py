@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import app.platform.builtin_tools as builtin_tools  # noqa: E402
 from app.platform.builtin_tools import read_document_file, read_pdf_file, read_word_file  # noqa: E402
 
 
@@ -81,3 +82,32 @@ def test_read_document_file_persists_standard_artifact_in_work_dir(tmp_path):
     assert result["artifact_path"].endswith("document.json")
     assert Path(result["artifact_path"]).is_file()
     assert result["warnings"]
+
+
+def test_read_document_file_can_enable_ocr_only_through_explicit_option(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeArtifact:
+        def to_material(self):
+            return {"text": "OCR text"}
+
+    class FakeService:
+        def __init__(self, *, max_file_bytes):
+            calls.append(("init", max_file_bytes))
+
+        def parse(self, path, **kwargs):
+            calls.append(("parse", path, kwargs))
+            return FakeArtifact()
+
+    monkeypatch.setattr(builtin_tools, "DocumentService", FakeService)
+
+    result = read_document_file(
+        "scan.pdf",
+        allowed_root=tmp_path / "input",
+        work_dir=tmp_path / "work",
+        ocr_scanned_pages=True,
+    )
+
+    assert result == {"text": "OCR text"}
+    assert calls[-1][2]["ocr_scanned_pages"] is True
+    assert calls[-1][2]["render_pages"] is False

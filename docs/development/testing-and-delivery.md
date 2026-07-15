@@ -84,16 +84,24 @@ uv run --locked python scripts/project_docs.py check
 验证底座区：
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
 ```
 
 修改公共任务组装内核时，至少额外运行：
 
 ```bash
-uv run --locked pytest tests/test_platform_intake.py tests/test_review_intake.py tests/test_writing_platform_bot.py tests/test_platform_app.py -v
+uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_review_intake.py tests/test_writing_platform_bot.py tests/test_platform_app.py -v
 ```
 
-重点验证入口和用户隔离、状态原子写入、重启恢复、TTL 清理、目录外文件引用拦截、数量/总大小限制，以及写作和审核原有状态机行为不变。
+重点验证入口和用户隔离、状态原子写入、重启恢复、TTL 清理、目录外文件引用拦截、数量/总大小限制、公共动作/材料/提交模型，以及写作和审核原有业务状态机行为不变。
+
+修改持久化后台任务或附件交付时，至少额外运行：
+
+```bash
+uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_writing_platform_bot.py tests/test_review_bot.py -v
+```
+
+重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、任务编号兜底和运维事件脱敏。执行器内核测试通过不代表具体 Bot 已切流，真实启用前还需验证 handler 可恢复性和外部发送幂等。
 
 ### 2. Skill 测试
 
@@ -274,10 +282,10 @@ uv run --locked pytest tests/test_platform_tools.py tests/test_platform_builtin_
 至少跑：
 
 ```bash
-uv run --locked pytest tests/test_platform_intake.py tests/test_platform_document_service.py tests/test_platform_file_readers.py tests/test_platform_data_paths.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_file_readers.py tests/test_platform_data_paths.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点确认：格式伪造、路径越界、异常压缩包和超限文件被拦截；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 明确记录待 OCR；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
+重点确认：格式伪造、路径越界、异常压缩包和超限文件被拦截；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 只 OCR 标记页，失败仍保留待 OCR 位置；PPT 转换不复用旧 PDF；页面输出不无限累积；总时间、页数、像素和容量限制生效；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
 
 审核 Bot 的格式指令衔接或多文件联合审核另需跑：
 

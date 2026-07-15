@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.platform.gateway.wecom import (  # noqa: E402
+    extract_message_id,
     extract_text_message,
     format_text_reply,
     handle_text_frame_with_app,
@@ -24,6 +25,17 @@ def test_extract_text_message_from_wecom_frame():
 
     assert message.sender_userid == "user-001"
     assert message.content == "帮我写直报：https://example.com"
+
+
+def test_extract_message_id_uses_stable_wecom_precedence():
+    assert extract_message_id({"msgid": " top-level "}) == "top-level"
+    assert extract_message_id({"body": {"msgid": " body-id "}}) == "body-id"
+    assert extract_message_id({"headers": {"req_id": " request-id "}}) == "request-id"
+
+
+def test_extract_message_id_returns_empty_for_invalid_values():
+    assert extract_message_id({"body": {"msgid": 123}}) == ""
+    assert extract_message_id({"body": [], "headers": "invalid"}) == ""
 
 
 def test_format_text_reply_for_clarification():

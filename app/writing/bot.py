@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.platform.app import PlatformApp
+from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest, DeliveryResult
 from app.platform.config import PlatformConfig
 from app.platform.gateway.wecom import format_text_reply
 from app.platform.intent import ConversationIntent
@@ -20,6 +21,7 @@ from .portal import PortalConfig, PortalService, PortalTokenStore, build_welcome
 
 SUPPORTED_WRITING_FILE_SUFFIXES = {".docx", ".pdf", ".pptx"}
 MAX_WRITING_FILE_BYTES = 20 * 1024 * 1024
+MAX_WRITING_OUTPUT_FILE_BYTES = 100 * 512 * 1024
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ def build_platform_config(config) -> PlatformConfig:
         access_policy_path=config.access_policy_path,
         user_registry_path=config.user_registry_path,
         document_max_bytes=config.document_max_bytes,
+        document_ocr_enabled=config.document_ocr_enabled,
+        task_queue_db_path=config.task_queue_db_path,
     )
 
 
@@ -65,6 +69,7 @@ async def handle_text_with_platform(
     req_id_factory,
     ops_event_logger: OpsEventLogger | None = None,
     intake_store: WritingIntakeStore | None = None,
+    attachment_delivery: AttachmentDelivery | None = None,
 ) -> None:
     content = frame.get("body", {}).get("text", {}).get("content", "")
     sender = frame.get("body", {}).get("from", {}).get("userid", "unknown")
@@ -83,7 +88,7 @@ async def handle_text_with_platform(
 
     if intake_store is not None:
         decision = intake_store.handle_text(channel="wecom", sender_userid=sender_userid, text=content)
-        if decision.action == "wait":
+        if decision.action in {"wait", "cancel"}:
             await _reply_stream_safely(ws_client, frame, stream_id, decision.reply, True)
             return
         if decision.action == "run":
@@ -97,6 +102,7 @@ async def handle_text_with_platform(
                 sender_name=sender_name,
                 ops_event_logger=ops_event_logger,
                 intake_store=intake_store,
+                attachment_delivery=attachment_delivery,
             )
             return
 
@@ -306,6 +312,7 @@ async def _run_structured_decision(
     sender_name: str,
     ops_event_logger: OpsEventLogger | None,
     intake_store: WritingIntakeStore | None = None,
+    attachment_delivery: AttachmentDelivery | None = None,
 ) -> None:
     ack_message = decision.ack_message or "收到，正在按写作流程处理，请稍后……"
     await _reply_stream_safely(ws_client, frame, req_id_factory("writing-platform"), ack_message, True)
@@ -387,16 +394,23 @@ async def _run_structured_decision(
             sender_name=sender_name,
         )
     if output_file is not None:
-        file_sent = await _reply_file_safely(ws_client, frame, output_file)
-        if not file_sent and ops_event_logger:
-            _record_ops_event(
-                ops_event_logger,
-                severity="error",
-                subject="写作结果文件发送失败",
-                detail=f"生成结果未能作为企业微信文件发送：{output_file.name}",
-                sender_userid=sender_userid,
-                sender_name=sender_name,
-                skill_id=decision.skill_id or "",
+        delivery = attachment_delivery or AttachmentDelivery(ops_event_logger=ops_event_logger)
+        delivery_result = await _reply_file_safely(
+            ws_client,
+            frame,
+            output_file,
+            attachment_delivery=delivery,
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            skill_id=decision.skill_id or "",
+        )
+        if not delivery_result.delivered:
+            await _reply_stream_safely(
+                ws_client,
+                frame,
+                req_id_factory("writing-file-delivery-failed"),
+                delivery_result.user_message,
+                True,
             )
 
 
@@ -426,26 +440,44 @@ def _result_output_file(result: PlatformResult) -> Path | None:
         size = path.stat().st_size
     except OSError:
         return None
-    if not path.is_file() or size <= 0 or size > MAX_WRITING_FILE_BYTES:
+    if not path.is_file() or size <= 0 or size > MAX_WRITING_OUTPUT_FILE_BYTES:
         return None
     return path
 
 
-async def _reply_file_safely(ws_client, frame, path: Path) -> bool:
-    try:
-        upload_result = await asyncio.wait_for(
-            ws_client.upload_media(path.read_bytes(), type="file", filename=path.name),
-            timeout=60,
-        )
-        media_id = str(upload_result.get("media_id", "") or "")
-        if not media_id:
-            raise ValueError("企业微信上传结果缺少 media_id")
-        await asyncio.wait_for(ws_client.reply_media(frame, "file", media_id), timeout=15)
+async def _reply_file_safely(
+    ws_client,
+    frame,
+    path: Path,
+    *,
+    attachment_delivery: AttachmentDelivery,
+    sender_userid: str,
+    sender_name: str,
+    skill_id: str,
+) -> DeliveryResult:
+    task_dir = path.parent.parent
+    result = await attachment_delivery.deliver(
+        ws_client=ws_client,
+        request=DeliveryRequest(
+            file_path=path,
+            allowed_root=task_dir,
+            frame=frame,
+            task_dir=task_dir,
+            source="writing_bot",
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            skill_id=skill_id,
+            job_id=task_dir.name,
+        ),
+    )
+    if result.delivered:
         print(f"企业微信结果文件发送成功:{path.name}", flush=True)
-        return True
-    except Exception as exc:
-        print(f"企业微信结果文件发送失败:{type(exc).__name__}: {exc}", flush=True)
-        return False
+    else:
+        print(
+            f"企业微信结果文件发送失败:{result.error_code or result.status}",
+            flush=True,
+        )
+    return result
 
 
 def _record_ops_event(
@@ -612,6 +644,7 @@ async def run_bot(config) -> None:
 
     platform_app = PlatformApp.from_config(build_platform_config(config))
     ops_event_logger = OpsEventLogger(config.ops_events_dir) if config.ops_events_dir else None
+    attachment_delivery = AttachmentDelivery(ops_event_logger=ops_event_logger)
     intake_store = WritingIntakeStore(
         ttl_seconds=config.intake_ttl_seconds,
         storage_dir=config.intake_dir,
@@ -693,6 +726,7 @@ async def run_bot(config) -> None:
             req_id_factory=generate_req_id,
             ops_event_logger=ops_event_logger,
             intake_store=intake_store,
+            attachment_delivery=attachment_delivery,
         )
 
     async def on_file(frame):

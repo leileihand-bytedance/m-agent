@@ -19,6 +19,8 @@ def check_config(config: PlatformConfig) -> dict[str, object]:
         "chat_log_dir": str(config.chat_log_dir or ""),
         "user_registry_path": str(config.user_registry_path) if config.user_registry_path else "",
         "user_registry_exists": bool(config.user_registry_path and config.user_registry_path.exists()),
+        "document_ocr_enabled": config.document_ocr_enabled,
+        "task_queue_db_path": str(config.task_queue_db_path or ""),
         "skills_dir": str(config.skills_dir),
         "skills_dir_exists": config.skills_dir.exists(),
         "jobs_dir": str(config.jobs_dir),

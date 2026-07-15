@@ -44,6 +44,7 @@ from app.review.main import (  # noqa: E402
     _build_file_ack,
     _extract_primary_inference_texts,
     _settle_auto_review_batch,
+    _deliver_review_attachment,
 )
 from app.review.document_type import DocumentType  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
@@ -589,6 +590,54 @@ def test_summarize_delivery_error_maps_upload_failure():
     exc = RuntimeError("Upload failed: 3 chunk(s) failed")
 
     assert _summarize_delivery_error(exc) == "企业微信文件上传失败"
+
+
+def test_review_attachment_delivery_uses_public_status_and_metrics(tmp_path: Path):
+    import asyncio
+
+    from app.platform.attachment_delivery import AttachmentDelivery
+    from app.platform.task_status import write_task_status
+
+    class FakeWsClient:
+        def __init__(self):
+            self.uploaded = []
+            self.replied = []
+
+        async def upload_media(self, content, *, type, filename):
+            self.uploaded.append((content, type, filename))
+            return {"media_id": "media-1"}
+
+        async def reply_media(self, frame, media_type, media_id):
+            self.replied.append((frame, media_type, media_id))
+
+        async def reply_stream(self, frame, req_id, text, finish):
+            raise AssertionError("成功交付不应发送失败提示")
+
+    task_dir = tmp_path / "review-task"
+    output = task_dir / "output" / "marked_材料.docx"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"marked-docx")
+    write_task_status(task_dir, processing_status="completed", delivery_status="unknown")
+    ws_client = FakeWsClient()
+
+    delivered = asyncio.run(
+        _deliver_review_attachment(
+            attachment_delivery=AttachmentDelivery(),
+            ws_client=ws_client,
+            frame={"msgid": "msg-1"},
+            path=output,
+            sender="user-1",
+            sender_name="test-user",
+            label="标注文档",
+            req_id_factory=lambda prefix: f"{prefix}-1",
+        )
+    )
+
+    assert delivered is True
+    assert ws_client.uploaded == [(b"marked-docx", "file", "marked_材料.docx")]
+    assert (task_dir / "delivery.json").is_file()
+    status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["delivery_status"] == "delivered"
 
 
 def test_load_config_missing_required():

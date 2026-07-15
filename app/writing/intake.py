@@ -11,7 +11,14 @@ from pathlib import Path
 import re
 import time
 
-from app.platform.intake import IntakePersistence, check_intake_file_limits
+from app.platform.intake import (
+    IntakeAction,
+    IntakeMaterialRef,
+    IntakeOutcome,
+    IntakePersistence,
+    IntakeTaskSubmission,
+    check_intake_file_limits,
+)
 from app.platform.models import UploadedFile
 from app.platform.router import URL_RE
 
@@ -22,6 +29,7 @@ REWRITE_INTENT = "rewrite"
 RESEARCH_SYNTHESIS_INTENT = "research_synthesis"
 DEFAULT_MAX_FILES = 10
 DEFAULT_MAX_TOTAL_FILE_BYTES = 20 * 1024 * 1024
+_CANCEL_SIGNALS = {"取消", "取消写作", "不要写了", "不用写了", "清空材料", "重新开始"}
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,35 @@ class IntakeDecision:
     files: tuple[UploadedFile, ...] = ()
     ack_message: str = ""
 
+    def to_platform_outcome(self, *, channel: str, sender_userid: str) -> IntakeOutcome:
+        if self.action == "bypass":
+            return IntakeOutcome.bypass()
+        if self.action == "wait":
+            return IntakeOutcome.wait(self.reply)
+        if self.action == "cancel":
+            return IntakeOutcome.cancelled(self.reply)
+        if self.action != "run":
+            raise ValueError(f"未知的写作组装动作：{self.action}")
+        if not self.skill_id:
+            raise ValueError("写作任务提交缺少 skill_id")
+        materials: list[IntakeMaterialRef] = []
+        if self.material_text.strip():
+            materials.append(IntakeMaterialRef.text(self.material_text))
+        materials.extend(IntakeMaterialRef.url(item) for item in self.urls)
+        materials.extend(IntakeMaterialRef.file(item) for item in self.files)
+        instructions = (self.text.strip(),) if self.text.strip() else ()
+        return IntakeOutcome.submit(
+            IntakeTaskSubmission(
+                channel=channel,
+                sender_userid=sender_userid,
+                task_type=self.skill_id,
+                instructions=instructions,
+                materials=tuple(materials),
+                metadata={"source": "writing_intake"},
+            ),
+            reply=self.ack_message,
+        )
+
 
 class WritingIntakeStore:
     """写作短任务暂存，可选持久化到 M-Agent-Files/runtime/intake。"""
@@ -83,6 +120,12 @@ class WritingIntakeStore:
         intent = detect_writing_intent(clean_text)
         urls = extract_urls(clean_text)
         has_material = bool(urls) or looks_like_material_text(clean_text)
+
+        if is_writing_cancel_signal(clean_text):
+            if session is None:
+                return IntakeDecision(action="cancel", reply="当前没有待处理的写作材料。")
+            self.clear(channel=channel, sender_userid=sender_userid)
+            return IntakeDecision(action="cancel", reply="已取消本次写作并清空暂存材料。")
 
         if session is not None and session.awaiting_clarification and clean_text:
             if has_material:
@@ -363,6 +406,11 @@ def detect_writing_intent(text: str) -> str | None:
     if any(word in text for word in ("改写", "润色", "优化", "修改", "改稿")):
         return REWRITE_INTENT
     return None
+
+
+def is_writing_cancel_signal(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text.strip())
+    return normalized in _CANCEL_SIGNALS
 
 
 def extract_urls(text: str) -> tuple[str, ...]:

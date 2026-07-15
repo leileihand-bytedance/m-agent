@@ -555,6 +555,7 @@ def build_platform_tools(config: PlatformConfig) -> dict[str, Callable[..., obje
             allowed_root=allowed_root,
             work_dir=work_dir,
             max_file_bytes=config.document_max_bytes,
+            ocr_scanned_pages=config.document_ocr_enabled,
         ),
         "llm_writer": writer.write,
     }

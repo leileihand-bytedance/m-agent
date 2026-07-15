@@ -235,12 +235,16 @@ def read_document_file(
     allowed_root: str | Path,
     work_dir: str | Path,
     max_file_bytes: int = 50 * 1024 * 1024,
+    ocr_scanned_pages: bool = False,
+    render_pages: bool = False,
 ) -> dict[str, object]:
     """安全解析任务内 Word/PDF/PPTX，并把完整标准结果写入 work 目录。"""
     artifact = DocumentService(max_file_bytes=max_file_bytes).parse(
         path,
         allowed_root=allowed_root,
         work_dir=work_dir,
+        ocr_scanned_pages=ocr_scanned_pages,
+        render_pages=render_pages,
     )
     return artifact.to_material()
 

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Callable
 
+from .enrichment import DocumentEnricher
 from .models import DocumentArtifact, DocumentFormat, DocumentSource
 from .parsers import parse_docx_document, parse_pdf_document, parse_pptx_document
 from .security import DocumentSecurityValidator
@@ -22,6 +25,7 @@ class DocumentService:
         max_uncompressed_bytes: int = 250 * 1024 * 1024,
         max_compression_ratio: float = 500,
         parsers: dict[DocumentFormat, DocumentParser] | None = None,
+        enricher: DocumentEnricher | object | None = None,
     ):
         self._validator = DocumentSecurityValidator(
             max_file_bytes=max_file_bytes,
@@ -34,6 +38,7 @@ class DocumentService:
             DocumentFormat.PDF: parse_pdf_document,
             DocumentFormat.PPTX: parse_pptx_document,
         }
+        self._enricher = enricher or DocumentEnricher()
 
     def parse(
         self,
@@ -41,6 +46,8 @@ class DocumentService:
         *,
         allowed_root: str | Path,
         work_dir: str | Path,
+        render_pages: bool = False,
+        ocr_scanned_pages: bool = False,
     ) -> DocumentArtifact:
         validated = self._validator.validate(path, allowed_root=allowed_root)
         work_path = _resolve_work_dir(work_dir, allowed_root=allowed_root)
@@ -71,12 +78,15 @@ class DocumentService:
         )
         document_path = artifact_dir / "document.json"
         artifact = replace(artifact, artifact_path=str(document_path))
-        temporary = artifact_dir / "document.json.tmp"
-        temporary.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary.replace(document_path)
+        if (render_pages or ocr_scanned_pages) and hasattr(self._enricher, "enrich"):
+            artifact = self._enricher.enrich(
+                artifact,
+                allowed_root=allowed_root,
+                work_dir=work_path,
+                render_pages=render_pages,
+                ocr_scanned_pages=ocr_scanned_pages,
+            )
+        _write_document_json(artifact, document_path=document_path)
         return artifact
 
 
@@ -89,3 +99,28 @@ def _resolve_work_dir(work_dir: str | Path, *, allowed_root: str | Path) -> Path
         raise ValueError("文档中间产物必须保存在当前任务 work 目录")
     candidate.mkdir(parents=True, exist_ok=True)
     return candidate
+
+
+def _write_document_json(artifact: DocumentArtifact, *, document_path: Path) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{document_path.name}.",
+            suffix=".tmp",
+            dir=document_path.parent,
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(artifact.to_dict(), stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary_path.replace(document_path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass

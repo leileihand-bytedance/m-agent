@@ -7,7 +7,13 @@ from pathlib import Path
 import re
 import time
 
-from app.platform.intake import IntakePersistence, check_intake_file_limits
+from app.platform.intake import (
+    IntakeMaterialRef,
+    IntakeOutcome,
+    IntakePersistence,
+    IntakeTaskSubmission,
+    check_intake_file_limits,
+)
 from app.platform.models import UploadedFile
 
 
@@ -45,6 +51,38 @@ class ReviewIntakeDecision:
     instructions: tuple[str, ...] = ()
     primary_file_index: int | None = None
     revision: int = 0
+    cancelled: bool = False
+
+    def to_platform_outcome(self, *, channel: str, sender_userid: str) -> IntakeOutcome:
+        if self.cancelled or self.action == "cancel":
+            return IntakeOutcome.cancelled(self.reply)
+        if self.action in {"wait", "wait_auto"}:
+            return IntakeOutcome.wait(self.reply)
+        if self.action in {"bypass", "stale"}:
+            return IntakeOutcome.bypass()
+        task_types = {
+            "run_single": "review_single",
+            "run_multi": "review_multi",
+            "run_format": "review_format",
+        }
+        task_type = task_types.get(self.action)
+        if task_type is None:
+            raise ValueError(f"未知的审核组装动作：{self.action}")
+        return IntakeOutcome.submit(
+            IntakeTaskSubmission(
+                channel=channel,
+                sender_userid=sender_userid,
+                task_type=task_type,
+                instructions=tuple(item.strip() for item in self.instructions if item.strip()),
+                materials=tuple(IntakeMaterialRef.file(item) for item in self.files),
+                metadata={
+                    "source": "review_intake",
+                    "revision": self.revision,
+                    "primary_file_index": self.primary_file_index,
+                },
+            ),
+            reply=self.reply,
+        )
 
 
 @dataclass
@@ -212,9 +250,17 @@ class ReviewIntakeStore:
 
         if is_review_cancel_signal(clean_text):
             if state is None:
-                return ReviewIntakeDecision(action="wait", reply="当前没有待处理的审核文件。")
+                return ReviewIntakeDecision(
+                    action="wait",
+                    reply="当前没有待处理的审核文件。",
+                    cancelled=True,
+                )
             self.clear(channel=channel, sender_userid=sender_userid)
-            return ReviewIntakeDecision(action="wait", reply="已取消本次审核并清空暂存文件。")
+            return ReviewIntakeDecision(
+                action="wait",
+                reply="已取消本次审核并清空暂存文件。",
+                cancelled=True,
+            )
 
         if is_format_review_request(clean_text):
             if state and state.mode in {"auto", "multi"} and len(state.files) > 1:

@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+from datetime import date
 import json
 import sys
 
@@ -13,9 +14,13 @@ from app.platform.config import PlatformConfig  # noqa: E402
 from app.platform.intent import ConversationIntent  # noqa: E402
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile  # noqa: E402
 from app.platform.ops.events import OpsEventLogger, read_ops_events  # noqa: E402
+from app.platform.task_status import write_task_status  # noqa: E402
 from app.writing.bot import build_platform_config, handle_file_with_platform, handle_text_with_platform, mask_config_value  # noqa: E402
 from app.writing.config import WritingBotConfig, load_config  # noqa: E402
 from app.writing.intake import WritingIntakeStore  # noqa: E402
+
+
+SENSITIVE_LOCAL_PATH = "/" + "Users/private"
 
 
 class FakeWsClient:
@@ -47,6 +52,13 @@ class FailingFinalReplyWsClient(FakeWsClient):
         if stream_id.startswith("writing-result"):
             raise RuntimeError("reply failed")
         await super().reply_stream(frame, stream_id, message, finish)
+
+
+class FailingUploadWsClient(FakeWsClient):
+    async def upload_media(self, content, *, type, filename):
+        raise RuntimeError(
+            f"upload failed at {SENSITIVE_LOCAL_PATH} req_id=secret token=hidden"
+        )
 
 
 class FakePlatformApp:
@@ -877,6 +889,23 @@ def test_writing_intake_limits_file_count_and_total_bytes():
     assert "最多接收 1 个文件" in second.reply
 
 
+def test_result_output_file_uses_delivery_limit_separate_from_input_limit(tmp_path, monkeypatch):
+    output_dir = tmp_path / "task" / "output"
+    output_dir.mkdir(parents=True)
+    output_path = output_dir / "draft.docx"
+    output_path.write_bytes(b"12345")
+    monkeypatch.setattr(writing_bot, "MAX_WRITING_FILE_BYTES", 4)
+    monkeypatch.setattr(writing_bot, "MAX_WRITING_OUTPUT_FILE_BYTES", 8)
+    result = PlatformResult(
+        skill_id="research_synthesis",
+        output={"output_file": str(output_path)},
+        needs_clarification=False,
+        message="完成",
+    )
+
+    assert writing_bot._result_output_file(result) == output_path.resolve()
+
+
 def test_writing_intake_default_allows_ten_files_and_rejects_eleventh():
     store = WritingIntakeStore()
 
@@ -1051,6 +1080,47 @@ async def test_structured_research_synthesis_returns_generated_word_file(tmp_pat
     assert ws_client.stream_replies[-1][2] == "已生成综合调研 Word 初稿。"
     assert ws_client.uploaded_media == [(b"generated-word", "file", "综合调研材料初稿.docx")]
     assert ws_client.media_replies[-1][1:] == ("file", "media-001")
+    assert (output_path.parent.parent / "delivery.json").is_file()
+
+
+@pytest.mark.anyio
+async def test_structured_output_file_failure_uses_public_delivery_and_safe_ops_alert(tmp_path):
+    task_dir = tmp_path / "tasks" / "job-002"
+    output_path = task_dir / "output" / "综合调研材料初稿.docx"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_bytes(b"generated-word")
+    write_task_status(task_dir, processing_status="completed", delivery_status="unknown")
+    result = PlatformResult(
+        skill_id="research_synthesis",
+        output={"output_file": str(output_path)},
+        needs_clarification=False,
+        message="已生成综合调研 Word 初稿。",
+    )
+    ws_client = FailingUploadWsClient()
+    ops_logger = OpsEventLogger(tmp_path / "ops")
+
+    await writing_bot._run_structured_decision(
+        decision=writing_bot.IntakeDecision(action="run", skill_id="research_synthesis"),
+        frame=_frame("开始写"),
+        ws_client=ws_client,
+        platform_app=FakePlatformApp(result=result, skill_id="research_synthesis"),
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        sender_userid="user-001",
+        sender_name="test-user",
+        ops_event_logger=ops_logger,
+    )
+
+    assert ws_client.stream_replies[-1][2] == (
+        "文件上传失败，已提醒管理员处理。任务编号：job-002。"
+    )
+    status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["processing_status"] == "completed"
+    assert status["delivery_status"] == "failed"
+    events = read_ops_events(tmp_path / "ops", date.today())
+    assert events[-1].subject == "附件交付失败"
+    assert SENSITIVE_LOCAL_PATH not in events[-1].detail
+    assert "secret" not in events[-1].detail
+    assert "hidden" not in events[-1].detail
 
 
 @pytest.mark.anyio

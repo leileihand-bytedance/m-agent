@@ -41,6 +41,8 @@ class WritingBotConfig:
     portal_token_ttl_seconds: int = 1800
     intake_ttl_seconds: int = 1800
     document_max_bytes: int = 50 * 1024 * 1024
+    document_ocr_enabled: bool = True
+    task_queue_db_path: Path | None = None
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -160,6 +162,12 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     intake_dir = configured_path(
         values, "M_AGENT_INTAKE_DIR", data_paths.intake, project_root=ROOT
     )
+    task_queue_db_path = configured_path(
+        values,
+        "M_AGENT_TASK_QUEUE_DB",
+        data_paths.task_queue_db,
+        project_root=ROOT,
+    )
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
     portal_host = values.get("M_AGENT_PORTAL_HOST", "127.0.0.1") or "127.0.0.1"
@@ -203,4 +211,9 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         )
         * 1024
         * 1024,
+        document_ocr_enabled=parse_bool(
+            values.get("M_AGENT_DOCUMENT_OCR_ENABLED"),
+            default=True,
+        ),
+        task_queue_db_path=task_queue_db_path,
     )

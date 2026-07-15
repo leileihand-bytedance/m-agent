@@ -22,6 +22,8 @@ def test_check_config_reports_ready_shape(tmp_path):
         chat_log_dir=tmp_path / "chat_logs",
         access_policy_path=None,
         user_registry_path=tmp_path / "users.yaml",
+        document_ocr_enabled=True,
+        task_queue_db_path=tmp_path / "runtime" / "tasks.sqlite3",
     )
 
     report = check_config(config)
@@ -40,6 +42,8 @@ def test_check_config_reports_ready_shape(tmp_path):
     assert report["chat_log_dir"] == str(tmp_path / "chat_logs")
     assert report["user_registry_path"] == str(tmp_path / "users.yaml")
     assert report["user_registry_exists"] is False
+    assert report["document_ocr_enabled"] is True
+    assert report["task_queue_db_path"] == str(tmp_path / "runtime" / "tasks.sqlite3")
 
 
 def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
@@ -55,6 +59,7 @@ def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
                 "M_AGENT_CHAT_LOG_ENABLED=false",
                 "M_AGENT_CHAT_LOG_DIR=custom-chat-logs",
                 "M_AGENT_USER_REGISTRY_PATH=custom-users.yaml",
+                "M_AGENT_DOCUMENT_OCR_ENABLED=false",
                 "ANTHROPIC_BASE_URL=https://legacy.example.com/anthropic",
                 "ANTHROPIC_API_KEY=legacy-key",
             ]
@@ -72,6 +77,7 @@ def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
     assert config.chat_log_enabled is False
     assert config.chat_log_dir == Path(__file__).resolve().parent.parent / "custom-chat-logs"
     assert config.user_registry_path == Path(__file__).resolve().parent.parent / "custom-users.yaml"
+    assert config.document_ocr_enabled is False
 
 
 def test_load_config_uses_single_external_data_root(tmp_path):
@@ -87,3 +93,5 @@ def test_load_config_uses_single_external_data_root(tmp_path):
     assert config.policy_db_path == data_root / "knowledge" / "policy" / "policies.sqlite3"
     assert config.bank_db_path == data_root / "knowledge" / "bank" / "bank.sqlite3"
     assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
+    assert config.task_queue_db_path == data_root / "runtime" / "task-execution" / "tasks.sqlite3"
+    assert config.document_ocr_enabled is True
