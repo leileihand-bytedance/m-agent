@@ -33,6 +33,7 @@ from .reviewer import (
     _parse_llm_output,
 )
 from .model_config import build_anthropic_client
+from .review_metrics import ReviewRunMetrics
 
 
 # 通用审核语义类规则 ID
@@ -70,6 +71,17 @@ _SPECIFIC_FORMAT_RULE_IDS = {
     "mixed-punct",
     "num-unit",
 }
+
+
+def _create_model_message(client, metrics: ReviewRunMetrics | None, **kwargs):
+    if metrics is not None:
+        metrics.record_model_call()
+    try:
+        return client.messages.create(**kwargs)
+    except Exception:
+        if metrics is not None:
+            metrics.record_model_failure()
+        raise
 
 
 def _build_general_chunks(paragraphs: list[str]) -> list[list[tuple[int, str]]]:
@@ -248,10 +260,13 @@ def _call_general_llm_once(
     prompt: str,
     paragraphs: list[str],
     allowed_paragraph_indexes: frozenset[int],
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str | None]:
     """调用 LLM 做通用审核，返回 findings 或错误原因."""
     client, model_name = build_anthropic_client()
-    message = client.messages.create(
+    message = _create_model_message(
+        client,
+        metrics,
         model=model_name,
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
@@ -261,6 +276,8 @@ def _call_general_llm_once(
     output = _collect_message_text(message)
 
     if not _looks_like_valid_issue_json(output):
+        if metrics is not None:
+            metrics.record_model_failure()
         return [], "invalid JSON"
 
     findings, _ = _parse_llm_output(
@@ -279,10 +296,13 @@ def _call_general_llm_once(
 def _call_whole_document_logic_llm_once(
     prompt: str,
     paragraphs: list[str],
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str | None]:
     """调用 LLM 做一次通篇逻辑审核."""
     client, model_name = build_anthropic_client()
-    message = client.messages.create(
+    message = _create_model_message(
+        client,
+        metrics,
         model=model_name,
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
@@ -291,6 +311,8 @@ def _call_whole_document_logic_llm_once(
 
     output = _collect_message_text(message)
     if not _looks_like_valid_issue_json(output):
+        if metrics is not None:
+            metrics.record_model_failure()
         return [], "invalid JSON"
 
     findings, _ = _parse_llm_output(output, paragraphs, GENERAL_LOGIC_RULE_IDS)
@@ -300,6 +322,7 @@ def _call_whole_document_logic_llm_once(
 async def _review_whole_document_logic(
     prompt: str,
     paragraphs: list[str],
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str | None]:
     """通篇逻辑审核失败时重试一次，不阻断现有分段审核."""
     errors: list[str] = []
@@ -311,6 +334,7 @@ async def _review_whole_document_logic(
                 _call_whole_document_logic_llm_once,
                 prompt,
                 paragraphs,
+                metrics,
             )
             if err:
                 errors.append(err)
@@ -331,6 +355,8 @@ async def _review_whole_document_logic(
                 f"  通篇逻辑审核第 {attempt + 1} 次失败: {error}",
                 flush=True,
             )
+    if metrics is not None:
+        metrics.record_degraded_stage("whole_document_logic")
     return [], "; ".join(errors)
 
 
@@ -502,9 +528,12 @@ def _build_long_document_verification_prompt(
 def _call_long_document_verifier_once(
     prompt: str,
     candidate_count: int,
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[set[int] | None, str | None]:
     client, model_name = build_anthropic_client()
-    message = client.messages.create(
+    message = _create_model_message(
+        client,
+        metrics,
         model=model_name,
         max_tokens=4096,
         temperature=0,
@@ -546,14 +575,20 @@ def _call_long_document_verifier_once(
         start = output.find("{")
         end = output.rfind("}")
         if start < 0 or end <= start:
+            if metrics is not None:
+                metrics.record_model_failure()
             return None, "invalid JSON"
         try:
             data = json.loads(output[start:end + 1])
         except json.JSONDecodeError:
+            if metrics is not None:
+                metrics.record_model_failure()
             return None, "invalid JSON"
 
     raw_ids = data.get("keep_candidate_ids")
     if not isinstance(raw_ids, list):
+        if metrics is not None:
+            metrics.record_model_failure()
         return None, "missing keep_candidate_ids"
 
     keep_ids: set[int] = set()
@@ -572,6 +607,7 @@ def _call_long_document_verifier_once(
 async def _verify_long_document_findings(
     prompt: str,
     candidate_count: int,
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[set[int] | None, str | None]:
     """并行做两次独立复核，至少一次确认才保留候选."""
 
@@ -583,6 +619,7 @@ async def _verify_long_document_findings(
                 _call_long_document_verifier_once,
                 prompt,
                 candidate_count,
+                metrics,
             )
             if error:
                 print(
@@ -612,6 +649,8 @@ async def _verify_long_document_findings(
         return combined_ids, None
 
     errors = [error for _, error in results if error]
+    if metrics is not None:
+        metrics.record_degraded_stage("long_document_verification")
     return None, "; ".join(errors)
 
 
@@ -852,6 +891,8 @@ async def review_general(
     paragraphs: list[str],
     rules_text: str,
     filename: str,
+    *,
+    metrics: ReviewRunMetrics | None = None,
 ) -> ReviewResult:
     """通用文档单阶段审核入口.
 
@@ -872,7 +913,11 @@ async def review_general(
     whole_document_prompt = _build_whole_document_logic_prompt(paragraphs, filename)
     whole_document_task = (
         asyncio.create_task(
-            _review_whole_document_logic(whole_document_prompt, paragraphs)
+            _review_whole_document_logic(
+                whole_document_prompt,
+                paragraphs,
+                metrics,
+            )
         )
         if whole_document_prompt
         else None
@@ -905,6 +950,7 @@ async def review_general(
                         prompt,
                         paragraphs,
                         frozenset(index for index, _ in chunk),
+                        metrics,
                     )
                     if err:
                         errors.append(err)
@@ -944,6 +990,8 @@ async def review_general(
             llm_errors.extend(
                 error for _, error in scan_results if error
             )
+            if metrics is not None:
+                metrics.record_degraded_stage(f"chunk_{chunk_idx}")
 
     if whole_document_task is not None:
         logic_findings, logic_error = await whole_document_task
@@ -1010,6 +1058,7 @@ async def review_general(
         keep_ids, verification_error = await _verify_long_document_findings(
             verification_prompt,
             len(verification_candidates),
+            metrics,
         )
         if keep_ids is not None:
             verified_findings = [

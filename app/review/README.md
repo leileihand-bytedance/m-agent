@@ -45,6 +45,8 @@ app/review/
 ├── reviewer.py             # 内参周报：LLM 调用 + 语义类规则审核
 ├── halfmonthly_reviewer.py # 半月报：LLM 调用 + 半月报专属规则 + 标红定位
 ├── general_reviewer.py     # 通用审核：文字质量审核
+├── quality_evaluation.py   # 通用审核真实文件评测：去重选样、运行和评分数据
+├── review_metrics.py       # 评测用模型请求、失败和降级阶段统计
 ├── intake.py               # 格式/多文件审核的持久化消息与文件组装
 ├── multi_file_reviewer.py  # 逐文件审核 + 跨文件确定性和语义一致性检查
 ├── official_format_checker.py # 独立公文格式审核：检查 docx 实际格式
@@ -479,6 +481,38 @@ app/review/general_term_checker.py
 
 ```bash
 uv run --locked pytest tests/test_error_marker.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_term_library.py tests/test_review_bot.py tests/test_review_main_flow_optimization.py tests/test_bot_logging.py tests/test_notification.py tests/test_user_registry.py -v
+```
+
+### 真实文件质量基线
+
+`scripts/review_quality.py` 使用与 Bot 相同的 `parse_docx -> review_general -> mark_errors_in_docx` 主链路，不维护另一套测试审核逻辑。它会从历史审核输入中筛选通用 Word，先按文件 SHA-256 去重，再用正文标准化哈希和近重复分片覆盖率排除不同保存版本；短文只做精确正文去重，避免模板相似导致误合并。
+
+第一批默认选 5 份，优先覆盖问卷、附件引用、长文、表格和常规材料：
+
+```bash
+uv run --locked python scripts/review_quality.py run --limit 5 --run-id YYYYMMDD-baseline-v1
+```
+
+模型或网络中断后，可使用相同样本清单恢复：
+
+```bash
+uv run --locked python scripts/review_quality.py run --limit 5 --run-id YYYYMMDD-baseline-v1 --resume
+```
+
+恢复时严格核对 `case_id + 文件 SHA-256`，只跳过 `completed`；`failed`、`partial_failed` 和没有结果的中断样本会重跑。每次真实请求记录 `model_calls`，连接失败或无效响应记录 `model_failures`；只有重试后仍未完成的分段、通篇逻辑或长文复核才进入 `degraded_stages`，避免把已恢复的偶发失败误判成不完整审核。
+
+结果保存在：
+
+```text
+M-Agent-Files/evaluations/review/<run_id>/
+```
+
+目录包含样本清单、逐份 JSON、原件副本、标注文档、评分 CSV 和人工评分 Excel。真实文件名、原文和评分不得进入 Git。向外部模型重新发送历史文件前，必须取得用户针对本次评测的明确授权。
+
+离线测试：
+
+```bash
+uv run --locked pytest tests/test_review_quality_evaluation.py -v
 ```
 
 ## 规则管理
