@@ -36,11 +36,12 @@ app/platform/app.py       # PlatformApp
 app/platform/cli.py       # 本地配置检查和消息测试
 app/platform/demo.py      # 本地 demo
 app/platform/gateway/     # 企业微信消息核心适配
+app/platform/intake.py    # 多消息任务共用的安全暂存、恢复和文件限制
 app/platform/documents/   # DOCX/PDF/PPTX 统一安全解析和标准材料结构
 ```
 
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
 ```

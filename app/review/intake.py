@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
-import json
 from pathlib import Path
 import re
-import shutil
 import time
-from uuid import uuid4
 
+from app.platform.intake import IntakePersistence, check_intake_file_limits
 from app.platform.models import UploadedFile
 
 
@@ -197,12 +194,12 @@ class ReviewIntakeStore:
         self._ttl_seconds = ttl_seconds
         self._max_files = max_files
         self._max_total_file_bytes = max_total_file_bytes
-        self._storage_dir = Path(storage_dir).resolve() if storage_dir else None
+        self._persistence = IntakePersistence(
+            storage_dir=storage_dir,
+            state_filename="state.json",
+            ttl_seconds=ttl_seconds,
+        )
         self._states: dict[tuple[str, str], ReviewIntakeState] = {}
-        if self._storage_dir is not None:
-            self._storage_dir.mkdir(parents=True, exist_ok=True)
-            self._storage_dir.chmod(0o700)
-            self._cleanup_expired_states()
 
     def pending_mode(self, *, channel: str, sender_userid: str) -> str | None:
         state = self._get_state((channel, sender_userid))
@@ -454,18 +451,9 @@ class ReviewIntakeStore:
         self._states.pop(key, None)
         self._remove_persisted_state(key, preserve_files=False)
 
-    @staticmethod
-    def cleanup_files(files: tuple[UploadedFile, ...] | list[UploadedFile]) -> None:
+    def cleanup_files(self, files: tuple[UploadedFile, ...] | list[UploadedFile]) -> None:
         for file in files:
-            if not file.delete_after_read or not file.stored_path:
-                continue
-            path = Path(file.stored_path)
-            path.unlink(missing_ok=True)
-            for parent in (path.parent, path.parent.parent):
-                try:
-                    parent.rmdir()
-                except OSError:
-                    break
+            self._persistence.delete_file(file)
 
     def _consume(
         self,
@@ -511,13 +499,18 @@ class ReviewIntakeStore:
         )
 
     def _file_limit_message(self, files: list[UploadedFile], incoming_size: int) -> str:
-        if len(files) >= self._max_files:
+        violation = check_intake_file_limits(
+            files,
+            incoming_size=incoming_size,
+            max_files=self._max_files,
+            max_total_file_bytes=self._max_total_file_bytes,
+        )
+        if violation and violation.code == "too_many_files":
             return (
                 f"每次联合审核最多接收 {self._max_files} 个文件；"
                 "已收到的文件会继续处理，本文件未纳入。"
             )
-        current_size = sum(file.size_bytes for file in files)
-        if incoming_size < 0 or current_size + incoming_size > self._max_total_file_bytes:
+        if violation and violation.code == "total_size_exceeded":
             limit_mb = self._max_total_file_bytes / 1024 / 1024
             return f"本次联合审核文件总大小不能超过 {limit_mb:g}MB，请减少文件后重试。"
         return ""
@@ -536,52 +529,26 @@ class ReviewIntakeStore:
         return state
 
     def _persist_uploaded_file(self, key: tuple[str, str], file: UploadedFile) -> UploadedFile:
-        if self._storage_dir is None:
-            return file
-        files_dir = self._state_dir(key) / "files"
-        files_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = _safe_filename(file.filename)
-        target = files_dir / f"{uuid4().hex[:12]}-{safe_name}"
-        target.write_bytes(file.read_bytes())
-        return UploadedFile(
-            filename=file.filename,
-            content=b"",
-            content_type=file.content_type,
-            stored_path=str(target),
-            delete_after_read=True,
-        )
+        return self._persistence.persist_file(key, file)
 
     def _persist_state(self, key: tuple[str, str], state: ReviewIntakeState) -> None:
-        if self._storage_dir is None:
-            return
-        state_dir = self._state_dir(key)
-        state_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "channel": key[0],
-            "sender_userid": key[1],
             "mode": state.mode,
-            "files": [_file_to_dict(file) for file in state.files],
-            "recent_file": _file_to_dict(state.recent_file) if state.recent_file else None,
+            "files": [self._persistence.file_payload(file) for file in state.files],
+            "recent_file": self._persistence.file_payload(state.recent_file) if state.recent_file else None,
             "instructions": list(state.instructions),
             "awaiting_primary": state.awaiting_primary,
             "revision": state.revision,
             "created_at": state.created_at,
             "updated_at": state.updated_at,
         }
-        temporary = state_dir / "state.json.tmp"
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(state_dir / "state.json")
+        self._persistence.save_state(key, payload)
 
     def _load_state(self, key: tuple[str, str]) -> ReviewIntakeState | None:
-        if self._storage_dir is None:
-            return None
-        state_path = self._state_dir(key) / "state.json"
-        if not state_path.exists():
+        payload = self._persistence.load_state(key)
+        if payload is None:
             return None
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-            if payload.get("channel") != key[0] or payload.get("sender_userid") != key[1]:
-                raise ValueError("review intake key mismatch")
             files = [self._file_from_dict(key, item) for item in payload.get("files", [])]
             recent_payload = payload.get("recent_file")
             recent_file = self._file_from_dict(key, recent_payload) if recent_payload else None
@@ -595,73 +562,19 @@ class ReviewIntakeStore:
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             self._remove_persisted_state(key, preserve_files=False)
             return None
 
     def _file_from_dict(self, key: tuple[str, str], payload: object) -> UploadedFile | None:
-        if not isinstance(payload, dict):
-            return None
-        stored_path = Path(str(payload.get("stored_path", ""))).resolve()
-        files_dir = (self._state_dir(key) / "files").resolve()
-        if files_dir not in stored_path.parents or not stored_path.is_file():
-            return None
-        return UploadedFile(
-            filename=str(payload.get("filename", "upload.docx")),
-            content=b"",
-            content_type=str(payload.get("content_type", "")),
-            stored_path=str(stored_path),
-            delete_after_read=True,
+        return self._persistence.restore_file(
+            key,
+            payload,
+            default_filename="upload.docx",
         )
 
-    def _state_dir(self, key: tuple[str, str]) -> Path:
-        if self._storage_dir is None:
-            raise RuntimeError("review intake persistence is disabled")
-        digest = hashlib.sha256(f"{key[0]}\0{key[1]}".encode("utf-8")).hexdigest()[:24]
-        return self._storage_dir / digest
-
     def _remove_persisted_state(self, key: tuple[str, str], *, preserve_files: bool) -> None:
-        if self._storage_dir is None:
-            return
-        state_dir = self._state_dir(key)
-        (state_dir / "state.json").unlink(missing_ok=True)
-        (state_dir / "state.json.tmp").unlink(missing_ok=True)
-        if not preserve_files:
-            shutil.rmtree(state_dir, ignore_errors=True)
+        self._persistence.clear(key, preserve_files=preserve_files)
 
-    def _cleanup_expired_states(self) -> None:
-        if self._storage_dir is None:
-            return
-        now = time.time()
-        for state_dir in self._storage_dir.iterdir():
-            if not state_dir.is_dir():
-                continue
-            try:
-                payload = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
-                updated_at = float(payload.get("updated_at", 0))
-                expired = updated_at <= 0 or now - updated_at > self._ttl_seconds
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                expired = True
-            if expired:
-                shutil.rmtree(state_dir, ignore_errors=True)
-
-    @staticmethod
-    def _delete_stored_file(file: UploadedFile) -> None:
-        if file.delete_after_read and file.stored_path:
-            Path(file.stored_path).unlink(missing_ok=True)
-
-
-def _safe_filename(filename: str) -> str:
-    path = Path(filename or "upload.docx")
-    stem = re.sub(r"[^\w一-鿿\-_]", "_", path.stem or "upload")
-    suffix = path.suffix.lower() if re.fullmatch(r"\.[a-z0-9]+", path.suffix.lower()) else ".docx"
-    return stem + suffix
-
-
-def _file_to_dict(file: UploadedFile) -> dict[str, object]:
-    return {
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "stored_path": file.stored_path,
-        "size_bytes": file.size_bytes,
-    }
+    def _delete_stored_file(self, file: UploadedFile) -> None:
+        self._persistence.delete_file(file)

@@ -7,14 +7,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
-import json
 from pathlib import Path
 import re
-import shutil
 import time
-from uuid import uuid4
 
+from app.platform.intake import IntakePersistence, check_intake_file_limits
 from app.platform.models import UploadedFile
 from app.platform.router import URL_RE
 
@@ -72,11 +69,11 @@ class WritingIntakeStore:
         self._ttl_seconds = ttl_seconds
         self._max_files = max_files
         self._max_total_file_bytes = max_total_file_bytes
-        self._storage_dir = Path(storage_dir).resolve() if storage_dir else None
-        if self._storage_dir:
-            self._storage_dir.mkdir(parents=True, exist_ok=True)
-            self._storage_dir.chmod(0o700)
-            self._cleanup_expired_sessions()
+        self._persistence = IntakePersistence(
+            storage_dir=storage_dir,
+            state_filename="session.json",
+            ttl_seconds=ttl_seconds,
+        )
         self._sessions: dict[tuple[str, str], WritingIntakeSession] = {}
 
     def handle_text(self, *, channel: str, sender_userid: str, text: str) -> IntakeDecision:
@@ -214,15 +211,19 @@ class WritingIntakeStore:
             for item in (session.materials if session else [])
             if item.kind == "file" and item.file is not None
         ]
-        if len(file_materials) >= self._max_files:
+        violation = check_intake_file_limits(
+            file_materials,
+            incoming_size=incoming_size,
+            max_files=self._max_files,
+            max_total_file_bytes=self._max_total_file_bytes,
+        )
+        if violation and violation.code == "too_many_files":
             return f"每次任务最多接收 {self._max_files} 个文件，请先回复“开始写”处理当前材料。"
-        if incoming_size is not None:
-            current_size = sum(item.size_bytes for item in file_materials)
-            if incoming_size < 0 or current_size + incoming_size > self._max_total_file_bytes:
-                limit_mb = self._max_total_file_bytes // 1024 // 1024
-                if limit_mb:
-                    return f"本次任务文件总大小不能超过 {limit_mb}MB，请减少文件后重试。"
-                return f"本次任务文件总大小不能超过 {self._max_total_file_bytes} 字节，请减少文件后重试。"
+        if violation and violation.code == "total_size_exceeded":
+            limit_mb = self._max_total_file_bytes // 1024 // 1024
+            if limit_mb:
+                return f"本次任务文件总大小不能超过 {limit_mb}MB，请减少文件后重试。"
+            return f"本次任务文件总大小不能超过 {self._max_total_file_bytes} 字节，请减少文件后重试。"
         return ""
 
     def clear(self, *, channel: str, sender_userid: str) -> None:
@@ -296,29 +297,10 @@ class WritingIntakeStore:
         )
 
     def _persist_uploaded_file(self, key: tuple[str, str], file: UploadedFile) -> UploadedFile:
-        if self._storage_dir is None:
-            return file
-        files_dir = self._session_dir(key) / "files"
-        files_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = _safe_filename(file.filename)
-        target = files_dir / f"{uuid4().hex[:12]}-{safe_name}"
-        target.write_bytes(file.read_bytes())
-        return UploadedFile(
-            filename=file.filename,
-            content=b"",
-            content_type=file.content_type,
-            stored_path=str(target),
-            delete_after_read=True,
-        )
+        return self._persistence.persist_file(key, file)
 
     def _persist_session(self, key: tuple[str, str], session: WritingIntakeSession) -> None:
-        if self._storage_dir is None:
-            return
-        session_dir = self._session_dir(key)
-        session_dir.mkdir(parents=True, exist_ok=True)
         payload = {
-            "channel": key[0],
-            "sender_userid": key[1],
             "intent": session.intent,
             "instructions": list(session.instructions),
             "awaiting_clarification": session.awaiting_clarification,
@@ -327,20 +309,13 @@ class WritingIntakeStore:
             "updated_at": session.updated_at,
             "materials": [_material_to_dict(item) for item in session.materials],
         }
-        temporary = session_dir / "session.json.tmp"
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(session_dir / "session.json")
+        self._persistence.save_state(key, payload)
 
     def _load_session(self, key: tuple[str, str]) -> WritingIntakeSession | None:
-        if self._storage_dir is None:
-            return None
-        state_path = self._session_dir(key) / "session.json"
-        if not state_path.exists():
+        payload = self._persistence.load_state(key)
+        if payload is None:
             return None
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-            if payload.get("channel") != key[0] or payload.get("sender_userid") != key[1]:
-                raise ValueError("intake session key mismatch")
             materials = [self._material_from_dict(key, item) for item in payload.get("materials", [])]
             return WritingIntakeSession(
                 intent=str(payload.get("intent")) if payload.get("intent") else None,
@@ -351,7 +326,7 @@ class WritingIntakeStore:
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (ValueError, TypeError):
             self._remove_persisted_session(key, preserve_files=False)
             return None
 
@@ -360,67 +335,20 @@ class WritingIntakeStore:
             return None
         kind = str(payload.get("kind", ""))
         if kind == "file":
-            stored_path = Path(str(payload.get("stored_path", ""))).resolve()
-            files_dir = (self._session_dir(key) / "files").resolve()
-            if files_dir not in stored_path.parents or not stored_path.is_file():
-                return None
-            return IntakeMaterial(
-                kind="file",
-                file=UploadedFile(
-                    filename=str(payload.get("filename", "upload")),
-                    content=b"",
-                    content_type=str(payload.get("content_type", "")),
-                    stored_path=str(stored_path),
-                    delete_after_read=True,
-                ),
-            )
+            restored = self._persistence.restore_file(key, payload)
+            return IntakeMaterial(kind="file", file=restored) if restored is not None else None
         if kind == "url":
             return IntakeMaterial(kind="url", url=str(payload.get("url", "")))
         if kind == "text":
             return IntakeMaterial(kind="text", text=str(payload.get("text", "")))
         return None
 
-    def _session_dir(self, key: tuple[str, str]) -> Path:
-        if self._storage_dir is None:
-            raise RuntimeError("intake persistence is disabled")
-        digest = hashlib.sha256(f"{key[0]}\0{key[1]}".encode("utf-8")).hexdigest()[:24]
-        return self._storage_dir / digest
-
     def _remove_persisted_session(self, key: tuple[str, str], *, preserve_files: bool) -> None:
-        if self._storage_dir is None:
-            return
-        session_dir = self._session_dir(key)
-        (session_dir / "session.json").unlink(missing_ok=True)
-        (session_dir / "session.json.tmp").unlink(missing_ok=True)
-        if not preserve_files:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            return
-        try:
-            session_dir.rmdir()
-        except OSError:
-            pass
+        self._persistence.clear(key, preserve_files=preserve_files)
 
-    def _cleanup_expired_sessions(self) -> None:
-        if self._storage_dir is None:
-            return
-        now = time.time()
-        for session_dir in self._storage_dir.iterdir():
-            if not session_dir.is_dir():
-                continue
-            state_path = session_dir / "session.json"
-            try:
-                payload = json.loads(state_path.read_text(encoding="utf-8"))
-                updated_at = float(payload.get("updated_at", 0))
-                expired = updated_at <= 0 or now - updated_at > self._ttl_seconds
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                expired = True
-            if expired:
-                shutil.rmtree(session_dir, ignore_errors=True)
-
-    @staticmethod
-    def _delete_stored_file(file: UploadedFile | None) -> None:
-        if file and file.delete_after_read and file.stored_path:
-            Path(file.stored_path).unlink(missing_ok=True)
+    def _delete_stored_file(self, file: UploadedFile | None) -> None:
+        if file is not None:
+            self._persistence.delete_file(file)
 
 
 def detect_writing_intent(text: str) -> str | None:
@@ -549,12 +477,3 @@ def _material_to_dict(material: IntakeMaterial) -> dict[str, object]:
     if material.kind == "url":
         return {"kind": "url", "url": material.url}
     return {"kind": "text", "text": material.text}
-
-
-def _safe_filename(filename: str) -> str:
-    candidate = Path(filename or "").name.strip() or "upload.bin"
-    cleaned = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", candidate)
-    cleaned = cleaned.strip("._") or "upload.bin"
-    suffix = Path(cleaned).suffix[:16]
-    stem = Path(cleaned).stem[:160] or "upload"
-    return f"{stem}{suffix}"

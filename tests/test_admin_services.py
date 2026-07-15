@@ -453,6 +453,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["ppt_review"].status == "building"
     assert capabilities["multi_file_review"].status == "building"
     assert capabilities["attachment_delivery"].status == "planned"
+    assert capabilities["task_execution"].status == "planned"
     assert overview.capability_status_counts["building"] >= 1
     assert overview.capability_status_counts["stable"] >= 1
 
@@ -492,5 +493,11 @@ def test_project_overview_architecture_relations_only_reference_known_capabiliti
         relation.source_id == "policy_knowledge"
         and relation.target_id == "direct_report"
         and relation.label == "提供背景"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "task_intake"
+        and relation.target_id == "task_execution"
+        and relation.label == "提交后台任务"
         for relation in overview.architecture_relations
     )
