@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -77,7 +78,7 @@ class _LongReviewFakeMessages:
         self._counter["calls"] += 1
         messages = kwargs.get("messages", [])
         prompt = messages[0]["content"] if messages else ""
-        if "# 长文候选复核" in prompt:
+        if "# 高精度候选复核" in prompt:
             self._counter["verification_calls"] = (
                 self._counter.get("verification_calls", 0) + 1
             )
@@ -97,6 +98,31 @@ class _LongReviewFakeMessages:
 class _LongReviewFakeClient:
     def __init__(self, counter: dict[str, int]):
         self.messages = _LongReviewFakeMessages(counter)
+
+
+class _SuspiciousTypoFakeMessages:
+    def __init__(self, counter: dict[str, int]):
+        self._counter = counter
+
+    def create(self, **kwargs: object) -> _FakeMessage:
+        messages = kwargs.get("messages", [])
+        prompt = messages[0]["content"] if messages else ""
+        if "# 高精度候选复核" in prompt:
+            self._counter["verification_calls"] = (
+                self._counter.get("verification_calls", 0) + 1
+            )
+            return _FakeMessage('{"keep_candidate_ids": []}')
+        self._counter["local_calls"] = self._counter.get("local_calls", 0) + 1
+        return _FakeMessage(
+            '''{"issues": [
+                {"paragraph_index": 0, "rule_id": "general-typo", "target_text": "7×24小时", "original_text": "系统支持7×24小时无间断服务。", "description": "“7×7小时”应为“7×24小时”"}
+            ]}'''
+        )
+
+
+class _SuspiciousTypoFakeClient:
+    def __init__(self, counter: dict[str, int]):
+        self.messages = _SuspiciousTypoFakeMessages(counter)
 
 
 def test_detect_document_type_general():
@@ -225,6 +251,20 @@ def test_general_prompt_example_mentions_target_text():
     assert '"target_text"' in prompt
 
 
+def test_general_prompt_uses_source_first_correction_descriptions():
+    rules_text = Path("app/review/rules_general.md").read_text(encoding="utf-8")
+
+    prompt = _build_general_prompt(
+        rules_text,
+        [(0, "本周布署了工作。")],
+        "工作总结.docx",
+    )
+
+    assert "“布署”应为“部署”" in prompt
+    assert "'部署'误写为'布署'" not in prompt
+    assert "修改前文本必须与 target_text 完全一致" in prompt
+
+
 def test_build_general_chunks_splits_long_synthetic_doc_into_smaller_batches():
     paragraphs = [f"第{index}段示例内容。" + "甲" * 240 for index in range(80)]
 
@@ -233,6 +273,28 @@ def test_build_general_chunks_splits_long_synthetic_doc_into_smaller_batches():
     assert len(chunks) > 1
     assert sum(len(chunk) for chunk in chunks) == len(paragraphs)
     assert max(len(_build_general_prompt("", chunk, "示例长文.docx")) for chunk in chunks) < 14000
+
+
+def test_general_chunks_keep_numbered_label_with_following_description():
+    paragraphs = [
+        "A" * 5770,
+        "5",
+        "Fortune",
+        "Fintech Innovators Asia (Digital banks) " + "detail " * 16,
+    ]
+
+    chunks = _build_general_chunks(paragraphs)
+
+    assert [index for index, _ in chunks[0]] == [0]
+    assert [index for index, _ in chunks[1]][:3] == [1, 2, 3]
+
+
+def test_general_chunks_do_not_drop_record_header_before_oversized_description():
+    paragraphs = ["5", "Fortune", "D" * 6000]
+
+    chunks = _build_general_chunks(paragraphs)
+
+    assert [index for chunk in chunks for index, _ in chunk] == [0, 1, 2]
 
 
 def test_review_general_only_calls_model_once_when_first_response_is_valid(monkeypatch):
@@ -433,7 +495,7 @@ def test_typo_with_only_punctuation_target_is_dropped():
     assert _normalize_general_findings([finding], [paragraph]) == []
 
 
-def test_finding_with_claimed_source_missing_from_original_is_dropped():
+def test_finding_with_claimed_source_missing_is_preserved_for_targeted_review():
     paragraph = "系统支持7×24小时无间断服务。"
     finding = Finding(
         rule_id="general-typo",
@@ -444,7 +506,31 @@ def test_finding_with_claimed_source_missing_from_original_is_dropped():
         target_text="7×24小时",
     )
 
-    assert _normalize_general_findings([finding], [paragraph]) == []
+    normalized = _normalize_general_findings([finding], [paragraph])
+
+    assert normalized[0].target_text == "7×24小时"
+
+
+def test_review_general_rechecks_self_contradictory_typo_candidate(monkeypatch):
+    counter: dict[str, int] = {}
+    monkeypatch.setattr(
+        "app.review.general_reviewer.build_anthropic_client",
+        lambda: (_SuspiciousTypoFakeClient(counter), "fake-model"),
+    )
+
+    result = asyncio.run(
+        review_general(
+            ["系统支持7×24小时无间断服务。"],
+            "",
+            "服务说明.docx",
+        )
+    )
+
+    assert counter["local_calls"] == 1
+    assert counter["verification_calls"] == 2
+    assert not any(
+        finding.target_text == "7×24小时" for finding in result.findings
+    )
 
 
 def test_finding_with_real_claimed_source_is_kept():
@@ -480,7 +566,7 @@ def test_punctuation_space_finding_marks_exact_separator_and_space():
     assert normalized[0].description == "顿号后有多余空格，应删除该空格"
 
 
-def test_short_english_label_is_not_reported_as_incomplete_body():
+def test_short_english_label_is_not_hidden_by_generic_result_filter():
     paragraphs = ["5", "Fortune", "Fintech Innovators Asia (Digital banks)"]
     finding = Finding(
         rule_id="general-incomplete",
@@ -491,7 +577,9 @@ def test_short_english_label_is_not_reported_as_incomplete_body():
         target_text="Fortune",
     )
 
-    assert _normalize_general_findings([finding], paragraphs) == []
+    normalized = _normalize_general_findings([finding], paragraphs)
+
+    assert normalized[0].target_text == "Fortune"
 
 
 def test_duplicate_target_keeps_typo_over_grammar():

@@ -134,7 +134,7 @@
 
 ```json
 {"issues": [
-  {"paragraph_index": 2, "rule_id": "general-typo", "target_text": "布署", "description": "'部署'误写为'布署'", "original_text": "本周重点布署了以下工作"},
+  {"paragraph_index": 2, "rule_id": "general-typo", "target_text": "布署", "description": "“布署”应为“部署”", "original_text": "本周重点布署了以下工作"},
   {"paragraph_index": 5, "rule_id": "general-name-error", "target_text": "中国人们银行", "description": "机构名前后不一致", "original_text": "中国人民银行...中国人们银行..."},
   {"paragraph_index": 8, "rule_id": "general-grammar", "target_text": "通过本次培训,使大家掌握了新技能", "description": "句子缺主语", "original_text": "通过本次培训,使大家掌握了新技能"},
   {"paragraph_index": 12, "rule_id": "general-punctuation", "target_text": ",", "description": "中文句子里出现英文逗号", "original_text": "会议讨论了三个议题,包括预算,人员,规划"},
@@ -153,6 +153,8 @@
   - 内容没写完：返回段落末尾最后几个字,如 `"将重点推进"`
   - 如果原文中找不到 `target_text`, 则返回与错误位置最接近的原文片段
 - `original_text` 该段完整原文
+- 提出替换建议时，`description` 统一写成“原文错误片段”应为“正确写法”；前者必须与 `target_text` 完全一致并真实出现在原文
+- 输出前逐条核对，不得把正确写法放在“应为”前面，也不得虚构原文不存在的修改前文本
 - 如果 `target_text` 在原文里找不到，这条问题宁可不报，也不要猜测
 - 如果没有问题: `{"issues": []}`
 - **关键原则**: `target_text` 一定要短、要精确,不要返回整段文字
