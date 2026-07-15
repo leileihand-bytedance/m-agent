@@ -14,6 +14,8 @@
 
 普通文件仍根据文件名和文档头自动分发到内容审核引擎。公文格式审核不会被自动识别，也不会接入通用 Word 审核主流程。
 
+当前只有“单个 `.docx` 且识别为通用审核”的分支接入底座持久任务执行器。Bot 在 8 秒单/多文件静默分流后先返回任务编号，再由审核专用后台 worker 完成模型审核和结果发送。内参、半月报、公文格式、多文件联合审核和文字审核保持原执行方式，因此不能把本次接入理解为审核模块整体迁移。
+
 ## 架构定位
 
 ```text
@@ -26,6 +28,7 @@
   -> 半月报: app/review/parser.py + format_checker.py + halfmonthly_reviewer.py
   -> 用户明确要求格式审核: official_format_checker.py
   -> 连续多文件自动联合审核: intake.py + multi_file_reviewer.py
+  -> 单个 Word 通用审核: task_execution.py + 审核专用 SQLite 队列
   -> ../M-Agent-Files/tasks/review/
 
 后续迁移目标：
@@ -45,6 +48,7 @@ app/review/
 ├── reviewer.py             # 内参周报：LLM 调用 + 语义类规则审核
 ├── halfmonthly_reviewer.py # 半月报：LLM 调用 + 半月报专属规则 + 标红定位
 ├── general_reviewer.py     # 通用审核：文字质量审核
+├── task_execution.py       # 单个 Word 通用审核：持久任务、检查点和安全交付
 ├── quality_evaluation.py   # 通用审核真实文件评测：去重选样、运行和评分数据
 ├── review_metrics.py       # 评测用模型请求、失败和降级阶段统计
 ├── intake.py               # 格式/多文件审核的持久化消息与文件组装
@@ -116,7 +120,35 @@ uv run --locked pytest tests/test_official_format_review.py -q
 
 # 文件/指令衔接和多文件联合审核测试
 uv run --locked pytest tests/test_review_intake.py tests/test_review_multi_file.py -q
+
+# 单个 Word 通用审核持久任务测试
+uv run --locked pytest tests/test_review_task_execution.py tests/test_review_intake.py tests/test_review_bot.py -v
 ```
+
+## 单个 Word 通用审核持久任务
+
+该分支使用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个通用审核任务。独立数据库用于防止未来写作 worker 误领审核任务。
+
+执行分为两个检查点：
+
+1. 审核处理：解析 Word、调用通用审核模型、保存报告或 `marked_` Word。
+2. 结果交付：记录即将发送，再主动发送文字或附件；成功后记录已交付。
+
+同一企业微信消息重复投递时只保留一个任务。Bot 在审核完成后重启会复用已保存结果，不重复调用模型。队列最终文字或附件只尝试发送一次；如果发送回执超时或恰好在发送过程中中断，系统无法确定企业微信是否已收到，为避免重复文件会停止自动重发，同时提示用户并向运维记录失败任务。管理员根据任务编号核对后处理。后台 worker 意外退出时会记录运维事件并自动重启，不允许 Bot 继续受理而队列静默停止。
+
+单文件内容审核启动后，原暂存文件仍保留到 30 分钟有效期结束，供用户随后补说“格式审核”时复用；接入队列不能提前删除这份文件。
+
+可选配置：
+
+```text
+M_AGENT_REVIEW_TASK_DB
+M_AGENT_REVIEW_TASK_WORKERS=1
+M_AGENT_REVIEW_TASK_POLL_SECONDS=0.25
+M_AGENT_REVIEW_TASK_RECOVERY_SECONDS=5
+M_AGENT_REVIEW_TASK_LEASE_SECONDS=120
+```
+
+当前尚未给用户开放队列任务取消命令，真实试点验收时一并确定交互方式。内参、半月报、公文格式、多文件和文字审核不得使用这组配置推断为已切流。
 
 ## 文档类型识别
 

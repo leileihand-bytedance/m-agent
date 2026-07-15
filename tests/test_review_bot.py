@@ -14,12 +14,15 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 # 让测试能 import app.*
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.review.main import (  # noqa: E402
     is_docx_filename,
     save_review,
+    save_review_to_directory,
     ReviewConfig,
     _next_review_index,
     _prepare_review_reply_file,
@@ -45,6 +48,10 @@ from app.review.main import (  # noqa: E402
     _extract_primary_inference_texts,
     _settle_auto_review_batch,
     _deliver_review_attachment,
+    _build_queued_attachment_delivery,
+    _run_review_task_worker_supervised,
+    _send_queued_review_text,
+    ReviewDeliveryStatusUncertain,
 )
 from app.review.document_type import DocumentType  # noqa: E402
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
@@ -54,6 +61,8 @@ from app.review.multi_file_reviewer import (  # noqa: E402
     MultiFileSource,
 )
 from app.platform.user_registry import RegistrationFlow, UserRegistry  # noqa: E402
+from app.platform.task_status import write_task_status  # noqa: E402
+from app.platform.attachment_delivery import DeliveryResult  # noqa: E402
 
 
 # ============================================================
@@ -273,6 +282,46 @@ def test_save_review_creates_directory():
         print(f"✅ test_save_review_creates_directory: 存档目录 {review_dir.name} 结构正确")
 
 
+def test_save_review_to_existing_queue_directory_keeps_running_status(tmp_path: Path):
+    review_dir = tmp_path / "reviews" / "2026" / "07" / "queued-task"
+    write_task_status(
+        review_dir,
+        processing_status="running",
+        delivery_status="unknown",
+        source="task_execution",
+        state_version=2,
+    )
+    result = ReviewResult(
+        findings=[],
+        total_rules=10,
+        passed_rules=10,
+        filename="材料.docx",
+    )
+
+    saved = save_review_to_directory(
+        review_dir=review_dir,
+        file_bytes=_make_fake_docx_bytes(),
+        original_filename="材料.docx",
+        sender="user-1",
+        msgid="message-1",
+        task_id="queue-task-1",
+        result=result,
+        parsed_paragraphs=["测试内容"],
+        doc_type=DocumentType.GENERAL,
+        mark_processing_completed=False,
+    )
+
+    assert saved == review_dir
+    assert (review_dir / "input" / "材料.docx").exists()
+    assert (review_dir / "output" / "report.md").exists()
+    status = json.loads((review_dir / "status.json").read_text(encoding="utf-8"))
+    assert status["processing_status"] == "running"
+    assert status["state_version"] == 2
+    meta = json.loads((review_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["task_id"] == "queue-task-1"
+    assert meta["message_id"] == "message-1"
+
+
 def test_save_review_increments_index():
     """同一日多次审核,序号应递增."""
     import tempfile
@@ -485,6 +534,11 @@ def test_review_load_config_uses_single_external_data_root(tmp_path: Path):
     assert config.intake_dir == data_root / "runtime" / "intake" / "review"
     assert config.intake_ttl_seconds == 1800
     assert config.auto_batch_seconds == 8.0
+    assert config.task_queue_db == data_root / "runtime" / "task-execution" / "review.sqlite3"
+    assert config.task_worker_count == 1
+    assert config.task_poll_seconds == 0.25
+    assert config.task_recovery_seconds == 5.0
+    assert config.task_lease_seconds == 120
 
 
 def test_default_file_ack_keeps_original_review_time_expectation():
@@ -638,6 +692,166 @@ def test_review_attachment_delivery_uses_public_status_and_metrics(tmp_path: Pat
     assert (task_dir / "delivery.json").is_file()
     status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
     assert status["delivery_status"] == "delivered"
+
+
+def test_queued_review_attachment_failure_is_reported_only_by_task_service(
+    tmp_path: Path,
+):
+    import asyncio
+
+    class FailedDelivery:
+        async def deliver(self, *, ws_client, request):
+            return DeliveryResult(
+                delivered=False,
+                status="failed",
+                attempts=3,
+                size_bytes=10,
+                estimated_chunks=1,
+                upload_elapsed_seconds=1.0,
+                error_code="upload_failed",
+                user_message="附件发送失败",
+                metrics_path=None,
+            )
+
+    class FakeWsClient:
+        def __init__(self) -> None:
+            self.messages = []
+
+        async def send_message(self, chat_id, body):
+            self.messages.append((chat_id, body))
+
+    task_dir = tmp_path / "review-task"
+    output = task_dir / "output" / "marked_材料.docx"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"marked-docx")
+    ws_client = FakeWsClient()
+
+    delivered = asyncio.run(
+        _deliver_review_attachment(
+            attachment_delivery=FailedDelivery(),
+            ws_client=ws_client,
+            frame=None,
+            chat_id="user-1",
+            path=output,
+            sender="user-1",
+            sender_name="test-user",
+            label="标注文档",
+            req_id_factory=lambda prefix: f"{prefix}-1",
+            notify_user_on_failure=False,
+        )
+    )
+
+    assert delivered is False
+    assert ws_client.messages == []
+
+
+def test_queued_review_text_timeout_is_not_retried():
+    import asyncio
+
+    class FakeWsClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def send_message(self, chat_id, body):
+            self.calls += 1
+            raise asyncio.TimeoutError
+
+    ws_client = FakeWsClient()
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(
+            _send_queued_review_text(
+                ws_client,
+                "user-1",
+                "审核完成",
+                timeout_seconds=0.01,
+            )
+        )
+
+    assert ws_client.calls == 1
+
+
+def test_queued_review_attachment_reply_timeout_is_not_retried(tmp_path: Path):
+    import asyncio
+
+    class FakeWsClient:
+        def __init__(self) -> None:
+            self.upload_calls = 0
+            self.send_calls = 0
+
+        async def upload_media(self, content, *, type, filename):
+            self.upload_calls += 1
+            return {"media_id": "media-1"}
+
+        async def send_media_message(self, chat_id, media_type, media_id):
+            self.send_calls += 1
+            raise asyncio.TimeoutError
+
+    task_dir = tmp_path / "review-task"
+    output = task_dir / "output" / "marked_材料.docx"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"marked-docx")
+    ws_client = FakeWsClient()
+
+    with pytest.raises(ReviewDeliveryStatusUncertain):
+        asyncio.run(
+            _deliver_review_attachment(
+                attachment_delivery=_build_queued_attachment_delivery(None),
+                ws_client=ws_client,
+                frame=None,
+                chat_id="user-1",
+                path=output,
+                sender="user-1",
+                sender_name="test-user",
+                label="标注文档",
+                req_id_factory=lambda prefix: f"{prefix}-1",
+                notify_user_on_failure=False,
+                raise_on_uncertain=True,
+            )
+        )
+
+    assert ws_client.upload_calls == 1
+    assert ws_client.send_calls == 1
+
+
+def test_review_task_worker_supervisor_records_failure_and_restarts():
+    import asyncio
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run_forever(self, *, stop_event, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("worker stopped")
+            stop_event.set()
+
+    class FakeOpsLogger:
+        def __init__(self) -> None:
+            self.events = []
+
+        def record(self, **payload):
+            self.events.append(payload)
+
+    executor = FakeExecutor()
+    ops_logger = FakeOpsLogger()
+
+    asyncio.run(
+        _run_review_task_worker_supervised(
+            task_executor=executor,
+            stop_event=asyncio.Event(),
+            poll_interval=0.01,
+            worker_count=1,
+            recovery_interval=0.01,
+            restart_delay_seconds=0,
+            ops_event_logger=ops_logger,
+        )
+    )
+
+    assert executor.calls == 2
+    assert len(ops_logger.events) == 1
+    assert ops_logger.events[0]["subject"] == "审核后台任务 worker 异常退出"
 
 
 def test_load_config_missing_required():

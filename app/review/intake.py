@@ -58,7 +58,7 @@ class ReviewIntakeDecision:
             return IntakeOutcome.cancelled(self.reply)
         if self.action in {"wait", "wait_auto"}:
             return IntakeOutcome.wait(self.reply)
-        if self.action in {"bypass", "stale"}:
+        if self.action in {"bypass", "stale", "duplicate"}:
             return IntakeOutcome.bypass()
         task_types = {
             "run_single": "review_single",
@@ -93,6 +93,7 @@ class ReviewIntakeState:
     instructions: list[str] = field(default_factory=list)
     awaiting_primary: bool = False
     revision: int = 0
+    message_ids: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -382,12 +383,22 @@ class ReviewIntakeStore:
         channel: str,
         sender_userid: str,
         file: UploadedFile,
+        message_id: str = "",
     ) -> ReviewIntakeDecision:
         key = (channel, sender_userid)
         state = self._get_state(key) or ReviewIntakeState()
+        clean_message_id = message_id.strip()
+        if clean_message_id and clean_message_id in state.message_ids:
+            return ReviewIntakeDecision(
+                action="duplicate",
+                reply="这份文件已经收到，无需重复发送。",
+                revision=state.revision,
+            )
 
         if state.mode == "format":
             stored = self._persist_uploaded_file(key, file)
+            if clean_message_id:
+                state.message_ids.append(clean_message_id)
             state.files = [stored]
             return self._consume(key, state, action="run_format", files=(stored,))
 
@@ -405,6 +416,8 @@ class ReviewIntakeStore:
                 return ReviewIntakeDecision(action="wait", reply=limit_message)
             stored = self._persist_uploaded_file(key, file)
             state.files.append(stored)
+            if clean_message_id:
+                state.message_ids.append(clean_message_id)
             state.awaiting_primary = False
             state.revision += 1
             state.updated_at = time.time()
@@ -497,8 +510,31 @@ class ReviewIntakeStore:
         self._states.pop(key, None)
         self._remove_persisted_state(key, preserve_files=False)
 
-    def cleanup_files(self, files: tuple[UploadedFile, ...] | list[UploadedFile]) -> None:
+    def cleanup_files(
+        self,
+        files: tuple[UploadedFile, ...] | list[UploadedFile],
+        *,
+        channel: str = "",
+        sender_userid: str = "",
+    ) -> None:
+        retained_paths: set[Path] = set()
+        if channel and sender_userid:
+            state = self._get_state((channel, sender_userid))
+            if state is not None:
+                retained = list(state.files)
+                if state.recent_file is not None:
+                    retained.append(state.recent_file)
+                retained_paths = {
+                    Path(item.stored_path).resolve(strict=False)
+                    for item in retained
+                    if item.stored_path
+                }
         for file in files:
+            if (
+                file.stored_path
+                and Path(file.stored_path).resolve(strict=False) in retained_paths
+            ):
+                continue
             self._persistence.delete_file(file)
 
     def _consume(
@@ -585,6 +621,7 @@ class ReviewIntakeStore:
             "instructions": list(state.instructions),
             "awaiting_primary": state.awaiting_primary,
             "revision": state.revision,
+            "message_ids": list(state.message_ids),
             "created_at": state.created_at,
             "updated_at": state.updated_at,
         }
@@ -605,6 +642,11 @@ class ReviewIntakeStore:
                 instructions=[str(item) for item in payload.get("instructions", [])],
                 awaiting_primary=bool(payload.get("awaiting_primary", False)),
                 revision=int(payload.get("revision", 0)),
+                message_ids=[
+                    str(item)
+                    for item in payload.get("message_ids", [])
+                    if str(item)
+                ],
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )

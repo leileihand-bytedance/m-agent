@@ -60,6 +60,37 @@ def test_format_review_can_reuse_single_file_after_auto_content_review_started(
     assert format_review.files[0].read_bytes() == b"docx-content"
 
 
+def test_single_review_cleanup_keeps_file_reserved_for_followup_format_review(
+    tmp_path: Path,
+):
+    store = ReviewIntakeStore(storage_dir=tmp_path)
+    queued = store.add_file(
+        channel="wecom",
+        sender_userid="user-1",
+        file=_file("公文.docx", b"docx-content"),
+    )
+    content_review = store.finalize_auto_batch(
+        channel="wecom",
+        sender_userid="user-1",
+        expected_revision=queued.revision,
+        file_texts=("公文正文",),
+    )
+
+    store.cleanup_files(
+        content_review.files,
+        channel="wecom",
+        sender_userid="user-1",
+    )
+    format_review = store.handle_text(
+        channel="wecom",
+        sender_userid="user-1",
+        text="再审核一下格式",
+    )
+
+    assert format_review.action == "run_format"
+    assert format_review.files[0].read_bytes() == b"docx-content"
+
+
 def test_next_default_file_does_not_join_previously_reviewed_recent_file(tmp_path: Path):
     store = ReviewIntakeStore(storage_dir=tmp_path)
     first = store.add_file(
@@ -166,6 +197,40 @@ def test_default_single_file_auto_finalizes_without_user_instruction(tmp_path: P
     assert decision.action == "run_single"
     assert [item.filename for item in decision.files] == ["普通材料.docx"]
     assert decision.files[0].read_bytes() == b"single"
+
+
+def test_duplicate_file_message_does_not_turn_single_review_into_multi_file(tmp_path: Path):
+    store = ReviewIntakeStore(storage_dir=tmp_path / "intake")
+
+    first = store.add_file(
+        channel="wecom",
+        sender_userid="user-1",
+        message_id="message-001",
+        file=_file("普通材料.docx", b"single"),
+    )
+    duplicate = store.add_file(
+        channel="wecom",
+        sender_userid="user-1",
+        message_id="message-001",
+        file=_file("普通材料.docx", b"single"),
+    )
+    restarted = ReviewIntakeStore(storage_dir=tmp_path / "intake")
+    duplicate_after_restart = restarted.add_file(
+        channel="wecom",
+        sender_userid="user-1",
+        message_id="message-001",
+        file=_file("普通材料.docx", b"single"),
+    )
+
+    assert first.action == "wait_auto"
+    assert duplicate.action == "duplicate"
+    assert duplicate_after_restart.action == "duplicate"
+    snapshot = restarted.auto_batch_snapshot(
+        channel="wecom",
+        sender_userid="user-1",
+        expected_revision=first.revision,
+    )
+    assert len(snapshot.files) == 1
 
 
 def test_start_signal_during_default_single_file_wait_does_not_request_second_file(

@@ -20,9 +20,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 from time import perf_counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Mapping
+from uuid import uuid4
 
 # 让 import app.* 找得到
 _ROOT = Path(__file__).resolve().parents[2]
@@ -36,17 +37,38 @@ from app.review.reviewer import ReviewResult, Finding  # noqa: E402
 from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
 from app.review.intake import ReviewIntakeStore, is_format_review_request  # noqa: E402
 from app.platform.models import UploadedFile  # noqa: E402
-from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest  # noqa: E402
+from app.platform.attachment_delivery import (  # noqa: E402
+    AttachmentDelivery,
+    AttachmentDeliveryConfig,
+    DeliveryRequest,
+)
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
 from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
 from app.platform.gateway.wecom import extract_message_id  # noqa: E402
 from app.platform.task_status import write_task_status  # noqa: E402
+from app.platform.task_execution import (  # noqa: E402
+    ClaimLimits,
+    PersistentTaskExecutor,
+    TaskLifecycleObserver,
+    TaskRepository,
+)
+from app.review.task_execution import (  # noqa: E402
+    GENERAL_REVIEW_COST_CLASS,
+    GENERAL_REVIEW_TASK_TYPE,
+    GeneralReviewTaskService,
+    GeneralReviewWorkspace,
+    PreparedReviewDelivery,
+)
 
 
 # 全局 logger,在 main() 中初始化
 logger = logging.getLogger("review_bot")
 _DEFAULT_DATA_PATHS = DataPaths.from_values({}, project_root=_ROOT)
+
+
+class ReviewDeliveryStatusUncertain(RuntimeError):
+    """企业微信发送已发起，但回执不足以判断用户是否收到。"""
 
 _FOLLOWUP_REVIEW_REQUEST_RE = re.compile(
     r"^(?:请|麻烦)?(?:帮我)?(?:(?:审(?:核)?|看)(?:一下|下)?(?:这个|这份|该)?(?:材料|文件|文档|附件)?|"
@@ -80,6 +102,11 @@ class ReviewConfig:
     log_max_bytes: int = 20 * 1024 * 1024
     max_file_size_mb: int = 10
     reply_ack_timeout_seconds: float = 30.0
+    task_queue_db: Path = _DEFAULT_DATA_PATHS.task_queue_db.parent / "review.sqlite3"
+    task_worker_count: int = 1
+    task_poll_seconds: float = 0.25
+    task_recovery_seconds: float = 5.0
+    task_lease_seconds: int = 120
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -159,6 +186,12 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
         data_paths.intake / "review",
         project_root=_ROOT,
     )
+    task_queue_db = configured_path(
+        values,
+        "M_AGENT_REVIEW_TASK_DB",
+        data_paths.task_queue_db.parent / "review.sqlite3",
+        project_root=_ROOT,
+    )
 
     return ReviewConfig(
         wecom_bot_id=require_value(values, "WECOM_REVIEW_BOT_ID"),
@@ -184,6 +217,20 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
         reply_ack_timeout_seconds=max(
             5.0,
             _env_float(values, "REVIEW_REPLY_ACK_TIMEOUT_SECONDS", 30.0),
+        ),
+        task_queue_db=task_queue_db,
+        task_worker_count=max(1, _env_int(values, "M_AGENT_REVIEW_TASK_WORKERS", 1)),
+        task_poll_seconds=max(
+            0.05,
+            _env_float(values, "M_AGENT_REVIEW_TASK_POLL_SECONDS", 0.25),
+        ),
+        task_recovery_seconds=max(
+            1.0,
+            _env_float(values, "M_AGENT_REVIEW_TASK_RECOVERY_SECONDS", 5.0),
+        ),
+        task_lease_seconds=max(
+            30,
+            _env_int(values, "M_AGENT_REVIEW_TASK_LEASE_SECONDS", 120),
         ),
     )
 
@@ -329,6 +376,34 @@ def save_review(
     date_str = datetime.now().strftime("%Y%m%d")
     idx = _next_review_index(reviews_dir, date_str)
     review_dir = reviews_dir / date_str[:4] / date_str[4:6] / f"{date_str}-{idx:03d}"
+    return save_review_to_directory(
+        review_dir=review_dir,
+        file_bytes=file_bytes,
+        original_filename=original_filename,
+        sender=sender,
+        msgid=msgid,
+        result=result,
+        parsed_paragraphs=parsed_paragraphs,
+        text_content=text_content,
+        doc_type=doc_type,
+    )
+
+
+def save_review_to_directory(
+    *,
+    review_dir: Path,
+    file_bytes: bytes | None,
+    original_filename: str,
+    sender: str,
+    msgid: str,
+    task_id: str | None = None,
+    result: ReviewResult,
+    parsed_paragraphs: list[str],
+    text_content: str | None = None,
+    doc_type: DocumentType = DocumentType.NEI_CAN,
+    mark_processing_completed: bool = True,
+) -> Path:
+    """把审核产物写入指定任务目录，供持久队列恢复时复用。"""
     input_dir = review_dir / "input"
     output_dir = review_dir / "output"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -354,7 +429,7 @@ def save_review(
     meta_path.write_text(
         json.dumps(
             {
-                "task_id": review_dir.name,
+                "task_id": task_id or review_dir.name,
                 "original_filename": original_filename,
                 "sender_userid": sender,
                 "message_id": msgid,
@@ -370,7 +445,8 @@ def save_review(
         ),
         encoding="utf-8",
     )
-    write_task_status(review_dir, processing_status="completed")
+    if mark_processing_completed:
+        write_task_status(review_dir, processing_status="completed")
 
     return review_dir
 
@@ -939,12 +1015,15 @@ async def _deliver_review_attachment(
     *,
     attachment_delivery: AttachmentDelivery,
     ws_client: object,
-    frame: object,
+    frame: object | None,
     path: Path,
     sender: str,
     sender_name: str,
     label: str,
     req_id_factory,
+    chat_id: str = "",
+    notify_user_on_failure: bool = True,
+    raise_on_uncertain: bool = False,
 ) -> bool:
     task_dir = path.parent.parent if path.parent.name == "output" else path.parent
     result = await attachment_delivery.deliver(
@@ -953,6 +1032,7 @@ async def _deliver_review_attachment(
             file_path=path,
             allowed_root=task_dir,
             frame=frame,
+            chat_id=chat_id,
             task_dir=task_dir,
             source="review_bot",
             sender_userid=sender,
@@ -963,16 +1043,29 @@ async def _deliver_review_attachment(
     )
     if result.delivered:
         return True
+    if raise_on_uncertain and result.error_code in {"reply_timeout", "reply_failed"}:
+        raise ReviewDeliveryStatusUncertain(result.error_code)
+    if not notify_user_on_failure:
+        return False
     try:
-        await asyncio.wait_for(
-            ws_client.reply_stream(
-                frame,
-                req_id_factory("review-send-failed"),
-                result.user_message,
-                True,
-            ),
-            timeout=30.0,
-        )
+        if chat_id:
+            await asyncio.wait_for(
+                ws_client.send_message(
+                    chat_id,
+                    {"msgtype": "text", "text": {"content": result.user_message}},
+                ),
+                timeout=30.0,
+            )
+        else:
+            await asyncio.wait_for(
+                ws_client.reply_stream(
+                    frame,
+                    req_id_factory("review-send-failed"),
+                    result.user_message,
+                    True,
+                ),
+                timeout=30.0,
+            )
     except Exception as exc:
         logger.warning(
             "审核附件失败提示未能发送: %s",
@@ -980,6 +1073,89 @@ async def _deliver_review_attachment(
             extra=log_extra(sender, sender_name),
         )
     return False
+
+
+def _build_queued_attachment_delivery(
+    ops_event_logger: OpsEventLogger | None,
+) -> AttachmentDelivery:
+    # 队列结果只发一次；回执超时后重传可能造成用户收到两份文件。
+    return AttachmentDelivery(
+        config=AttachmentDeliveryConfig(max_attempts=1),
+        ops_event_logger=ops_event_logger,
+    )
+
+
+async def _send_queued_review_text(
+    ws_client: object,
+    recipient: str,
+    text: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> bool:
+    sender = getattr(ws_client, "send_message", None)
+    if not callable(sender):
+        raise RuntimeError("企业微信 SDK 不支持主动文本消息")
+    await asyncio.wait_for(
+        sender(
+            recipient,
+            {"msgtype": "text", "text": {"content": text}},
+        ),
+        timeout=timeout_seconds,
+    )
+    return True
+
+
+async def _run_review_task_worker_supervised(
+    *,
+    task_executor: PersistentTaskExecutor,
+    stop_event: asyncio.Event,
+    poll_interval: float,
+    worker_count: int,
+    recovery_interval: float,
+    ops_event_logger: OpsEventLogger,
+    restart_delay_seconds: float = 5.0,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            await task_executor.run_forever(
+                stop_event=stop_event,
+                poll_interval=poll_interval,
+                worker_count=worker_count,
+                recovery_interval=recovery_interval,
+            )
+            if stop_event.is_set():
+                return
+            raise RuntimeError("审核后台任务 worker 意外结束")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "审核后台任务 worker 异常退出，将自动重启",
+                exc_info=exc,
+                extra=log_extra("system", "system"),
+            )
+            try:
+                ops_event_logger.record(
+                    source="review_task_worker",
+                    severity="error",
+                    subject="审核后台任务 worker 异常退出",
+                    detail="持久任务 worker 已退出，系统将自动重启。",
+                    skill_id="review_general_docx",
+                )
+            except Exception:
+                logger.exception(
+                    "审核后台任务 worker 异常事件写入失败",
+                    extra=log_extra("system", "system"),
+                )
+            if stop_event.is_set():
+                return
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=max(0.0, restart_delay_seconds),
+                )
+            except TimeoutError:
+                pass
 
 
 async def _heartbeat_loop(root_dir: Path, service: str) -> None:
@@ -1045,6 +1221,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
     )
     ops_event_logger = OpsEventLogger(config.ops_events_dir)
     attachment_delivery = AttachmentDelivery(ops_event_logger=ops_event_logger)
+    queued_attachment_delivery = _build_queued_attachment_delivery(ops_event_logger)
     heartbeat_task = asyncio.create_task(
         _heartbeat_loop(config.ops_heartbeat_dir, "review_bot"),
         name="review-bot-heartbeat",
@@ -1142,6 +1319,39 @@ async def run_review_bot(config: ReviewConfig) -> None:
             label=label,
             req_id_factory=generate_req_id,
         )
+
+    async def send_active_text(recipient: str, text: str, *, label: str) -> bool:
+        sender = getattr(ws_client, "send_message", None)
+        if not callable(sender):
+            logger.error(
+                "%s失败：企业微信 SDK 不支持主动文本消息",
+                label,
+                extra=log_extra(recipient, registry.get_name(recipient) or recipient),
+            )
+            return False
+        for retry in range(3):
+            try:
+                await asyncio.wait_for(
+                    sender(
+                        recipient,
+                        {"msgtype": "text", "text": {"content": text}},
+                    ),
+                    timeout=30.0,
+                )
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "%s失败 to %s: %s, 第 %d 次重试",
+                    label,
+                    recipient,
+                    type(exc).__name__,
+                    retry + 1,
+                    extra=log_extra(recipient, registry.get_name(recipient) or recipient),
+                )
+                if retry < 2:
+                    await asyncio.sleep(2 * (retry + 1))
+        await notifier.notify_send_failure(recipient, label, Exception("发送失败（已重试3次）"))
+        return False
 
     async def run_official_format_decision(frame, sender: str, decision) -> None:
         file = decision.files[0]
@@ -1276,6 +1486,134 @@ async def run_review_bot(config: ReviewConfig) -> None:
             )
         finally:
             review_intake_store.cleanup_files(decision.files)
+
+    async def process_queued_general_review(
+        workspace: GeneralReviewWorkspace,
+    ) -> PreparedReviewDelivery:
+        parsed = await asyncio.to_thread(_parse_docx, workspace.input_file)
+        doc_type = detect_document_type(workspace.filename, parsed.paragraphs)
+        if doc_type != DocumentType.GENERAL:
+            raise ValueError("持久队列只处理单文件通用审核")
+        from app.review.general_reviewer import review_general  # noqa: E402
+
+        general_rules_text = load_rules("app/review/rules_general.md")
+        result = await review_general(
+            parsed.paragraphs,
+            general_rules_text,
+            workspace.filename,
+        )
+        await asyncio.to_thread(
+            save_review_to_directory,
+            review_dir=workspace.task_dir,
+            file_bytes=workspace.input_file.read_bytes(),
+            original_filename=workspace.filename,
+            sender=workspace.sender_userid,
+            msgid="",
+            task_id=workspace.task_id,
+            result=result,
+            parsed_paragraphs=parsed.paragraphs,
+            doc_type=DocumentType.GENERAL,
+            mark_processing_completed=False,
+        )
+        reply = build_user_review_reply(
+            result,
+            workspace.filename,
+            doc_type=DocumentType.GENERAL,
+        )
+        if reply is not None:
+            return PreparedReviewDelivery.text(reply)
+        marked_path = await asyncio.to_thread(
+            _prepare_review_reply_file,
+            workspace.task_dir,
+            workspace.filename,
+            result.findings,
+        )
+        if marked_path is None:
+            raise RuntimeError("通用审核发现问题但未生成标注文档")
+        return PreparedReviewDelivery.attachment(marked_path)
+
+    async def send_queued_review_attachment(
+        recipient: str,
+        path: Path,
+        task_dir: Path,
+    ) -> bool:
+        if path.parent.parent != task_dir:
+            raise ValueError("审核结果附件不属于当前任务目录")
+        return await _deliver_review_attachment(
+            attachment_delivery=queued_attachment_delivery,
+            ws_client=ws_client,
+            frame=None,
+            chat_id=recipient,
+            path=path,
+            sender=recipient,
+            sender_name=registry.get_name(recipient) or recipient,
+            label="单文件通用审核文档",
+            req_id_factory=generate_req_id,
+            notify_user_on_failure=False,
+            raise_on_uncertain=True,
+        )
+
+    async def notify_queued_review_failure(
+        recipient: str,
+        error_code: str,
+        task_id: str,
+    ) -> None:
+        messages = {
+            "delivery_status_uncertain": (
+                "审核已经完成，但结果发送状态暂时无法确认。"
+                f"为避免重复发送，我已暂停自动重试并提醒管理员核对。任务编号：{task_id}"
+            ),
+            "delivery_failed": (
+                "审核已经完成，但结果发送失败，已经提醒管理员处理。"
+                f"任务编号：{task_id}"
+            ),
+            "review_processing_failed": (
+                "审核处理失败，已经提醒管理员排查。"
+                f"请稍后重试，任务编号：{task_id}"
+            ),
+            "invalid_task_payload": (
+                "审核任务状态异常，已经提醒管理员排查。"
+                f"任务编号：{task_id}"
+            ),
+            "invalid_task_checkpoint": (
+                "审核任务状态异常，已经提醒管理员排查。"
+                f"任务编号：{task_id}"
+            ),
+        }
+        message = messages.get(error_code)
+        if message:
+            await send_active_text(recipient, message, label="审核任务异常提示")
+
+    task_repository = TaskRepository(
+        config.task_queue_db,
+        on_transition=TaskLifecycleObserver(
+            task_root=config.reviews_dir,
+            ops_event_logger=ops_event_logger,
+        ),
+    )
+    general_review_tasks = GeneralReviewTaskService(
+        repository=task_repository,
+        reviews_root=config.reviews_dir,
+        processor=process_queued_general_review,
+        text_sender=lambda recipient, text: _send_queued_review_text(
+            ws_client,
+            recipient,
+            text,
+        ),
+        attachment_sender=send_queued_review_attachment,
+        failure_notifier=notify_queued_review_failure,
+    )
+    task_executor = PersistentTaskExecutor(
+        repository=task_repository,
+        limits=ClaimLimits(
+            global_limit=config.task_worker_count,
+            per_user_limit=1,
+            cost_class_limits={GENERAL_REVIEW_COST_CLASS: config.task_worker_count},
+        ),
+        worker_id=f"review-bot-{uuid4().hex[:12]}",
+        lease_duration=timedelta(seconds=config.task_lease_seconds),
+    )
+    task_executor.register_handler(GENERAL_REVIEW_TASK_TYPE, general_review_tasks.handle)
 
     async def on_text(frame):
         """文本消息走通用审核(不生成 marked 文档)."""
@@ -1508,6 +1846,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             intake_decision = review_intake_store.add_file(
                 channel="wecom",
                 sender_userid=sender,
+                message_id=extract_message_id(frame),
                 file=UploadedFile(
                     filename=filename,
                     content=buffer,
@@ -1522,6 +1861,15 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 frame,
                 generate_req_id("review-err"),
                 _build_processing_failure_user_reply("文件暂存", exc),
+                True,
+            )
+            return
+
+        if intake_decision.action == "duplicate":
+            await ws_client.reply_stream(
+                frame,
+                generate_req_id("review-duplicate"),
+                intake_decision.reply,
                 True,
             )
             return
@@ -1565,6 +1913,11 @@ async def run_review_bot(config: ReviewConfig) -> None:
             queued_file = intake_decision.files[0]
             filename = queued_file.filename
             buffer = queued_file.read_bytes()
+            review_intake_store.cleanup_files(
+                intake_decision.files,
+                channel="wecom",
+                sender_userid=sender,
+            )
         if intake_decision.action == "run_format":
             await run_official_format_decision(frame, sender, intake_decision)
             return
@@ -1596,6 +1949,45 @@ async def run_review_bot(config: ReviewConfig) -> None:
             sender,
             extra=extra,
         )
+
+        if doc_type == DocumentType.GENERAL:
+            tmp_path.unlink(missing_ok=True)
+            message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
+            try:
+                submission = general_review_tasks.submit(
+                    channel="wecom",
+                    sender_userid=sender,
+                    sender_name=english_name,
+                    message_id=message_id,
+                    filename=filename,
+                    file_bytes=buffer,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "通用审核任务入队失败 from %s",
+                    sender,
+                    exc_info=exc,
+                    extra=extra,
+                )
+                await notifier.notify_file_review_error(sender, filename, "审核任务入队", exc)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("审核任务受理", exc),
+                    True,
+                )
+                return
+            if submission.created:
+                accepted = f"已进入审核队列，任务编号：{submission.task.task_id}。完成后会自动发送结果。"
+            else:
+                accepted = f"这份文件已经在处理中，无需重复提交。任务编号：{submission.task.task_id}。"
+            await ws_client.reply_stream(
+                frame,
+                generate_req_id("review-queued"),
+                accepted,
+                True,
+            )
+            return
 
         if doc_type == DocumentType.HALF_MONTHLY:
             from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
@@ -1693,7 +2085,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 )
             return
 
-        if doc_type in {DocumentType.GENERAL, DocumentType.OFFICIAL_FORMAT}:
+        if doc_type == DocumentType.OFFICIAL_FORMAT:
             review_label = document_type_label(doc_type)
             try:
                 if doc_type == DocumentType.OFFICIAL_FORMAT:
@@ -1950,11 +2342,25 @@ async def run_review_bot(config: ReviewConfig) -> None:
     ws_client.on("event.enter_chat", on_enter)
 
     await ws_client.connect()
+    task_stop_event = asyncio.Event()
+    task_worker = asyncio.create_task(
+        _run_review_task_worker_supervised(
+            task_executor=task_executor,
+            stop_event=task_stop_event,
+            poll_interval=config.task_poll_seconds,
+            worker_count=config.task_worker_count,
+            recovery_interval=config.task_recovery_seconds,
+            ops_event_logger=ops_event_logger,
+        ),
+        name="review-general-task-worker",
+    )
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         await ws_client.disconnect()
     finally:
+        task_stop_event.set()
+        await asyncio.gather(task_worker, return_exceptions=True)
         heartbeat_task.cancel()
 
 
