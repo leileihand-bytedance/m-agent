@@ -433,6 +433,67 @@ def test_typo_with_only_punctuation_target_is_dropped():
     assert _normalize_general_findings([finding], [paragraph]) == []
 
 
+def test_finding_with_claimed_source_missing_from_original_is_dropped():
+    paragraph = "系统支持7×24小时无间断服务。"
+    finding = Finding(
+        rule_id="general-typo",
+        paragraph_index=0,
+        line_number=1,
+        original_text=paragraph,
+        description="“7×7小时”应为“7×24小时”",
+        target_text="7×24小时",
+    )
+
+    assert _normalize_general_findings([finding], [paragraph]) == []
+
+
+def test_finding_with_real_claimed_source_is_kept():
+    paragraph = "本行以为发展普惠金融为战略导向。"
+    finding = Finding(
+        rule_id="general-grammar",
+        paragraph_index=0,
+        line_number=1,
+        original_text=paragraph,
+        description="‘以为’应改为‘以’",
+        target_text="以为",
+    )
+
+    normalized = _normalize_general_findings([finding], [paragraph])
+
+    assert normalized[0].target_text == "以为"
+
+
+def test_punctuation_space_finding_marks_exact_separator_and_space():
+    paragraph = "请中原银行、 四川银行作答。"
+    finding = Finding(
+        rule_id="general-punctuation",
+        paragraph_index=0,
+        line_number=1,
+        original_text=paragraph,
+        description="中文逗号后有多余空格",
+        target_text="中原银行、 四川银行",
+    )
+
+    normalized = _normalize_general_findings([finding], [paragraph])
+
+    assert normalized[0].target_text == "、 "
+    assert normalized[0].description == "顿号后有多余空格，应删除该空格"
+
+
+def test_short_english_label_is_not_reported_as_incomplete_body():
+    paragraphs = ["5", "Fortune", "Fintech Innovators Asia (Digital banks)"]
+    finding = Finding(
+        rule_id="general-incomplete",
+        paragraph_index=1,
+        line_number=2,
+        original_text="Fortune",
+        description="段落后缺奖项名称和描述，语义明显不完整",
+        target_text="Fortune",
+    )
+
+    assert _normalize_general_findings([finding], paragraphs) == []
+
+
 def test_duplicate_target_keeps_typo_over_grammar():
     paragraph = "本行以为发展普惠金融为导向。"
     findings = [

@@ -65,6 +65,13 @@ _GENERAL_QUOTED_TEXT_RE = re.compile(
 )
 _GENERAL_WORD_RE = re.compile(r"[一-龥A-Za-z0-9]{2,20}")
 _PUNCTUATION_CHARS = set("，。！？；：、“”‘’《》【】（）()、,.;!?…")
+_PUNCTUATION_SPACE_RE = re.compile(
+    r"([，。；：、！？,.;:!?])([ \t\u00a0\u3000]+)"
+)
+_REPLACEMENT_KEYWORD_RE = re.compile(r"建议改为|应改为|应写为|应为|改为")
+_SHORT_ENGLISH_LABEL_RE = re.compile(
+    r"[A-Za-z][A-Za-z0-9&/().,'’‘+\- ]{0,59}"
+)
 _SPECIFIC_FORMAT_RULE_IDS = {
     "consecutive-punct",
     "quote-pair",
@@ -659,9 +666,77 @@ def _is_punctuation_only(text: str) -> bool:
     return bool(stripped) and all(char in _PUNCTUATION_CHARS for char in stripped)
 
 
+def _claims_unsupported_replacement_source(
+    finding: Finding,
+    paragraph: str,
+) -> bool:
+    if finding.rule_id not in {
+        "general-typo",
+        "general-name-error",
+        "general-grammar",
+        "general-punctuation",
+    }:
+        return False
+
+    description = finding.description or ""
+    keyword_match = _REPLACEMENT_KEYWORD_RE.search(description)
+    if keyword_match is None:
+        return False
+
+    quoted_matches = list(_GENERAL_QUOTED_TEXT_RE.finditer(description))
+    claimed_sources = [
+        match.group(1).strip()
+        for match in quoted_matches
+        if match.end() <= keyword_match.start() and match.group(1).strip()
+    ]
+    if not claimed_sources:
+        return False
+    if not any(source in paragraph for source in claimed_sources):
+        return True
+
+    correction = next(
+        (
+            match.group(1).strip()
+            for match in quoted_matches
+            if match.start() >= keyword_match.end() and match.group(1).strip()
+        ),
+        "",
+    )
+    return bool(correction) and all(
+        source == correction
+        for source in claimed_sources
+        if source in paragraph
+    )
+
+
+def _looks_like_short_english_label(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or not _SHORT_ENGLISH_LABEL_RE.fullmatch(stripped):
+        return False
+    if stripped.endswith((".", "!", "?", ";", ":")):
+        return False
+
+    words = re.findall(r"[A-Za-z]+", stripped)
+    if not words or len(words) > 4:
+        return False
+    if len(words) == 1:
+        return True
+
+    connectors = {"and", "of", "the", "for", "in", "on", "to"}
+    return all(
+        word.lower() in connectors or word[0].isupper() or word.isupper()
+        for word in words
+    )
+
+
 def _normalize_target_text(finding: Finding, paragraph: str) -> str:
     target = (finding.target_text or "").strip()
     description = finding.description or ""
+
+    if finding.rule_id == "general-punctuation" and "空格" in description:
+        match = _PUNCTUATION_SPACE_RE.search(target)
+        if match:
+            return match.group(0)
 
     if (
         finding.rule_id in {"general-punctuation", "general-incomplete"}
@@ -697,6 +772,32 @@ def _normalize_target_text(finding: Finding, paragraph: str) -> str:
     return ""
 
 
+def _normalize_general_description(finding: Finding, target_text: str) -> str:
+    description = finding.description or ""
+    if finding.rule_id != "general-punctuation" or "空格" not in description:
+        return description
+
+    match = _PUNCTUATION_SPACE_RE.fullmatch(target_text)
+    if match is None:
+        return description
+    punctuation_name = {
+        "、": "顿号",
+        "，": "逗号",
+        ",": "英文逗号",
+        "。": "句号",
+        ".": "英文句点",
+        "；": "分号",
+        ";": "英文分号",
+        "：": "冒号",
+        ":": "英文冒号",
+        "！": "感叹号",
+        "!": "英文感叹号",
+        "？": "问号",
+        "?": "英文问号",
+    }.get(match.group(1), "标点")
+    return f"{punctuation_name}后有多余空格，应删除该空格"
+
+
 def _normalize_general_findings(
     semantic_findings: list[Finding],
     paragraphs: list[str],
@@ -706,6 +807,13 @@ def _normalize_general_findings(
 
     for finding in semantic_findings:
         paragraph = paragraphs[finding.paragraph_index]
+        if _claims_unsupported_replacement_source(finding, paragraph):
+            continue
+        if (
+            finding.rule_id == "general-incomplete"
+            and _looks_like_short_english_label(paragraph)
+        ):
+            continue
         target_text = _normalize_target_text(finding, paragraph)
 
         if (
@@ -731,7 +839,7 @@ def _normalize_general_findings(
                 paragraph_index=finding.paragraph_index,
                 line_number=finding.line_number,
                 original_text=paragraph,
-                description=finding.description,
+                description=_normalize_general_description(finding, target_text),
                 target_text=target_text,
             )
         )

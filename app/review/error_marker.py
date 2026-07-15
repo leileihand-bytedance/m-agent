@@ -53,6 +53,16 @@ _MAX_QUOTED_LEN = 30
 _MAX_DESC_WORD_LEN = 12
 _MAX_ORIGINAL_PREFIX_LEN = 20
 _MAX_SPLIT_ITERATIONS = 3
+_SIGNIFICANT_SPACE_TARGET_RE = re.compile(
+    r"^[，。；：、！？,.;:!?][ \t\u00a0\u3000]+$"
+)
+
+
+def _target_text_for_search(finding: Finding) -> str:
+    raw_target = finding.target_text or ""
+    if _SIGNIFICANT_SPACE_TARGET_RE.fullmatch(raw_target):
+        return raw_target
+    return raw_target.strip()
 
 
 def _extract_quoted_text(text: str) -> str | None:
@@ -79,8 +89,9 @@ def _get_search_key(finding: Finding) -> str:
       3. description 中的中文词组
       4. original_text 前缀
     """
-    if finding.target_text and finding.target_text.strip():
-        return finding.target_text.strip()
+    target_text = _target_text_for_search(finding)
+    if target_text:
+        return target_text
 
     description = finding.description or ""
     quoted = _extract_quoted_text(description)
@@ -257,7 +268,7 @@ def _add_comment(run: Run, text: str) -> None:
 def _build_locator_text(finding: Finding) -> str:
     """生成可直接在 Word 中搜索的连续原文片段."""
     original = (finding.original_text or "").strip()
-    target = (finding.target_text or "").strip()
+    target = _target_text_for_search(finding)
     if not original:
         return target
     if not target or target not in original:
@@ -474,7 +485,7 @@ def mark_errors_in_docx(
             paragraph_text_cache[para_index] = _paragraph_full_text(paragraph)
         paragraph_text = paragraph_text_cache[para_index]
 
-        target_text = (finding.target_text or "").strip()
+        target_text = _target_text_for_search(finding)
         if not target_text:
             target_text = _get_search_key(finding)
         target_start = (

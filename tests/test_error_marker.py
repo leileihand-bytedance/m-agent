@@ -170,6 +170,29 @@ def test_mark_errors_highlights_exact_target_for_punctuation(tmp_path: Path):
     assert marked == [","]
 
 
+def test_mark_errors_preserves_significant_space_after_punctuation(tmp_path: Path):
+    input_path = tmp_path / "input.docx"
+    output_path = tmp_path / "output.docx"
+    paragraph = "请中原银行、 四川银行作答。"
+    _make_minimal_docx(input_path, [paragraph])
+
+    findings = [
+        Finding(
+            rule_id="general-punctuation",
+            paragraph_index=0,
+            line_number=1,
+            original_text=paragraph,
+            description="顿号后有多余空格，应删除该空格",
+            target_text="、 ",
+        ),
+    ]
+
+    mark_errors_in_docx(input_path, output_path, findings)
+
+    assert _get_search_key(findings[0]) == "、 "
+    assert _marked_texts(output_path) == ["、 "]
+
+
 def test_mark_errors_consecutive_punctuation(tmp_path: Path):
     """连续标点应标红错误标点及前面半句话."""
     input_path = tmp_path / "input.docx"
