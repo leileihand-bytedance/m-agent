@@ -278,33 +278,6 @@ def check_sync(*, warn_only: bool = False, upstream_ref: str = "@{upstream}") ->
     return 0 if warn_only else 1
 
 
-def record_commit_status(
-    *,
-    report_path: Path,
-    commit_hash: str,
-    subject: str,
-    changed_file_count: int,
-    core_documents: tuple[str, ...],
-    timestamp: datetime | None = None,
-) -> None:
-    """把提交摘要写入本地状态报告，不记录用户材料或业务原文。"""
-    moment = timestamp or datetime.now().astimezone()
-    document_summary = "、".join(core_documents) if core_documents else "无"
-    entry = (
-        f"## [{moment.strftime('%Y-%m-%d %H:%M')}] {subject}\n\n"
-        f"- Git 提交：`{commit_hash}`\n"
-        f"- 变更文件：{changed_file_count} 个\n"
-        f"- 同步的核心文档：{document_summary}\n"
-        "- 记录方式：Git post-commit 自动生成；不包含用户材料、原文或运行日志。\n\n"
-        "---\n\n"
-    )
-    _insert_status_entry(
-        report_path=report_path,
-        entry=entry,
-        unique_marker=f"Git 提交：`{commit_hash}`",
-    )
-
-
 def classify_changed_areas(paths: Iterable[str]) -> tuple[str, ...]:
     normalized_paths = tuple(path.replace("\\", "/") for path in paths)
     areas = tuple(
@@ -325,24 +298,29 @@ def record_push_status(
     commit_subjects: tuple[str, ...],
     changed_paths: tuple[str, ...],
     summary: str,
+    impact: str,
+    next_step: str,
     timestamp: datetime | None = None,
 ) -> None:
-    """在远端推送成功后记录本次推送范围和主要改动。"""
+    """在远端推送成功后记录功能、能力变化和后续边界。"""
     moment = timestamp or datetime.now().astimezone()
     marker = f"push:{remote}/{branch}:{after_hash}"
     areas = "、".join(classify_changed_areas(changed_paths))
-    subjects = "；".join(commit_subjects) if commit_subjects else "无新增提交摘要"
-    explanation = summary.strip() or subjects
+    completed = summary.strip()
+    capability_impact = impact.strip()
+    boundary = next_step.strip()
+    if not completed or not capability_impact or not boundary:
+        raise ValueError("开发日志必须说明完成功能、能力变化和当前边界/下一步")
     entry = (
-        f"## [{moment.strftime('%Y-%m-%d %H:%M')}] Git 推送 {remote}/{branch}\n\n"
-        f"- 推送标识：`{marker}`\n"
-        f"- 推送范围：`{before_hash}` -> `{after_hash}`\n"
-        f"- 推送提交：{len(commit_subjects)} 个\n"
-        f"- 改动说明：{explanation}\n"
-        f"- 提交摘要：{subjects}\n"
-        f"- 影响范围：{areas}\n"
-        f"- 变更文件：{len(changed_paths)} 个\n"
-        "- 记录方式：受管推送成功后自动生成；不包含用户材料、密钥或运行日志。\n\n"
+        f"## [{moment.strftime('%Y-%m-%d %H:%M')}] 开发进展\n\n"
+        f"- 完成功能：{completed}\n"
+        f"- 能力变化：{capability_impact}\n"
+        f"- 当前边界/下一步：{boundary}\n"
+        f"- 影响模块：{areas}\n"
+        f"- 交付状态：已同步到远端 `{remote}/{branch}`。\n"
+        f"- 技术追溯：`{after_hash}`\n"
+        "- 记录方式：受管推送成功后自动生成；不包含用户材料、密钥或运行日志。\n"
+        f"<!-- {marker} -->\n\n"
         "---\n\n"
     )
     _insert_status_entry(report_path=report_path, entry=entry, unique_marker=marker)
@@ -381,7 +359,9 @@ def collect_push_details(before_hash: str, after_hash: str) -> tuple[tuple[str, 
     return subjects, changed_paths
 
 
-def push_and_record(*, remote: str, branch: str, summary: str) -> None:
+def push_and_record(*, remote: str, branch: str, summary: str, impact: str, next_step: str) -> None:
+    if not summary.strip() or not impact.strip() or not next_step.strip():
+        raise RuntimeError("开发日志必须说明完成功能、能力变化和当前边界/下一步")
     if _run_git("status", "--porcelain").stdout.strip():
         raise RuntimeError("工作区存在未提交变更，请先完成测试和提交")
     current_branch = _run_git("branch", "--show-current").stdout.strip()
@@ -432,6 +412,8 @@ def push_and_record(*, remote: str, branch: str, summary: str) -> None:
         commit_subjects=commit_subjects,
         changed_paths=changed_paths,
         summary=summary,
+        impact=impact,
+        next_step=next_step,
     )
     print("推送成功，已同步写入本机 STATUS-REPORT.md。")
 
@@ -486,23 +468,6 @@ def _staged_content_errors(changes: Iterable[tuple[str, str]]) -> list[str]:
     return errors
 
 
-def record_current_commit() -> None:
-    meta = _run_git("show", "-s", "--format=%H%x00%s", "HEAD").stdout.strip()
-    commit_hash, subject = meta.split("\x00", 1)
-    changed_paths = tuple(
-        line.strip()
-        for line in _run_git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").stdout.splitlines()
-        if line.strip()
-    )
-    record_commit_status(
-        report_path=STATUS_REPORT_PATH,
-        commit_hash=commit_hash,
-        subject=subject,
-        changed_file_count=len(changed_paths),
-        core_documents=tuple(path for path in changed_paths if is_core_document(path)),
-    )
-
-
 def install_hooks() -> None:
     _run_git("config", "core.hooksPath", ".githooks")
 
@@ -530,7 +495,7 @@ def _run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]
 def _new_report_header() -> str:
     return (
         "# M-Agent 状态报告\n\n"
-        "> 本文件只保留在本机，由 Git hook 自动追加提交摘要；不进入版本库。\n\n"
+        "> 本文件只保留在本机，记录开发完成的功能、能力变化和后续边界；不进入版本库。\n\n"
         "---\n\n"
     )
 
@@ -546,14 +511,17 @@ def main(argv: list[str] | None = None) -> int:
     push_parser = subparsers.add_parser("push", help="安全推送并在本机状态报告记录改动")
     push_parser.add_argument("--remote", default="origin")
     push_parser.add_argument("--branch", default="main")
-    push_parser.add_argument("--summary", required=True, help="本次推送的通俗改动说明")
+    push_parser.add_argument("--summary", required=True, help="本次完成了什么功能")
+    push_parser.add_argument("--impact", required=True, help="实际改变了什么能力或用户体验")
+    push_parser.add_argument("--next-step", required=True, help="当前边界、遗留问题或下一步")
     record_push_parser = subparsers.add_parser("record-push", help="补记一次已完成的推送")
     record_push_parser.add_argument("--remote", default="origin")
     record_push_parser.add_argument("--branch", default="main")
     record_push_parser.add_argument("--before", required=True)
     record_push_parser.add_argument("--after", required=True)
     record_push_parser.add_argument("--summary", required=True)
-    subparsers.add_parser("record-commit", help="把 HEAD 摘要写入本地 STATUS-REPORT.md")
+    record_push_parser.add_argument("--impact", required=True)
+    record_push_parser.add_argument("--next-step", required=True)
     subparsers.add_parser("install-hooks", help="启用仓库内 Git hooks")
     args = parser.parse_args(argv)
 
@@ -565,14 +533,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("核心文档检查通过。")
         return 0
-    if args.command == "record-commit":
-        record_current_commit()
-        return 0
     if args.command == "check-sync":
         return check_sync(warn_only=args.warn_only, upstream_ref=args.upstream)
     if args.command == "push":
         try:
-            push_and_record(remote=args.remote, branch=args.branch, summary=args.summary)
+            push_and_record(
+                remote=args.remote,
+                branch=args.branch,
+                summary=args.summary,
+                impact=args.impact,
+                next_step=args.next_step,
+            )
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
@@ -588,6 +559,8 @@ def main(argv: list[str] | None = None) -> int:
             commit_subjects=commit_subjects,
             changed_paths=changed_paths,
             summary=args.summary,
+            impact=args.impact,
+            next_step=args.next_step,
         )
         print("已补记推送记录。")
         return 0

@@ -1,3 +1,2 @@
 #!/bin/sh
-uv run --locked python scripts/project_docs.py record-commit
 uv run --locked python scripts/project_docs.py check-sync --warn-only

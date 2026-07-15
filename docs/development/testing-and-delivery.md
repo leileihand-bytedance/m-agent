@@ -43,12 +43,12 @@ uv run --locked python -c "from pydantic_ai.models.openai import OpenAIChatModel
 活跃开发不能长期堆积在工作区，也不能在本地提交后就宣称交付完成：
 
 1. 每个可测试的逻辑节点及时提交。
-2. 禁止直接运行 `git push`，统一执行 `uv run --locked python scripts/project_docs.py push --summary "本次做了什么改动"`。命令会先获取远端并阻止分叉。
-3. 受管推送成功后，自动向本机 `STATUS-REPORT.md` 写入推送范围、提交摘要、改动说明、影响模块和文件数量；失败时不写成功记录。
+2. 禁止直接运行 `git push`，统一执行 `uv run --locked python scripts/project_docs.py push --summary "完成了什么功能" --impact "实际改变了什么能力" --next-step "当前边界或下一步"`。命令会先获取远端并阻止分叉。
+3. 受管推送成功后，自动向本机 `STATUS-REPORT.md` 写入一条开发日志，主体是完成功能、能力变化和下一步；Git 哈希只用于追溯。失败时不写成功记录。
 4. 推送后再次运行 `uv run --locked python scripts/project_docs.py check-sync`，输出必须为“本地分支与远端已同步”；禁止强推覆盖远端历史。
 5. 网络、凭据或分叉阻塞时，在交付说明中明确写出，不得省略。
 
-post-commit hook 会记录本地提交并在存在未推送提交时告警；pre-push hook 会执行核心文档检查，并拒绝绕过受管命令直接推送。钩子不会自动强推或在后台静默访问网络。
+post-commit hook 只在存在未推送提交时告警，不再写开发日志；pre-push hook 会执行核心文档检查，并拒绝绕过受管命令直接推送。钩子不会自动强推或在后台静默访问网络。
 
 ## 测试分层
 

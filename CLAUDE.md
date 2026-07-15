@@ -85,12 +85,20 @@ uv run --locked python tests/test_reviewer.py
 - 底座、skill、入口、配置、路线或测试命令发生变化时，必须同步更新对应架构文档、模块 README、SKILL、TODO 或测试交付文档。
 - 完成后运行 `uv run --locked python scripts/project_docs.py check`；Git pre-commit hook 会基于暂存区版本按模块核对对应核心文档，并覆盖依赖和 hooks 变更。
 - 首次克隆后运行 `uv run --locked python scripts/project_docs.py install-hooks` 启用仓库内 hooks。
-- `STATUS-REPORT.md` 和含真实用户 ID 的 `config/platform-policy.yaml` 只在本机保留；前者由 post-commit hook 自动追加摘要，两者都不得暂存或提交。
+- `STATUS-REPORT.md` 和含真实用户 ID 的 `config/platform-policy.yaml` 只在本机保留，两者都不得暂存或提交。状态报告只记录有业务含义的开发进展，不记录逐次提交清单。
 - 行为已变更但核心文档未同步，属于禁止交付情形。
+
+## STATUS-REPORT 开发日志规范（强制）
+
+- `STATUS-REPORT.md` 用来说明完成了什么功能、解决了什么问题、实际改变了什么能力或用户体验，以及当前边界和下一步。
+- 每个完成并验证的逻辑开发节点只写一条开发日志；必要时补充关键测试结论和剩余风险。
+- 不得把文件列表、文件数量、提交摘要或推送范围当作日志主体。Git 哈希只可放在最后用于技术追溯。
+- 不得写入用户材料、业务原文、真实用户 ID、密钥、错误堆栈或本机任务路径。
+- post-commit 只提醒远端同步状态；只有受管推送成功后才自动生成一条开发日志，避免重复记录。
 
 ## Git 远端同步（强制）
 
 - 活跃开发达到可测试的逻辑节点后及时提交，任务结束前不得遗留应提交变更。
-- 禁止直接 `git push`；统一运行 `uv run --locked python scripts/project_docs.py push --summary "本次做了什么改动"`。命令会先获取远端、阻止分叉和强推，成功后再写本机推送记录。
-- 每次成功推送必须在本机 `STATUS-REPORT.md` 追加推送范围、提交摘要、改动说明、影响模块和文件数量；失败不得记成成功。
-- 推送后运行 `uv run --locked python scripts/project_docs.py check-sync` 确认差异为零。post-commit 记录本地提交，pre-push 检查文档并阻止绕过受管流程；网络或权限失败必须如实报告。
+- 禁止直接 `git push`；统一运行 `uv run --locked python scripts/project_docs.py push --summary "完成了什么功能" --impact "实际改变了什么能力" --next-step "当前边界或下一步"`。命令会先获取远端、阻止分叉和强推，成功后再写本机开发日志。
+- 每次成功推送必须在本机 `STATUS-REPORT.md` 追加一条以功能、能力变化和下一步为主体的开发日志；失败不得记成成功。
+- 推送后运行 `uv run --locked python scripts/project_docs.py check-sync` 确认差异为零。post-commit 只提醒未推送状态，pre-push 检查文档并阻止绕过受管流程；网络或权限失败必须如实报告。
