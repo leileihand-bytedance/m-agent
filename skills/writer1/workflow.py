@@ -26,13 +26,16 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
             message=_missing_material_message(materials),
         )
     if _has_read_errors(materials):
-        return BriefResult(
-            title="",
-            body="",
-            sources=[str(item.get("url", "")) for item in materials if item.get("url")],
-            needs_clarification=True,
-            message=_partial_read_error_message(materials),
-        )
+        if _should_continue_with_readable_materials(inputs):
+            materials = [item for item in materials if item.get("source") != "read_error"]
+        else:
+            return BriefResult(
+                title="",
+                body="",
+                sources=[str(item.get("url", "")) for item in materials if item.get("url")],
+                needs_clarification=True,
+                message=_partial_read_error_message(materials),
+            )
 
     source_materials = list(materials)
     if not source_materials_have_quantitative_data(source_materials):
@@ -188,6 +191,12 @@ def _missing_material_message(materials: list[dict[str, object]]) -> str:
 
 def _has_read_errors(materials: list[dict[str, object]]) -> bool:
     return any(item.get("source") == "read_error" for item in materials)
+
+
+def _should_continue_with_readable_materials(inputs: dict[str, object]) -> bool:
+    instruction = str(inputs.get("text", "") or "").strip()
+    compact = "".join(instruction.split())
+    return compact.startswith("1") or "继续使用已读取素材" in compact
 
 
 def _partial_read_error_message(materials: list[dict[str, object]]) -> str:

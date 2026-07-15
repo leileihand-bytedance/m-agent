@@ -12,6 +12,7 @@ from skills.writer1.workflow import (
     _missing_material_message,
     _partial_read_error_message,
     _policy_research_materials,
+    _should_continue_with_readable_materials,
     _source_materials,
 )
 
@@ -29,13 +30,16 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
             message=_missing_material_message(materials),
         )
     if _has_read_errors(materials):
-        return BriefResult(
-            title="",
-            body="",
-            sources=[str(item.get("url", "")) for item in materials if item.get("url")],
-            needs_clarification=True,
-            message=_partial_read_error_message(materials),
-        )
+        if _should_continue_with_readable_materials(inputs):
+            materials = [item for item in materials if item.get("source") != "read_error"]
+        else:
+            return BriefResult(
+                title="",
+                body="",
+                sources=[str(item.get("url", "")) for item in materials if item.get("url")],
+                needs_clarification=True,
+                message=_partial_read_error_message(materials),
+            )
 
     source_materials = list(materials)
     relation = assess_multi_source_relation(source_materials)

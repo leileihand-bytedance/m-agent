@@ -153,15 +153,17 @@ def test_summarize_writing_tasks_uses_content_free_status_files(tmp_path):
     write_job("20260714-clarify", "needs_input")
     write_job("20260714-failed", "failed")
     write_job("20260714-incomplete", "processing")
+    write_job("20260714-queued", "queued")
+    write_job("20260714-running", "running")
     write_job("20260714-no-result", None)
 
     summary = summarize_writing_tasks(root)
 
-    assert summary.total == 5
+    assert summary.total == 7
     assert summary.completed == 1
     assert summary.needs_input == 1
     assert summary.failed == 1
-    assert summary.incomplete == 1
+    assert summary.incomplete == 3
     assert summary.unknown == 1
     assert summary.legacy == 0
 

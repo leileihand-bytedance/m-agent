@@ -11,6 +11,7 @@
 ```text
 企业微信写作 Bot
   -> app/writing/bot.py
+  -> app/writing/task_execution.py # 直报/简报持久任务适配
   -> app/writing/portal.py      # 结构化素材页与本地预览入口
   -> app/platform/app.py
   -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/ 或 skills/rewrite/
@@ -24,6 +25,10 @@
 - 综合调研成功后不再在会话中铺开整篇长正文，而是先回复简短完成提示，再通过公共 `AttachmentDelivery` 回传采用现有公文基本格式的 `.docx` 初稿。Word 只允许从本次任务 `output/` 返回；写作入口输入仍受 20MB 总量限制，结果交付使用企业微信约 50MB 的 SDK 硬上限。
 - 综合调研正文不是把各部门文件逐份拼接：工作流先按提纲形成可追溯材料台账，再按提纲问题跨部门归并；来源标签在综合段末保留一次，标题编号、原始文件名、遗漏一级主题和连续图片提醒在生成后确定性校正。
 - 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报和综合调研整合分别使用不同话术。
+- 企业微信新直报、单素材简报和多素材简报先返回队列任务编号，再由后台 worker 生成并主动发送初稿。任务入队前已经创建正式写作 job、复制文件快照；处理、会话收尾和发送分别记录检查点，Bot 重启后不会因为 intake 临时文件丢失而无法恢复。
+- 写作队列使用独立 `runtime/task-execution/writing.sqlite3`，默认 1 个 worker、同一用户同一时刻只跑 1 项初稿。审核队列与写作队列分离，两个 worker 不会互相领取任务。
+- 同一企业微信文字或文件消息按稳定消息 ID 去重；用户有初稿在途时，入口会提示等待，不接收下一批材料或改稿，避免不同批次互相覆盖。收到初稿后，上一稿改稿仍走现有实时会话链路。
+- 初稿返回待澄清时，入口会恢复原材料上下文。用户确认“继续使用已读取素材写”后，直报和简报会忽略读取失败项并使用成功读取的素材继续。
 - 开发者可在本机素材页一次性上传多个 Word/PDF/PPTX、粘贴链接、补充要求或文字素材。
 - 服务端会拒绝非 `.docx` / `.pdf` / `.pptx` 文件，避免“上传成功但实际无法解析”。HTML 文件上传暂缓，网页仍通过链接读取。
 - 提交后结果直接返回企业微信对话。
@@ -65,6 +70,11 @@ M_AGENT_PORTAL_BASE_URL
 M_AGENT_DATA_DIR
 M_AGENT_DOCUMENT_MAX_MB
 M_AGENT_INTAKE_DIR
+M_AGENT_WRITING_TASK_QUEUE_DB
+M_AGENT_WRITING_TASK_WORKERS
+M_AGENT_WRITING_TASK_POLL_SECONDS
+M_AGENT_WRITING_TASK_RECOVERY_SECONDS
+M_AGENT_WRITING_TASK_LEASE_SECONDS
 ```
 
 `M_AGENT_DATA_DIR` 默认指向项目同级的桌面 `M-Agent-Files/`。用户上传、待组装文件、系统生成、知识库、会话和日志都保存在该目录，`app/writing/` 不得自行新增其他持久化目录。`M_AGENT_INTAKE_DIR` 仅用于明确覆盖待组装目录，正常部署不需要单独配置。
@@ -92,6 +102,6 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

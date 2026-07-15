@@ -47,6 +47,7 @@ class JobStore:
         sender_userid: str,
         message: str,
         sender_name: str = "",
+        processing_status: str = "processing",
     ) -> JobContext:
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}"
@@ -73,7 +74,7 @@ class JobStore:
             ),
             encoding="utf-8",
         )
-        status_path = write_task_status(job_dir, processing_status="processing")
+        status_path = write_task_status(job_dir, processing_status=processing_status)
 
         return JobContext(
             job_id=job_id,
@@ -83,6 +84,20 @@ class JobStore:
             output_dir=output_dir,
             meta_path=meta_path,
             status_path=status_path,
+        )
+
+    def read_result(self, job: JobContext) -> PlatformResult:
+        payload = _read_json(job.output_dir / "result.json")
+        if not payload:
+            raise ValueError(f"写作任务结果不存在：{job.job_id}")
+        output = payload.get("output", {})
+        if not isinstance(output, dict):
+            raise ValueError(f"写作任务结果格式错误：{job.job_id}")
+        return PlatformResult(
+            skill_id=str(payload["skill_id"]) if payload.get("skill_id") is not None else None,
+            output=output,
+            needs_clarification=bool(payload.get("needs_clarification", False)),
+            message=str(payload.get("message", "")),
         )
 
     def write_result(self, job: JobContext, result: PlatformResult) -> Path:

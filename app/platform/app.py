@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 import re
+from uuid import uuid4
 
 from app.platform.builtin_tools import (
     bank_materials,
@@ -27,10 +29,22 @@ from app.platform.pydantic_runtime import PydanticAIWriter
 from app.platform.registry import SkillRegistry
 from app.platform.router import URL_RE, route_message
 from app.platform.runtime import PlatformRuntime
-from app.platform.storage import JobStore
+from app.platform.storage import JobContext, JobStore
+from app.platform.task_status import update_task_status
 from app.platform.user_registry import UserRegistry
 
 SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf", ".pptx"}
+
+
+@dataclass(frozen=True)
+class PreparedPlatformJob:
+    channel: str
+    sender_userid: str
+    sender_name: str
+    route: RoutedRequest
+    job: JobContext
+    user_text: str
+    ack_message: str = ""
 
 
 class PlatformApp:
@@ -95,12 +109,30 @@ class PlatformApp:
         text: str,
         ack_message: str = "",
     ) -> PlatformResult:
-        sender_name = self.resolve_sender_name(sender_userid)
+        prepared = self.prepare_text_message(
+            channel=channel,
+            sender_userid=sender_userid,
+            text=text,
+            ack_message=ack_message,
+        )
+        return self.execute_prepared_job(prepared)
+
+    def prepare_text_message(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        text: str,
+        ack_message: str = "",
+        sender_name: str | None = None,
+    ) -> PreparedPlatformJob:
+        resolved_sender_name = sender_name or self.resolve_sender_name(sender_userid)
         job = self._job_store.create_job(
             channel=channel,
             sender_userid=sender_userid,
-            sender_name=sender_name,
+            sender_name=resolved_sender_name,
             message=text,
+            processing_status="queued",
         )
         route = route_message(text, self._registry)
         route = self._revision_route_or_original(
@@ -109,10 +141,10 @@ class PlatformApp:
             sender_userid=sender_userid,
             text=text,
         )
-        return self._run_routed_job(
+        return PreparedPlatformJob(
             channel=channel,
             sender_userid=sender_userid,
-            sender_name=sender_name,
+            sender_name=resolved_sender_name,
             route=route,
             job=job,
             user_text=text,
@@ -163,7 +195,6 @@ class PlatformApp:
         clean_urls = [str(url).strip() for url in list(urls or []) if str(url).strip()]
         uploaded_files = list(files or [])
         _validate_uploaded_files(uploaded_files)
-        sender_name = self.resolve_sender_name(sender_userid)
         routed_skill_id = _resolve_structured_skill_id(
             requested_skill_id=skill_id,
             urls=clean_urls,
@@ -177,12 +208,55 @@ class PlatformApp:
                 needs_clarification=False,
                 message="你没有使用该能力的权限。",
             )
+        prepared = self.prepare_structured_request(
+            channel=channel,
+            sender_userid=sender_userid,
+            skill_id=skill_id,
+            text=text,
+            material_text=material_text,
+            urls=clean_urls,
+            files=uploaded_files,
+        )
+        result: PlatformResult | None = None
+        try:
+            result = self.execute_prepared_job(prepared)
+            return result
+        finally:
+            if result is None or not result.needs_clarification:
+                for item in uploaded_files:
+                    _cleanup_uploaded_file(item)
+
+    def prepare_structured_request(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        skill_id: str,
+        text: str = "",
+        material_text: str = "",
+        urls: list[str] | None = None,
+        files: list[UploadedFile] | None = None,
+        sender_name: str | None = None,
+    ) -> PreparedPlatformJob:
+        clean_urls = [str(url).strip() for url in list(urls or []) if str(url).strip()]
+        uploaded_files = list(files or [])
+        _validate_uploaded_files(uploaded_files)
+        resolved_sender_name = sender_name or self.resolve_sender_name(sender_userid)
+        routed_skill_id = _resolve_structured_skill_id(
+            requested_skill_id=skill_id,
+            urls=clean_urls,
+            files=[item.filename for item in uploaded_files],
+            material_text=material_text,
+        )
+        if routed_skill_id and not self._access_policy.can_use_skill(sender_userid, routed_skill_id):
+            raise PermissionError("你没有使用该能力的权限。")
         preview_parts = [skill_id, text.strip(), material_text.strip(), *clean_urls, *[item.filename for item in uploaded_files]]
         job = self._job_store.create_job(
             channel=channel,
             sender_userid=sender_userid,
-            sender_name=sender_name,
+            sender_name=resolved_sender_name,
             message="\n".join(part for part in preview_parts if part),
+            processing_status="queued",
         )
         saved_files = _save_uploaded_files(job.input_dir, uploaded_files)
         route = RoutedRequest(
@@ -197,15 +271,45 @@ class PlatformApp:
                 "files": saved_files,
             },
         )
-        return self._run_routed_job(
+        return PreparedPlatformJob(
             channel=channel,
             sender_userid=sender_userid,
-            sender_name=sender_name,
+            sender_name=resolved_sender_name,
             route=route,
             job=job,
             user_text="\n".join(part for part in preview_parts if part),
             ack_message="",
         )
+
+    def execute_prepared_job(self, prepared: PreparedPlatformJob) -> PlatformResult:
+        marker_path = prepared.job.work_dir / "platform-execution.json"
+        marker = _read_json_file(marker_path)
+        if marker.get("status") == "completed":
+            return self._job_store.read_result(prepared.job)
+
+        update_task_status(
+            prepared.job.job_dir,
+            processing_status="processing",
+            source="platform_runtime",
+        )
+        result = self._run_routed_job(
+            channel=prepared.channel,
+            sender_userid=prepared.sender_userid,
+            sender_name=prepared.sender_name,
+            route=prepared.route,
+            job=prepared.job,
+            user_text=prepared.user_text,
+            ack_message=prepared.ack_message,
+        )
+        _write_json_atomic(
+            marker_path,
+            {
+                "schema_version": 1,
+                "status": "completed",
+                "job_id": prepared.job.job_id,
+            },
+        )
+        return result
 
     def _run_routed_job(
         self,
@@ -568,13 +672,12 @@ def _save_uploaded_files(input_dir: Path, files: list[UploadedFile]) -> list[str
         target_name = _unique_filename(_sanitize_filename(item.filename), used_names)
         target_path = input_dir / target_name
         target_path.write_bytes(item.read_bytes())
-        _cleanup_consumed_upload(item)
         used_names.add(target_name)
         saved_paths.append(str(target_path))
     return saved_paths
 
 
-def _cleanup_consumed_upload(item: UploadedFile) -> None:
+def _cleanup_uploaded_file(item: UploadedFile) -> None:
     if not item.delete_after_read or not item.stored_path:
         return
     source = Path(item.stored_path)
@@ -604,6 +707,26 @@ def _format_result_for_log(result: PlatformResult) -> str:
     if parts:
         return "\n\n".join(parts)
     return result.message
+
+
+def _read_json_file(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _validate_uploaded_files(files: list[UploadedFile]) -> None:

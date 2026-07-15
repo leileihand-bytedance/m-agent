@@ -165,6 +165,39 @@ def test_writer2_workflow_asks_user_when_one_url_read_fails():
     assert "粘贴读取失败链接的正文" in result.message
 
 
+def test_writer2_continues_with_readable_material_after_user_confirms():
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "llm_writer"),
+        tools={
+            "web_reader": lambda url: (
+                (_ for _ in ()).throw(TimeoutError("read timeout"))
+                if "timeout" in url
+                else {
+                    "title": "微众银行服务小微企业",
+                    "text": "微众银行通过微业贷提升小微企业融资服务效率。",
+                    "url": url,
+                    "source": "web",
+                }
+            ),
+            "llm_writer": lambda payload: {
+                "title": "微众银行提升小微企业融资服务效率",
+                "body": "深圳前海微众银行（以下简称“我行”）持续提升小微企业融资服务效率。",
+            },
+        },
+    )
+
+    result = run_writer2(
+        inputs={
+            "text": "继续使用已读取素材写",
+            "urls": ["https://example.com/readable", "https://example.com/timeout"],
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert result.title == "微众银行提升小微企业融资服务效率"
+
+
 def test_writer2_workflow_revises_previous_draft_without_requiring_multiple_sources():
     seen_payloads = []
     gateway = ToolGateway(

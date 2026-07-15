@@ -3,20 +3,35 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from app.platform.app import PlatformApp
 from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest, DeliveryResult
 from app.platform.config import PlatformConfig
-from app.platform.gateway.wecom import format_text_reply
+from app.platform.gateway.wecom import extract_message_id, format_text_reply
 from app.platform.intent import ConversationIntent
 from app.platform.models import PlatformResult, UploadedFile
 from app.platform.ops.events import OpsEventLogger
 from app.platform.ops.heartbeat import write_heartbeat
+from app.platform.task_execution import (
+    ClaimLimits,
+    PersistentTaskExecutor,
+    TaskLifecycleObserver,
+    TaskRepository,
+)
 
 from .config import load_config
 from .intake import IntakeDecision, WritingIntakeStore
 from .portal import PortalConfig, PortalService, PortalTokenStore, build_welcome_text, start_portal_server
+from .task_execution import (
+    QUEUEABLE_WRITING_SKILLS,
+    WRITING_COST_CLASS,
+    WRITING_TASK_TYPES,
+    WritingTaskService,
+    WritingTaskWorkspace,
+)
 
 
 SUPPORTED_WRITING_FILE_SUFFIXES = {".docx", ".pdf", ".pptx"}
@@ -70,6 +85,7 @@ async def handle_text_with_platform(
     ops_event_logger: OpsEventLogger | None = None,
     intake_store: WritingIntakeStore | None = None,
     attachment_delivery: AttachmentDelivery | None = None,
+    task_service: WritingTaskService | None = None,
 ) -> None:
     content = frame.get("body", {}).get("text", {}).get("content", "")
     sender = frame.get("body", {}).get("from", {}).get("userid", "unknown")
@@ -86,12 +102,40 @@ async def handle_text_with_platform(
         )
         return
 
+    if task_service is not None and task_service.has_active_task(sender_userid):
+        await _reply_stream_safely(
+            ws_client,
+            frame,
+            stream_id,
+            "你上一项直报或简报初稿还在处理中，完成后会自动发给你。请收到初稿后再继续改稿或提交新材料。",
+            True,
+        )
+        return
+
     if intake_store is not None:
-        decision = intake_store.handle_text(channel="wecom", sender_userid=sender_userid, text=content)
+        decision = intake_store.handle_text(
+            channel="wecom",
+            sender_userid=sender_userid,
+            text=content,
+            message_id=extract_message_id(frame),
+        )
         if decision.action in {"wait", "cancel"}:
             await _reply_stream_safely(ws_client, frame, stream_id, decision.reply, True)
             return
         if decision.action == "run":
+            if task_service is not None and decision.skill_id in QUEUEABLE_WRITING_SKILLS:
+                await _queue_structured_decision(
+                    decision=decision,
+                    frame=frame,
+                    ws_client=ws_client,
+                    task_service=task_service,
+                    intake_store=intake_store,
+                    req_id_factory=req_id_factory,
+                    sender_userid=sender_userid,
+                    sender_name=sender_name,
+                    ops_event_logger=ops_event_logger,
+                )
+                return
             await _run_structured_decision(
                 decision=decision,
                 frame=frame,
@@ -105,6 +149,65 @@ async def handle_text_with_platform(
                 attachment_delivery=attachment_delivery,
             )
             return
+
+
+    queued_route = (
+        _queueable_text_route(
+            platform_app,
+            sender_userid=sender_userid,
+            content=content.strip(),
+        )
+        if task_service is not None
+        else None
+    )
+    if task_service is not None and queued_route is not None:
+        message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
+        try:
+            submission = task_service.submit_text(
+                channel="wecom",
+                sender_userid=sender_userid,
+                sender_name=sender_name,
+                message_id=message_id,
+                skill_id=str(queued_route.skill_id),
+                text=content.strip(),
+                ack_message=_ack_message_for_text(
+                    platform_app=platform_app,
+                    sender_userid=sender_userid,
+                    content=content.strip(),
+                ),
+            )
+        except Exception as exc:
+            print(f"写作任务入队失败:{type(exc).__name__}: {exc}", flush=True)
+            if ops_event_logger:
+                _record_ops_event(
+                    ops_event_logger,
+                    severity="error",
+                    subject="写作任务入队失败",
+                    detail=f"{type(exc).__name__}: {exc}",
+                    sender_userid=sender_userid,
+                    sender_name=sender_name,
+                    skill_id=str(queued_route.skill_id or ""),
+                )
+            await _reply_stream_safely(
+                ws_client,
+                frame,
+                req_id_factory("writing-queue-error"),
+                "写作任务暂时无法受理，已经提醒管理员排查，请稍后重试。",
+                True,
+            )
+            return
+        await _reply_stream_safely(
+            ws_client,
+            frame,
+            req_id_factory("writing-queued"),
+            _queued_acceptance_message(
+                skill_id=str(queued_route.skill_id),
+                task_id=submission.task.task_id,
+                created=submission.created,
+            ),
+            True,
+        )
+        return
 
     ack_message = _ack_message_for_text(
         platform_app=platform_app,
@@ -195,12 +298,23 @@ async def handle_file_with_platform(
     req_id_factory,
     intake_store: WritingIntakeStore,
     ops_event_logger: OpsEventLogger | None = None,
+    task_service: WritingTaskService | None = None,
 ) -> None:
     sender = frame.get("body", {}).get("from", {}).get("userid", "unknown")
     sender_userid = str(sender or "unknown")
     sender_name = _resolve_sender_name(platform_app, sender_userid)
     stream_id = req_id_factory("writing-file")
     payload = extract_file_payload(frame)
+
+    if task_service is not None and task_service.has_active_task(sender_userid):
+        await _reply_stream_safely(
+            ws_client,
+            frame,
+            stream_id,
+            "你上一项直报或简报初稿还在处理中，请收到初稿后再发送新的文件。",
+            True,
+        )
+        return
 
     if payload is None:
         await _reply_stream_safely(
@@ -268,6 +382,7 @@ async def handle_file_with_platform(
         decision = intake_store.add_file(
             channel="wecom",
             sender_userid=sender_userid,
+            message_id=extract_message_id(frame),
             file=UploadedFile(
                 filename=filename,
                 content=content,
@@ -414,6 +529,66 @@ async def _run_structured_decision(
             )
 
 
+async def _queue_structured_decision(
+    *,
+    decision: IntakeDecision,
+    frame,
+    ws_client,
+    task_service: WritingTaskService,
+    intake_store: WritingIntakeStore,
+    req_id_factory,
+    sender_userid: str,
+    sender_name: str,
+    ops_event_logger: OpsEventLogger | None,
+) -> None:
+    message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
+    try:
+        submission = task_service.submit_structured(
+            channel="wecom",
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            message_id=message_id,
+            skill_id=decision.skill_id or "",
+            text=decision.text,
+            material_text=decision.material_text,
+            urls=decision.urls,
+            files=decision.files,
+        )
+    except Exception as exc:
+        print(f"写作组装任务入队失败:{type(exc).__name__}: {exc}", flush=True)
+        if ops_event_logger:
+            _record_ops_event(
+                ops_event_logger,
+                severity="error",
+                subject="写作任务入队失败",
+                detail=f"{type(exc).__name__}: {exc}",
+                sender_userid=sender_userid,
+                sender_name=sender_name,
+                skill_id=decision.skill_id or "",
+            )
+        await _reply_stream_safely(
+            ws_client,
+            frame,
+            req_id_factory("writing-queue-error"),
+            "写作任务暂时无法受理，材料仍为你保留。已经提醒管理员排查，请稍后回复“开始写”重试。",
+            True,
+        )
+        return
+    if not submission.created:
+        intake_store.clear(channel="wecom", sender_userid=sender_userid)
+    await _reply_stream_safely(
+        ws_client,
+        frame,
+        req_id_factory("writing-queued"),
+        _queued_acceptance_message(
+            skill_id=decision.skill_id or "",
+            task_id=submission.task.task_id,
+            created=submission.created,
+        ),
+        True,
+    )
+
+
 async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, finish: bool) -> bool:
     try:
         await asyncio.wait_for(
@@ -513,6 +688,62 @@ async def _heartbeat_loop(root_dir, service: str) -> None:
         await asyncio.sleep(30)
 
 
+async def _send_active_writing_text(
+    ws_client,
+    recipient: str,
+    text: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> bool:
+    sender = getattr(ws_client, "send_message", None)
+    if not callable(sender):
+        raise RuntimeError("企业微信 SDK 不支持主动文本消息")
+    await asyncio.wait_for(
+        sender(recipient, {"msgtype": "text", "text": {"content": text}}),
+        timeout=timeout_seconds,
+    )
+    return True
+
+
+async def _run_writing_task_worker_supervised(
+    *,
+    task_executor: PersistentTaskExecutor,
+    stop_event: asyncio.Event,
+    poll_interval: float,
+    worker_count: int,
+    recovery_interval: float,
+    ops_event_logger: OpsEventLogger | None,
+    restart_delay_seconds: float = 5.0,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            await task_executor.run_forever(
+                stop_event=stop_event,
+                poll_interval=poll_interval,
+                worker_count=worker_count,
+                recovery_interval=recovery_interval,
+            )
+            if stop_event.is_set():
+                return
+            raise RuntimeError("写作后台任务 worker 意外结束")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"写作后台任务 worker 异常退出，将自动重启:{type(exc).__name__}: {exc}", flush=True)
+            if ops_event_logger:
+                _record_ops_event(
+                    ops_event_logger,
+                    severity="error",
+                    subject="写作后台任务 worker 异常退出",
+                    detail="持久任务 worker 已退出，系统将自动重启。",
+                    skill_id="writing_task_worker",
+                )
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=restart_delay_seconds)
+            except TimeoutError:
+                pass
+
+
 def _is_link_read_failure_result(result: PlatformResult) -> bool:
     if not result.needs_clarification:
         return False
@@ -529,6 +760,30 @@ def _preview_skill_id(platform_app, *, sender_userid: str, content: str) -> str:
     except Exception:
         return ""
     return str(route.skill_id or "")
+
+
+def _queueable_text_route(platform_app, *, sender_userid: str, content: str):
+    previewer = getattr(platform_app, "preview_text_route", None)
+    if not callable(previewer):
+        return None
+    try:
+        route = previewer(channel="wecom", sender_userid=sender_userid, text=content)
+    except Exception:
+        return None
+    if (
+        route.needs_clarification
+        or route.skill_id not in QUEUEABLE_WRITING_SKILLS
+        or route.inputs.get("revision")
+    ):
+        return None
+    return route
+
+
+def _queued_acceptance_message(*, skill_id: str, task_id: str, created: bool) -> str:
+    label = _ack_label_for_skill(skill_id)
+    if created:
+        return f"已进入{label}队列，任务编号：{task_id}。完成后会自动发送初稿。"
+    return f"这项{label}任务已经在处理中，无需重复提交。任务编号：{task_id}。"
 
 
 def _ack_message_for_text(*, platform_app, sender_userid: str, content: str) -> str:
@@ -663,6 +918,118 @@ async def run_bot(config) -> None:
     )
     loop = asyncio.get_running_loop()
 
+    async def process_queued_writing(workspace: WritingTaskWorkspace) -> PlatformResult:
+        return await asyncio.to_thread(
+            platform_app.execute_prepared_job,
+            workspace.prepared,
+        )
+
+    async def finalize_queued_writing(
+        workspace: WritingTaskWorkspace,
+        result: PlatformResult,
+    ) -> None:
+        if result.needs_clarification:
+            route_inputs = workspace.prepared.route.inputs
+            intake_store.restore_clarification(
+                channel=workspace.prepared.channel,
+                sender_userid=workspace.prepared.sender_userid,
+                skill_id=result.skill_id or str(workspace.prepared.route.skill_id or ""),
+                text=str(route_inputs.get("text", "") or ""),
+                material_text=str(route_inputs.get("material_text", "") or ""),
+                urls=tuple(
+                    str(item)
+                    for item in list(route_inputs.get("urls") or [])
+                    if str(item).strip()
+                ),
+                files=tuple(
+                    UploadedFile(
+                        filename=Path(str(item)).name,
+                        stored_path=str(item),
+                    )
+                    for item in list(route_inputs.get("files") or [])
+                    if str(item).strip()
+                ),
+                message=result.message,
+            )
+        else:
+            intake_store.clear(
+                channel=workspace.prepared.channel,
+                sender_userid=workspace.prepared.sender_userid,
+            )
+        if ops_event_logger and _is_link_read_failure_result(result):
+            _record_ops_event(
+                ops_event_logger,
+                severity="warning",
+                subject="链接读取失败待用户确认",
+                detail=result.message,
+                sender_userid=workspace.prepared.sender_userid,
+                sender_name=workspace.prepared.sender_name,
+                skill_id=result.skill_id or "",
+            )
+
+    async def finalize_failed_writing(workspace: WritingTaskWorkspace) -> None:
+        intake_store.clear(
+            channel=workspace.prepared.channel,
+            sender_userid=workspace.prepared.sender_userid,
+        )
+
+    async def notify_queued_writing_failure(
+        recipient: str,
+        error_code: str,
+        task_id: str,
+    ) -> None:
+        messages = {
+            "delivery_status_uncertain": (
+                "初稿已经生成，但发送状态暂时无法确认。为避免重复发送，我已暂停自动重发并提醒管理员核对。"
+            ),
+            "delivery_failed": "初稿已经生成，但发送失败，已经提醒管理员处理。",
+            "writing_processing_failed": "写作处理失败，已经提醒管理员排查，请稍后重试。",
+            "writing_finalization_failed": "初稿处理状态异常，已经提醒管理员排查。",
+            "invalid_task_payload": "写作任务状态异常，已经提醒管理员排查。",
+        }
+        message = messages.get(error_code)
+        if message:
+            await _send_active_writing_text(
+                ws_client,
+                recipient,
+                f"{message}任务编号：{task_id}",
+            )
+
+    task_repository = TaskRepository(
+        config.task_queue_db_path,
+        on_transition=TaskLifecycleObserver(
+            task_root=config.jobs_dir,
+            ops_event_logger=ops_event_logger,
+        ),
+    )
+    writing_task_service = WritingTaskService(
+        repository=task_repository,
+        workspace_root=config.jobs_dir,
+        text_preparer=platform_app.prepare_text_message,
+        structured_preparer=platform_app.prepare_structured_request,
+        processor=process_queued_writing,
+        text_sender=lambda recipient, text: _send_active_writing_text(
+            ws_client,
+            recipient,
+            text,
+        ),
+        result_finalizer=finalize_queued_writing,
+        failure_finalizer=finalize_failed_writing,
+        failure_notifier=notify_queued_writing_failure,
+    )
+    task_executor = PersistentTaskExecutor(
+        repository=task_repository,
+        limits=ClaimLimits(
+            global_limit=config.task_worker_count,
+            per_user_limit=1,
+            cost_class_limits={WRITING_COST_CLASS: config.task_worker_count},
+        ),
+        worker_id=f"writing-bot-{uuid4().hex[:12]}",
+        lease_duration=timedelta(seconds=config.task_lease_seconds),
+    )
+    for task_type in WRITING_TASK_TYPES:
+        task_executor.register_handler(task_type, writing_task_service.handle)
+
     def send_portal_message(chatid: str, body: dict[str, object]) -> None:
         future = asyncio.run_coroutine_threadsafe(ws_client.send_message(chatid, body), loop)
         future.result(timeout=10)
@@ -727,6 +1094,7 @@ async def run_bot(config) -> None:
             ops_event_logger=ops_event_logger,
             intake_store=intake_store,
             attachment_delivery=attachment_delivery,
+            task_service=writing_task_service,
         )
 
     async def on_file(frame):
@@ -743,6 +1111,7 @@ async def run_bot(config) -> None:
             req_id_factory=generate_req_id,
             intake_store=intake_store,
             ops_event_logger=ops_event_logger,
+            task_service=writing_task_service,
         )
 
     async def on_enter(frame):
@@ -761,11 +1130,25 @@ async def run_bot(config) -> None:
     ws_client.on("event.enter_chat", on_enter)
 
     await ws_client.connect()
+    task_stop_event = asyncio.Event()
+    task_worker = asyncio.create_task(
+        _run_writing_task_worker_supervised(
+            task_executor=task_executor,
+            stop_event=task_stop_event,
+            poll_interval=config.task_poll_seconds,
+            worker_count=config.task_worker_count,
+            recovery_interval=config.task_recovery_seconds,
+            ops_event_logger=ops_event_logger,
+        ),
+        name="writing-persistent-task-worker",
+    )
     try:
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         await ws_client.disconnect()
     finally:
+        task_stop_event.set()
+        await asyncio.gather(task_worker, return_exceptions=True)
         if heartbeat_task:
             heartbeat_task.cancel()
         portal_server.shutdown()
@@ -797,6 +1180,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"用户名称表: {platform_config.user_registry_path or '未配置'}")
         print(f"素材入口: {config.portal_base_url}")
         print(f"多消息任务暂存: {config.intake_ttl_seconds} 秒")
+        print(f"写作持久队列: {config.task_queue_db_path}")
+        print(f"写作 worker: {config.task_worker_count} 个")
         print(f"权限配置: {config.access_policy_path or '未配置，本地开发默认允许已启用 skill'}")
         return
 

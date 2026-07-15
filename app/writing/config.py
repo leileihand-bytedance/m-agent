@@ -43,6 +43,10 @@ class WritingBotConfig:
     document_max_bytes: int = 50 * 1024 * 1024
     document_ocr_enabled: bool = True
     task_queue_db_path: Path | None = None
+    task_worker_count: int = 1
+    task_poll_seconds: float = 0.25
+    task_recovery_seconds: float = 5.0
+    task_lease_seconds: int = 120
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -164,8 +168,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     )
     task_queue_db_path = configured_path(
         values,
-        "M_AGENT_TASK_QUEUE_DB",
-        data_paths.task_queue_db,
+        "M_AGENT_WRITING_TASK_QUEUE_DB",
+        data_paths.task_queue_db.with_name("writing.sqlite3"),
         project_root=ROOT,
     )
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
@@ -216,4 +220,20 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
             default=True,
         ),
         task_queue_db_path=task_queue_db_path,
+        task_worker_count=max(
+            1,
+            int(values.get("M_AGENT_WRITING_TASK_WORKERS", "1") or "1"),
+        ),
+        task_poll_seconds=max(
+            0.01,
+            float(values.get("M_AGENT_WRITING_TASK_POLL_SECONDS", "0.25") or "0.25"),
+        ),
+        task_recovery_seconds=max(
+            0.1,
+            float(values.get("M_AGENT_WRITING_TASK_RECOVERY_SECONDS", "5") or "5"),
+        ),
+        task_lease_seconds=max(
+            30,
+            int(values.get("M_AGENT_WRITING_TASK_LEASE_SECONDS", "120") or "120"),
+        ),
     )

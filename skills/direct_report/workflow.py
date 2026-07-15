@@ -15,7 +15,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> DirectReportResult:
         return _revise_previous_draft(inputs=inputs, tools=tools)
 
     materials, read_errors = _source_materials(inputs=inputs, tools=tools)
-    if read_errors:
+    if read_errors and not (materials and _should_continue_with_readable_materials(inputs)):
         return DirectReportResult(
             title="",
             body="",
@@ -137,6 +137,12 @@ def _critic_mode(inputs: dict[str, object]) -> str:
     if mode in {"off", "advisory", "rewrite"}:
         return mode
     return "advisory"
+
+
+def _should_continue_with_readable_materials(inputs: dict[str, object]) -> bool:
+    instruction = str(inputs.get("text", "") or "").strip()
+    compact = "".join(instruction.split())
+    return compact.startswith("1") or "继续使用已读取素材" in compact
 
 
 def _format_violations(violations: list[object]) -> str:

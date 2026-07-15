@@ -3,6 +3,7 @@ import asyncio
 from datetime import date
 import json
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -158,13 +159,40 @@ class LoopCheckingPlatformApp:
         )
 
 
-def _frame(content: str):
-    return {
+def _frame(content: str, *, msgid: str = ""):
+    frame = {
         "body": {
             "text": {"content": content},
             "from": {"userid": "user-001"},
         }
     }
+    if msgid:
+        frame["msgid"] = msgid
+    return frame
+
+
+class FakeWritingTaskService:
+    def __init__(self, *, created: bool = True):
+        self.created = created
+        self.text_submissions = []
+        self.structured_submissions = []
+
+    def has_active_task(self, _sender_userid: str) -> bool:
+        return False
+
+    def submit_text(self, **kwargs):
+        self.text_submissions.append(kwargs)
+        return SimpleNamespace(
+            created=self.created,
+            task=SimpleNamespace(task_id="task-writing-001", status="queued"),
+        )
+
+    def submit_structured(self, **kwargs):
+        self.structured_submissions.append(kwargs)
+        return SimpleNamespace(
+            created=self.created,
+            task=SimpleNamespace(task_id="task-writing-002", status="queued"),
+        )
 
 
 def _file_frame(filename: str = "material.docx", *, size: int | None = None):
@@ -292,6 +320,11 @@ def test_writing_load_config_uses_single_external_data_root(tmp_path):
     assert config.ops_heartbeat_dir == data_root / "runtime" / "ops" / "heartbeats"
     assert config.user_registry_path == data_root / "runtime" / "users" / "review_users.yaml"
     assert config.intake_dir == data_root / "runtime" / "intake"
+    assert config.task_queue_db_path == data_root / "runtime" / "task-execution" / "writing.sqlite3"
+    assert config.task_worker_count == 1
+    assert config.task_poll_seconds == 0.25
+    assert config.task_recovery_seconds == 5.0
+    assert config.task_lease_seconds == 120
 
 
 def test_writing_load_config_defaults_to_local_only_portal(tmp_path, monkeypatch):
@@ -398,7 +431,7 @@ async def test_handle_text_with_platform_sends_ack_then_final_reply():
     platform_app = FakePlatformApp()
 
     await handle_text_with_platform(
-        frame=_frame("写直报：https://example.com"),
+        frame=_frame("写直报：https://example.com", msgid="message-001"),
         ws_client=ws_client,
         platform_app=platform_app,
         req_id_factory=lambda prefix: f"{prefix}-001",
@@ -442,6 +475,56 @@ async def test_handle_text_with_platform_uses_multi_brief_ack_for_writer2():
 
     assert platform_app.calls == [("wecom", "user-001", "写简报：https://example.com/a https://example.com/b")]
     assert ws_client.stream_replies[0][2] == "收到，正在按多素材简报写作流程处理，请稍后……"
+
+
+@pytest.mark.anyio
+async def test_new_direct_report_is_accepted_into_persistent_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="direct_report")
+    task_service = FakeWritingTaskService()
+
+    await handle_text_with_platform(
+        frame=_frame("写直报：https://example.com", msgid="message-001"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        task_service=task_service,
+    )
+
+    assert platform_app.calls == []
+    assert task_service.text_submissions[0]["message_id"] == "message-001"
+    assert task_service.text_submissions[0]["skill_id"] == "direct_report"
+    assert ws_client.stream_replies == [
+        (
+            _frame("写直报：https://example.com", msgid="message-001"),
+            "writing-queued-001",
+            "已进入直报写作队列，任务编号：task-writing-001。完成后会自动发送初稿。",
+            True,
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_revision_stays_on_existing_realtime_path_when_queue_is_enabled():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(
+        skill_id="direct_report",
+        intent=ConversationIntent.REVISE_PREVIOUS,
+    )
+    task_service = FakeWritingTaskService()
+
+    await handle_text_with_platform(
+        frame=_frame("标题再稳一点"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        task_service=task_service,
+    )
+
+    assert task_service.text_submissions == []
+    assert platform_app.calls == [("wecom", "user-001", "标题再稳一点")]
+    assert ws_client.stream_replies[0][2] == "收到，我沿着上一稿继续改。"
+    assert ws_client.stream_replies[-1][2] == "标题\n\n正文"
 
 
 @pytest.mark.anyio
@@ -492,6 +575,62 @@ def test_writing_intake_recognizes_natural_research_summary_wording():
 
     assert decision.action == "wait"
     assert "调研提纲" in decision.reply
+
+
+def test_writing_intake_ignores_duplicate_file_message_ids():
+    intake_store = WritingIntakeStore()
+    uploaded = UploadedFile(filename="素材.docx", content=b"material")
+
+    first = intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="file-message-001",
+        file=uploaded,
+    )
+    duplicate = intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="file-message-001",
+        file=uploaded,
+    )
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="intent-message-001",
+        text="写简报",
+    )
+
+    assert first.action == "wait"
+    assert duplicate.action == "wait"
+    assert "已经收到" in duplicate.reply
+    assert decision.action == "run"
+    assert decision.skill_id == "writer1"
+
+
+def test_writing_intake_restores_single_message_task_after_background_clarification(tmp_path):
+    intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+
+    intake_store.restore_clarification(
+        channel="wecom",
+        sender_userid="user-001",
+        skill_id="writer1",
+        text="写简报：https://example.com/a",
+        material_text="",
+        urls=("https://example.com/a",),
+        files=(),
+        message="其中一个链接读取失败。",
+    )
+    resumed = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="followup-001",
+        text="继续使用已读取素材写",
+    )
+
+    assert resumed.action == "run"
+    assert resumed.skill_id == "writer1"
+    assert resumed.urls == ("https://example.com/a",)
+    assert "继续使用已读取素材写" in resumed.text
 
 
 @pytest.mark.anyio
@@ -601,6 +740,75 @@ async def test_handle_text_with_platform_collects_material_before_intent():
     assert "普惠金融" in structured_call["material_text"]
     assert ws_client.stream_replies[-2][2] == "收到，正在按简报写作流程处理，请稍后……"
     assert ws_client.stream_replies[-1][2] == "标题\n\n正文"
+
+
+@pytest.mark.anyio
+async def test_collected_brief_material_is_snapshotted_into_persistent_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="writer1")
+    intake_store = WritingIntakeStore()
+    task_service = FakeWritingTaskService()
+
+    await handle_text_with_platform(
+        frame={**_frame(LONG_MATERIAL), "msgid": "material-message"},
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-material",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+    await handle_text_with_platform(
+        frame={**_frame("写简报"), "msgid": "intent-message"},
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-intent",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+
+    assert platform_app.structured_calls == []
+    assert len(task_service.structured_submissions) == 1
+    submission = task_service.structured_submissions[0]
+    assert submission["message_id"] == "intent-message"
+    assert submission["skill_id"] == "writer1"
+    assert "普惠金融" in submission["material_text"]
+    assert ws_client.stream_replies[-1][2] == (
+        "已进入简报写作队列，任务编号：task-writing-002。完成后会自动发送初稿。"
+    )
+
+
+@pytest.mark.anyio
+async def test_duplicate_completed_queue_submission_does_not_leave_stale_intake():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="writer1")
+    intake_store = WritingIntakeStore()
+    task_service = FakeWritingTaskService(created=False)
+
+    await handle_text_with_platform(
+        frame={**_frame(LONG_MATERIAL), "msgid": "material-message"},
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-material",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+    await handle_text_with_platform(
+        frame={**_frame("写简报"), "msgid": "duplicate-intent-message"},
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-intent",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+    later = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="later-start-message",
+        text="开始写",
+    )
+
+    assert len(task_service.structured_submissions) == 1
+    assert later.action == "bypass"
 
 
 @pytest.mark.anyio

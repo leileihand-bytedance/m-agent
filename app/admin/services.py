@@ -701,7 +701,7 @@ def summarize_writing_tasks(root: Path | None) -> TaskStatistics:
             needs_input += 1
         elif status == "failed":
             failed += 1
-        elif status in {"processing", "incomplete"}:
+        elif status in {"queued", "running", "processing", "incomplete"}:
             incomplete += 1
         else:
             unknown += 1

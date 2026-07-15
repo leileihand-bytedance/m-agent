@@ -107,11 +107,17 @@ uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform
 uv run --locked pytest tests/test_review_task_execution.py tests/test_review_intake.py tests/test_review_bot.py -v
 ```
 
+直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
+
+```bash
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+```
+
 重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、任务编号兜底和运维事件脱敏；审核专项还要覆盖处理与发送检查点、已完成任务不重复审核、队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、单文件后追加格式审核，以及损坏检查点的安全失败。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
 
 ### 持久任务生产接入验收
 
-持久化执行器按任务类型分批接入，不允许一次性把所有写作和审核流程切流。第一批只接审核 Bot 中的单个 Word 通用审核，审核入口仍保持独立；稳定后接直报，再依次接入 `writer1`、`writer2` 和 `research_synthesis`。内参、半月报、公文格式、多文件联合审核和文字审核仍走旧路径。
+持久化执行器按任务类型分批接入。当前已接入单个 Word 通用审核、直报、`writer1`、`writer2`；审核和写作使用独立 SQLite。`research_synthesis`、内参、半月报、公文格式、多文件联合审核和文字审核仍走旧路径，不能因为共用入口就视为已切流。
 
 每个任务类型接入时都必须完成：
 
@@ -122,7 +128,7 @@ uv run --locked pytest tests/test_review_task_execution.py tests/test_review_int
 5. 分别验证用户取消、模型或网络失败、正文已生成但附件发送失败，以及运维 Bot 告警。
 6. 核对外部发送幂等：已经成功发送的结果不会因重试或重启再次发送，失败交付也不会触发重新生成两份稿件。
 
-只有以上验收完成，才能在文档和控制台中把对应任务类型标为“已接入持久执行器”。
+代码和离线测试完成后可标为“已接入、验收中”；只有以上真实验收完成，才能在文档和控制台中标为“稳定运行”。
 
 ### 2. Skill 测试
 

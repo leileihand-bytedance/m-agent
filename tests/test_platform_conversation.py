@@ -79,3 +79,31 @@ def test_conversation_store_ignores_clarification_results(tmp_path):
     assert conversation is not None
     assert conversation.current_draft.job_id == "job-001"
     assert conversation.current_draft.title == "简报标题"
+
+
+def test_conversation_store_does_not_duplicate_same_job_after_worker_restart(tmp_path):
+    store = ConversationStore(tmp_path)
+    result = PlatformResult(
+        skill_id="writer1",
+        output={"title": "简报标题", "body": "简报正文", "sources": []},
+        needs_clarification=False,
+        message="已生成。",
+    )
+
+    store.record_result(
+        channel="wecom",
+        sender_userid="user-001",
+        job_id="job-001",
+        result=result,
+    )
+    store.record_result(
+        channel="wecom",
+        sender_userid="user-001",
+        job_id="job-001",
+        result=result,
+    )
+
+    conversation = store.get_active_conversation(channel="wecom", sender_userid="user-001")
+
+    assert conversation is not None
+    assert [item.job_id for item in conversation.draft_versions] == ["job-001"]

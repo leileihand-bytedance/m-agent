@@ -385,6 +385,25 @@ class TaskRepository:
             row = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()
         return int(row[0])
 
+    def has_active_task(self, *, user_id: str, task_types: set[str]) -> bool:
+        if not user_id.strip() or not task_types or any(not item.strip() for item in task_types):
+            return False
+        ordered_types = sorted(task_types)
+        placeholders = ", ".join("?" for _ in ordered_types)
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                f"""
+                SELECT 1
+                FROM tasks
+                WHERE user_id = ?
+                  AND task_type IN ({placeholders})
+                  AND status IN ('queued', 'running', 'needs_input')
+                LIMIT 1
+                """,
+                (user_id, *ordered_types),
+            ).fetchone()
+        return row is not None
+
     def acquire_execution_guard(
         self,
         task_id: str,

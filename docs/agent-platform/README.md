@@ -319,7 +319,7 @@ skill 和工具只能访问当前任务目录。
 
 当前已由 `app/platform/storage.py` 实现，实际目录名使用时间戳和随机短 ID，避免并发冲突。
 
-`status.json` 是不含材料正文的任务状态索引。写作任务创建时为 `processing`，随后按实际结果更新为 `completed`、`needs_input` 或 `failed`；审核任务生成 `output/report.md` 后记为 `completed`。处理状态与企业微信交付状态分别记录，未验证是否送达时保持 `delivery_status: unknown`。本机控制台只读取该索引和必要的文件存在性，不读取结果正文来做总览统计。历史数据使用 `uv run --locked python scripts/backfill_task_status.py` 预演，确认后加 `--apply` 补齐。
+`status.json` 是不含材料正文的任务状态索引。同步写作任务创建时为 `processing`；进入持久队列的直报/简报先记为 `queued`，worker 执行时转为 `running/processing`，随后按实际结果更新为 `completed`、`needs_input` 或 `failed`。处理状态与企业微信交付状态分别记录，队列主动发送成功后才记为 `delivery_status: delivered`；发送状态无法确认时停止自动重发并告警。本机控制台只读取该索引和必要的文件存在性，不读取结果正文来做总览统计。历史数据使用 `uv run --locked python scripts/backfill_task_status.py` 预演，确认后加 `--apply` 补齐。
 
 ## 当前成熟底座形态
 
@@ -346,12 +346,13 @@ skill 和工具只能访问当前任务目录。
 - 公共任务组装协议：统一材料引用、`wait/submit/cancel/bypass` 动作和结构化提交，业务分流仍由写作、审核适配层负责。
 - 公共附件交付：写作和审核统一使用任务目录校验、串行上传、动态超时、完整重试、状态记录和运维告警；超限或失败时返回任务编号供人工取回。
 - 持久化后台任务内核：SQLite 队列、消息幂等、分级并发、租约与 fencing token、心跳、周期恢复、取消、待补充恢复和状态版本已完成。
+- 持久任务业务接入：单个 Word 通用审核使用审核专用队列；直报、`writer1`、`writer2` 使用独立写作队列。写作任务入队前已创建正式 job 并冻结文件，处理、会话收尾、主动发送分阶段检查点恢复。
 - 文档增强：扫描 PDF 按需 OCR，PDF/PPTX 显式页面渲染和资源限制已完成。
 
 仍未完成：
 
-- 按“直报 -> `writer1` -> `writer2` -> `research_synthesis`”的顺序把写作重任务切换到持久化执行器，并逐项完成真实重启、重复消息、取消、多用户排队和附件发送幂等验收；执行器存在不等于当前所有 Bot 已自动续跑。
-- 审核 Bot 是否切换执行器需在写作试点稳定后单独评估，当前继续保持独立入口和现有执行方式。
+- 对已切换的单个 Word 通用审核、直报、`writer1`、`writer2` 完成真实重启、重复消息、取消、多用户排队和发送幂等验收。
+- `research_synthesis` 尚未切换；它包含 Word 附件交付，需单独设计和验证恢复检查点。内参、半月报、公文格式、多文件联合审核和文字审核也继续使用原路径。
 - 覆盖直报、简报、审核等能力的统一企业微信入口。
 - 审核能力包装为 `review` skill。
 - 复杂多轮任务上下文和人工确认。

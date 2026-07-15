@@ -59,6 +59,50 @@ def test_platform_app_handles_allowed_text_request_and_records_job(tmp_path):
     assert recorded["skill_id"] == "direct_report"
 
 
+def test_platform_app_can_prepare_then_idempotently_execute_same_writing_job(tmp_path):
+    llm_calls = []
+    app = PlatformApp(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={
+            "web_reader": lambda url: {
+                "title": "网页标题",
+                "text": "网页正文，包含可供直报写作的核心事实。",
+                "url": url,
+            },
+            "llm_writer": lambda payload: llm_calls.append(payload)
+            or {
+                "title": "微众银行直报标题",
+                "body": _compliant_body(),
+            },
+        },
+        job_store=JobStore(tmp_path / "jobs"),
+        conversation_store=ConversationStore(tmp_path / "conversations"),
+        access_policy=AccessPolicy.allow_all_for_skills(["direct_report"]),
+    )
+
+    prepared = app.prepare_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="帮我根据这个链接写直报：https://example.com/news",
+        ack_message="已进入队列。",
+    )
+
+    assert prepared.route.skill_id == "direct_report"
+    assert llm_calls == []
+    assert not (prepared.job.output_dir / "result.json").exists()
+    queued_status = json.loads(prepared.job.status_path.read_text(encoding="utf-8"))
+    assert queued_status["processing_status"] == "queued"
+
+    first = app.execute_prepared_job(prepared)
+    calls_after_first_execution = len(llm_calls)
+    second = app.execute_prepared_job(prepared)
+
+    assert first == second
+    assert calls_after_first_execution > 0
+    assert len(llm_calls) == calls_after_first_execution
+    assert (prepared.job.work_dir / "platform-execution.json").is_file()
+
+
 def test_platform_app_routes_short_followup_to_previous_draft_revision(tmp_path):
     seen_payloads = []
     web_calls = []

@@ -52,6 +52,38 @@ def test_direct_report_workflow_reads_url_and_returns_draft():
     assert result.needs_clarification is False
 
 
+def test_direct_report_continues_with_readable_material_after_user_confirms():
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "llm_writer"),
+        tools={
+            "web_reader": lambda url: (
+                (_ for _ in ()).throw(TimeoutError("read timeout"))
+                if "timeout" in url
+                else {
+                    "title": "微众银行服务小微企业",
+                    "text": "微众银行通过数字化方式提升小微企业金融服务可得性。",
+                    "url": url,
+                }
+            ),
+            "llm_writer": lambda payload: {
+                "title": "微众银行提升小微企业金融服务可得性",
+                "body": "微众银行围绕小微企业融资需求，持续完善数字化服务能力。",
+            },
+        },
+    )
+
+    result = run(
+        inputs={
+            "text": "继续使用已读取素材写",
+            "urls": ["https://example.com/readable", "https://example.com/timeout"],
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert result.sources == ["https://example.com/readable"]
+
+
 def test_direct_report_workflow_revises_previous_draft_without_refetching_sources():
     seen_payloads = []
     gateway = ToolGateway(

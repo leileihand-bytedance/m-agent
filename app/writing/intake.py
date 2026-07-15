@@ -47,6 +47,7 @@ class WritingIntakeSession:
     instructions: list[str] = field(default_factory=list)
     awaiting_clarification: bool = False
     clarification_message: str = ""
+    processed_message_ids: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -113,10 +114,19 @@ class WritingIntakeStore:
         )
         self._sessions: dict[tuple[str, str], WritingIntakeSession] = {}
 
-    def handle_text(self, *, channel: str, sender_userid: str, text: str) -> IntakeDecision:
+    def handle_text(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        text: str,
+        message_id: str = "",
+    ) -> IntakeDecision:
         clean_text = text.strip()
         key = (channel, sender_userid)
         session = self._get_active_session(key)
+        if session is not None and _is_duplicate_message(session, message_id):
+            return IntakeDecision(action="wait", reply="这条消息已经收到，无需重复发送。")
         intent = detect_writing_intent(clean_text)
         urls = extract_urls(clean_text)
         has_material = bool(urls) or looks_like_material_text(clean_text)
@@ -150,6 +160,8 @@ class WritingIntakeStore:
         if session is None:
             session = WritingIntakeSession()
             self._sessions[key] = session
+        _remember_message_id(session, message_id)
+        self._persist_session(key, session)
 
         if is_start_signal(clean_text):
             return self._run_or_ask_more(key, session)
@@ -212,12 +224,17 @@ class WritingIntakeStore:
         channel: str,
         sender_userid: str,
         file: UploadedFile,
+        message_id: str = "",
     ) -> IntakeDecision:
         key = (channel, sender_userid)
         session = self._get_active_session(key)
         if session is None:
             session = WritingIntakeSession()
             self._sessions[key] = session
+        elif _is_duplicate_message(session, message_id):
+            return IntakeDecision(action="wait", reply="这个文件已经收到，无需重复发送。")
+        _remember_message_id(session, message_id)
+        self._persist_session(key, session)
         if session.intent == REWRITE_INTENT:
             return IntakeDecision(action="wait", reply=_reply_for_waiting_material(REWRITE_INTENT))
         limit_message = self.file_limit_message(
@@ -290,6 +307,41 @@ class WritingIntakeStore:
         session.updated_at = time.time()
         self._persist_session(key, session)
 
+    def restore_clarification(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        skill_id: str,
+        text: str,
+        material_text: str,
+        urls: tuple[str, ...],
+        files: tuple[UploadedFile, ...],
+        message: str,
+    ) -> None:
+        key = (channel, sender_userid)
+        session = self._get_active_session(key)
+        if session is None:
+            intent = DIRECT_REPORT_INTENT if skill_id == "direct_report" else BRIEF_INTENT
+            session = WritingIntakeSession(
+                intent=intent,
+                instructions=[text.strip()] if text.strip() else [],
+            )
+            for url in urls:
+                if str(url).strip():
+                    session.materials.append(IntakeMaterial(kind="url", url=str(url).strip()))
+            if material_text.strip():
+                session.materials.append(IntakeMaterial(kind="text", text=material_text.strip()))
+            for item in files:
+                session.materials.append(
+                    IntakeMaterial(kind="file", file=self._persist_uploaded_file(key, item))
+                )
+            self._sessions[key] = session
+        session.awaiting_clarification = True
+        session.clarification_message = message.strip()
+        session.updated_at = time.time()
+        self._persist_session(key, session)
+
     def _get_active_session(self, key: tuple[str, str]) -> WritingIntakeSession | None:
         session = self._sessions.get(key)
         if session is None:
@@ -348,6 +400,7 @@ class WritingIntakeStore:
             "instructions": list(session.instructions),
             "awaiting_clarification": session.awaiting_clarification,
             "clarification_message": session.clarification_message,
+            "processed_message_ids": list(session.processed_message_ids),
             "created_at": session.created_at,
             "updated_at": session.updated_at,
             "materials": [_material_to_dict(item) for item in session.materials],
@@ -366,6 +419,11 @@ class WritingIntakeStore:
                 instructions=[str(item) for item in payload.get("instructions", [])],
                 awaiting_clarification=bool(payload.get("awaiting_clarification", False)),
                 clarification_message=str(payload.get("clarification_message", "")),
+                processed_message_ids=[
+                    str(item)
+                    for item in list(payload.get("processed_message_ids", []))
+                    if str(item).strip()
+                ][-100:],
                 created_at=float(payload.get("created_at", time.time())),
                 updated_at=float(payload.get("updated_at", time.time())),
             )
@@ -411,6 +469,20 @@ def detect_writing_intent(text: str) -> str | None:
 def is_writing_cancel_signal(text: str) -> bool:
     normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text.strip())
     return normalized in _CANCEL_SIGNALS
+
+
+def _is_duplicate_message(session: WritingIntakeSession, message_id: str) -> bool:
+    normalized = str(message_id or "").strip()
+    return bool(normalized and normalized in session.processed_message_ids)
+
+
+def _remember_message_id(session: WritingIntakeSession, message_id: str) -> None:
+    normalized = str(message_id or "").strip()
+    if not normalized or normalized in session.processed_message_ids:
+        return
+    session.processed_message_ids.append(normalized)
+    if len(session.processed_message_ids) > 100:
+        del session.processed_message_ids[:-100]
 
 
 def extract_urls(text: str) -> tuple[str, ...]:

@@ -36,7 +36,7 @@ M-Agent 本机管理后台。
 
 ## 任务统计口径
 
-- 写作任务总数按 `meta.json` 统计，成稿、待补充、失败、处理中或中断按不含正文的 `status.json` 分类。
+- 写作任务总数按 `meta.json` 统计，成稿、待补充、失败、处理中或中断按不含正文的 `status.json` 分类；持久队列的 `queued`、`running` 与同步路径的 `processing` 都归入“进行中”，不会误计为未知状态。
 - 审核任务总数兼容历史 `meta.md`、当前 `meta.json` 和已有 `output/report.md` 的归档；“已生成审核报告”只表示本机报告文件存在，不等于企业微信已成功发给用户。
 - 管理台默认总览不读取 `output/result.json` 或材料正文。历史状态使用 `uv run --locked python scripts/backfill_task_status.py` 预演，确认后执行 `uv run --locked python scripts/backfill_task_status.py --apply`。
 

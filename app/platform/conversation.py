@@ -81,6 +81,8 @@ class ConversationStore:
         )
         path = self._conversation_path(channel=channel, sender_userid=sender_userid)
         existing = _conversation_from_payload(_read_json(path))
+        if existing and any(item.job_id == job_id for item in existing.draft_versions):
+            return
         effective_sender_name = sender_name or (existing.sender_name if existing else sender_userid)
 
         is_revision = bool(str(revision_request or "").strip())

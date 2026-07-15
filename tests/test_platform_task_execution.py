@@ -1689,3 +1689,41 @@ def test_repository_schema_checks_and_sqlite_pragmas(tmp_path: Path):
 
     assert mode.lower() == "wal"
     assert timeout == 2345
+
+
+def test_repository_reports_active_tasks_for_selected_user_and_types(tmp_path: Path):
+    store = TaskRepository(tmp_path / "tasks.sqlite3")
+    writing = submit_task(
+        store,
+        key="writing-1",
+        user_id="user-001",
+        task_type="writing_writer1",
+    )
+    submit_task(
+        store,
+        key="review-1",
+        user_id="user-001",
+        task_type="review_general_docx",
+    )
+
+    assert store.has_active_task(
+        user_id="user-001",
+        task_types={"writing_writer1", "writing_writer2"},
+    ) is True
+    assert store.has_active_task(
+        user_id="other-user",
+        task_types={"writing_writer1"},
+    ) is False
+
+    claimed = claim(store, "worker-1")
+    assert claimed is not None and claimed.task_id == writing.task_id
+    store.complete(
+        writing.task_id,
+        worker_id="worker-1",
+        lease_token=claimed.lease_token or "",
+    )
+
+    assert store.has_active_task(
+        user_id="user-001",
+        task_types={"writing_writer1"},
+    ) is False
