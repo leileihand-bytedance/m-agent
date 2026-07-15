@@ -128,13 +128,15 @@ uv run --locked python tests/test_reviewer.py
 通用审核真实文件质量基线：
 
 ```bash
-uv run --locked pytest tests/test_review_quality_evaluation.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_error_marker.py -v
+uv run --locked pytest tests/test_review_quality_evaluation.py tests/test_review_main_flow_optimization.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_error_marker.py -v
 uv run --locked python scripts/review_quality.py run --limit 5 --run-id YYYYMMDD-baseline-v1
 ```
 
 第二条命令会把经授权历史文件重新发送到当前审核模型。执行前必须向用户说明外部模型数据传输风险并取得本次明确授权；真实文件、原文、标注文档和人工评分只保存在 `M-Agent-Files/evaluations/review/<run_id>/`，不能进入 Git。
 
 运行中断或样本被标记为 `failed` / `partial_failed` 时，使用同一命令追加 `--resume`。恢复会校验样本编号和文件 SHA，只跳过完整样本；不能用局部漏扫结果冒充完整基线。评分时逐条判断有效性、标注位置和建议质量，并在漏报表补充可搜索原文。误报率、定位率和漏报数必须基于人工评分，不能直接把模型候选数当成质量结论。
+
+2026-07-15 首轮 5 份真实文件的人工填写结果为 34 条有效、11 条误报、1 条未评分，46 条标注位置均为准确；建议质量、重要程度和实际漏报尚未填写完整。8 条英文所有格弯撇号误报已用真实原文复核并补成离线回归，修复后均不再触发 `quote-pair`，真正缺失的中文引号仍会触发。后续基线比较必须把同根因重复误报单独归类，不能只看误报总条数。
 
 ### 5. 真实 demo 测试
 

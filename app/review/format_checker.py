@@ -65,12 +65,41 @@ def check_quote_pair(paragraphs: list[str]) -> list["Finding"]:
             return text[pos:min(len(text), pos + 12)]
         return text[max(0, pos - 11):pos + 1]
 
+    def _is_english_word_char(char: str) -> bool:
+        return bool(char) and char.isascii() and char.isalnum()
+
+    def _is_english_apostrophe(
+        text: str,
+        pos: int,
+        quote_char: str,
+        stack: list[tuple[str, int]],
+    ) -> bool:
+        previous = text[pos - 1] if pos > 0 else ""
+        following = text[pos + 1] if pos + 1 < len(text) else ""
+
+        # Curly apostrophes are often normalized in either direction by editors.
+        if _is_english_word_char(previous) and _is_english_word_char(following):
+            return True
+
+        # Plural possessives such as "customers’ needs" end after s/S. A real
+        # closing Chinese single quote still closes the pending opening quote.
+        has_pending_single_quote = bool(stack and stack[-1][0] == "‘")
+        return (
+            quote_char == "’"
+            and previous in "sS"
+            and not _is_english_word_char(following)
+            and not has_pending_single_quote
+        )
+
     def check_paragraph(text: str) -> list[tuple[str, int, bool]]:
         """返回这一段里所有未配对的引号类型和位置。"""
         stack: list[tuple[str, int]] = []
         unmatched: list[tuple[str, int, bool]] = []
 
         for idx, char in enumerate(text):
+            if char in {"‘", "’"} and _is_english_apostrophe(text, idx, char, stack):
+                continue
+
             if char in symmetric_quotes:
                 if stack and stack[-1][0] == char:
                     stack.pop()

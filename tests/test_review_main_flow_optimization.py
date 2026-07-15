@@ -96,6 +96,24 @@ def test_quote_pair_detects_single_curly_quotes():
     assert findings == []
 
 
+def test_quote_pair_allows_curly_apostrophes_in_english_words():
+    paragraphs = [
+        "One of the World’s top digital banks",
+        "People’s Bank of China",
+        "WeBank can’t ignore customers’ needs.",
+        "The students’ feedback was positive.",
+        "The people‘s expectations were clear.",
+    ]
+
+    assert check_quote_pair(paragraphs) == []
+
+
+def test_quote_pair_allows_english_apostrophe_inside_chinese_single_quotes():
+    paragraphs = ["材料使用‘People’s Bank of China’作为英文名称。"]
+
+    assert check_quote_pair(paragraphs) == []
+
+
 def test_quote_pair_does_not_repeat_ascii_quote_errors():
     paragraphs = [
         '材料提到"十五五"规划。',
