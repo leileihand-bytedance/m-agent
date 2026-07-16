@@ -71,7 +71,10 @@ class PlatformApp:
 
     @classmethod
     def from_config(cls, config: PlatformConfig) -> "PlatformApp":
-        registry = SkillRegistry.from_directory(config.skills_dir)
+        registry = SkillRegistry.from_directory(
+            config.skills_dir,
+            include_skill_ids=config.skill_allowlist,
+        )
         tools = build_platform_tools(config)
         enabled_skill_ids = [skill.id for skill in registry.list_enabled()]
         if config.access_policy_path and config.access_policy_path.exists():

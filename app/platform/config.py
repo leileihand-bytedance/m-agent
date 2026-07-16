@@ -27,6 +27,7 @@ class PlatformConfig:
     document_max_bytes: int = 50 * 1024 * 1024
     document_ocr_enabled: bool = True
     task_queue_db_path: Path | None = None
+    skill_allowlist: tuple[str, ...] | None = None
 
 
 def parse_env_file(path: Path) -> dict[str, str]:

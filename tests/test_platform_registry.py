@@ -2,6 +2,8 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import pytest
+
 from app.platform.registry import SkillRegistry
 
 
@@ -29,6 +31,17 @@ def test_registry_loads_enabled_rewrite_skill():
     assert skill.allowed_tools == ("llm_writer",)
     assert skill.workflow == "skills.rewrite.workflow:run"
     assert skill.supports_revision is True
+
+
+def test_registry_can_limit_loaded_skills_to_entry_allowlist():
+    registry = SkillRegistry.from_directory(
+        Path("skills"),
+        include_skill_ids={"rewrite"},
+    )
+
+    assert [skill.id for skill in registry.list_enabled()] == ["rewrite"]
+    with pytest.raises(KeyError):
+        registry.get("direct_report")
 
 
 def test_registry_loads_enabled_research_synthesis_skill():

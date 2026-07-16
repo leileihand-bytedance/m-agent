@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from pathlib import Path
 
 import yaml
@@ -10,15 +11,24 @@ class SkillRegistry:
         self._skills = {skill.id: skill for skill in skills}
 
     @classmethod
-    def from_directory(cls, skills_dir: Path) -> "SkillRegistry":
+    def from_directory(
+        cls,
+        skills_dir: Path,
+        *,
+        include_skill_ids: Collection[str] | None = None,
+    ) -> "SkillRegistry":
         skills: list[SkillDefinition] = []
         if not skills_dir.exists():
             return cls([])
 
+        included = set(include_skill_ids) if include_skill_ids is not None else None
         for config_path in sorted(skills_dir.glob("*/config.yaml")):
             raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            skill_id = str(raw["id"])
+            if included is not None and skill_id not in included:
+                continue
             skill = SkillDefinition(
-                id=str(raw["id"]),
+                id=skill_id,
                 name=str(raw["name"]),
                 description=str(raw.get("description", "")),
                 enabled=bool(raw.get("enabled", False)),
