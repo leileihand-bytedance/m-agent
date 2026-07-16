@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from app.platform.task_execution import (
     TaskRepository,
 )
 from app.review.task_execution import (
+    GENERAL_TEXT_REVIEW_TASK_TYPE,
+    HALF_MONTHLY_REVIEW_TASK_TYPE,
+    NEICAN_REVIEW_TASK_TYPE,
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    REVIEW_FILE_TASK_TYPES,
+    REVIEW_TASK_TYPES,
     GeneralReviewTaskService,
     PreparedReviewDelivery,
 )
@@ -93,6 +100,194 @@ def test_general_review_submission_is_persistent_and_idempotent(tmp_path: Path):
     assert len(list((tmp_path / "reviews").rglob("queued-*"))) == 1
     status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
     assert status["processing_status"] == "queued"
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["task_type"] == "review_general_docx"
+
+
+@pytest.mark.parametrize(
+    "task_type",
+    [
+        "review_general_docx",
+        NEICAN_REVIEW_TASK_TYPE,
+        HALF_MONTHLY_REVIEW_TASK_TYPE,
+        OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    ],
+)
+def test_single_file_review_types_share_persistent_workspace(
+    tmp_path: Path,
+    task_type: str,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+
+    submission = service.submit_file(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id=f"message-{task_type}",
+        task_type=task_type,
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+
+    assert submission.task.task_type == task_type
+    assert task_type in REVIEW_FILE_TASK_TYPES
+    assert task_type in REVIEW_TASK_TYPES
+    assert submission.task.payload["input_kind"] == "docx"
+
+
+def test_text_review_content_is_snapshotted_outside_sqlite_payload(tmp_path: Path):
+    db_path = tmp_path / "runtime" / "review.sqlite3"
+    repository = TaskRepository(db_path)
+    seen = []
+
+    async def processor(workspace):
+        seen.append(workspace)
+        return PreparedReviewDelivery.text("文字审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    content = "这是一段需要审核的内部材料，不能写入 SQLite 任务载荷。"
+
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="text-message-001",
+        text=content,
+    )
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    assert submission.task.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE
+    assert content not in json.dumps(submission.task.payload, ensure_ascii=False)
+    assert content.encode("utf-8") not in db_path.read_bytes()
+    assert seen[0].input_kind == "text"
+    assert seen[0].input_file.read_text(encoding="utf-8") == content
+
+
+def test_multi_file_task_type_cannot_enter_single_review_service(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+
+    with pytest.raises(ValueError, match="不支持的单项审核任务类型"):
+        service.submit_file(
+            channel="wecom",
+            sender_userid="user-1",
+            sender_name="User One",
+            message_id="multi-message-001",
+            task_type="review_multi_docx",
+            filename="材料.docx",
+            file_bytes=b"docx-content",
+        )
+
+
+def test_forged_multi_file_task_is_rejected_by_single_review_handler(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    task = repository.submit(
+        idempotency_key="forged-multi-task",
+        channel="wecom",
+        user_id="user-1",
+        task_type="review_multi_docx",
+        cost_class="review_llm",
+        payload={"files": ["one.docx", "two.docx"]},
+        max_attempts=1,
+        resumable=True,
+    )
+
+    with pytest.raises(SafeTaskError, match="invalid_task_payload"):
+        asyncio.run(service.handle(task))
+
+
+def test_valid_task_type_rejects_multi_file_payload_fields(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    processor_called = False
+
+    async def processor(_workspace):
+        nonlocal processor_called
+        processor_called = True
+        return PreparedReviewDelivery.text("审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-with-files",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+    forged = replace(
+        submission.task,
+        payload={**submission.task.payload, "files": ["one.docx", "two.docx"]},
+    )
+
+    with pytest.raises(SafeTaskError, match="invalid_task_payload"):
+        asyncio.run(service.handle(forged))
+    assert processor_called is False
+
+
+def test_single_review_input_must_stay_under_input_directory(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-output-path",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+    task_dir = Path(str(submission.task.payload["task_dir"]))
+    output_input = task_dir / "output" / "材料.docx"
+    output_input.write_bytes(b"forged")
+    forged = replace(
+        submission.task,
+        payload={**submission.task.payload, "input_file": "output/材料.docx"},
+    )
+
+    with pytest.raises(SafeTaskError, match="invalid_task_payload"):
+        asyncio.run(service.handle(forged))
 
 
 def test_completed_general_review_is_not_processed_or_delivered_twice(tmp_path: Path):

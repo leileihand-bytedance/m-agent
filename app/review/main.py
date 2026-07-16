@@ -54,8 +54,13 @@ from app.platform.task_execution import (  # noqa: E402
     TaskRepository,
 )
 from app.review.task_execution import (  # noqa: E402
+    GENERAL_TEXT_REVIEW_TASK_TYPE,
     GENERAL_REVIEW_COST_CLASS,
     GENERAL_REVIEW_TASK_TYPE,
+    HALF_MONTHLY_REVIEW_TASK_TYPE,
+    NEICAN_REVIEW_TASK_TYPE,
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    REVIEW_TASK_TYPES,
     GeneralReviewTaskService,
     GeneralReviewWorkspace,
     PreparedReviewDelivery,
@@ -426,23 +431,30 @@ def save_review_to_directory(
 
     # 3. 保存结构化元信息
     meta_path = review_dir / "meta.json"
+    existing_meta: dict[str, object] = {}
+    if meta_path.is_file():
+        try:
+            loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_meta, dict):
+                existing_meta = loaded_meta
+        except (OSError, json.JSONDecodeError):
+            existing_meta = {}
+    existing_meta.update(
+        {
+            "task_id": task_id or review_dir.name,
+            "original_filename": original_filename,
+            "sender_userid": sender,
+            "message_id": msgid,
+            "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "document_type": doc_type.value,
+            "total_rules": result.total_rules,
+            "passed_rules": result.passed_rules,
+            "finding_count": len(result.findings),
+            "paragraph_preview": [p[:80] for p in parsed_paragraphs[:10]],
+        }
+    )
     meta_path.write_text(
-        json.dumps(
-            {
-                "task_id": task_id or review_dir.name,
-                "original_filename": original_filename,
-                "sender_userid": sender,
-                "message_id": msgid,
-                "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "document_type": doc_type.value,
-                "total_rules": result.total_rules,
-                "passed_rules": result.passed_rules,
-                "finding_count": len(result.findings),
-                "paragraph_preview": [p[:80] for p in parsed_paragraphs[:10]],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(existing_meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     if mark_processing_completed:
@@ -751,6 +763,51 @@ def build_user_review_reply(
     return "没有发现问题，可以走审批了。"
 
 
+_REVIEW_TASK_TYPE_BY_DOCUMENT_TYPE = {
+    DocumentType.GENERAL: GENERAL_REVIEW_TASK_TYPE,
+    DocumentType.HALF_MONTHLY: HALF_MONTHLY_REVIEW_TASK_TYPE,
+    DocumentType.NEI_CAN: NEICAN_REVIEW_TASK_TYPE,
+    DocumentType.OFFICIAL_FORMAT: OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+}
+_DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE = {
+    task_type: doc_type
+    for doc_type, task_type in _REVIEW_TASK_TYPE_BY_DOCUMENT_TYPE.items()
+}
+_DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE[GENERAL_TEXT_REVIEW_TASK_TYPE] = DocumentType.GENERAL
+
+
+def _review_task_type_for_document_type(doc_type: DocumentType) -> str:
+    """把单项审核文档类型映射到稳定的持久任务类型。"""
+    try:
+        return _REVIEW_TASK_TYPE_BY_DOCUMENT_TYPE[doc_type]
+    except KeyError as exc:
+        raise ValueError(f"不支持的单项审核文档类型：{doc_type}") from exc
+
+
+def _document_type_for_review_task_type(task_type: str) -> DocumentType:
+    try:
+        return _DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE[task_type]
+    except KeyError as exc:
+        raise ValueError(f"不支持的单项审核任务类型：{task_type}") from exc
+
+
+def _queued_review_acceptance_message(
+    *,
+    review_label: str,
+    task_id: str,
+    created: bool,
+    input_label: str,
+) -> str:
+    if created:
+        return f"已进入{review_label}队列，任务编号：{task_id}。完成后会自动发送结果。"
+    return f"{input_label}已经在处理中，无需重复提交。任务编号：{task_id}。"
+
+
+def _review_label(doc_type: DocumentType) -> str:
+    label = document_type_label(doc_type)
+    return label if label.endswith("审核") else f"{label}审核"
+
+
 def _prepare_review_reply_file(
     review_dir: Path | None,
     original_filename: str,
@@ -892,6 +949,125 @@ async def _start_neican_review(
             "phase1_ms": (perf_counter() - phase1_started_at) * 1000,
         },
     )
+
+
+async def _process_queued_single_review(
+    workspace: GeneralReviewWorkspace,
+    *,
+    config: ReviewConfig,
+    neican_rules_text: str,
+) -> PreparedReviewDelivery:
+    """执行一项已冻结输入的审核，并在任务目录内准备唯一交付结果。"""
+    doc_type = _document_type_for_review_task_type(workspace.task_type)
+    if workspace.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE:
+        content = await asyncio.to_thread(workspace.input_file.read_text, encoding="utf-8")
+        result, paragraphs = await _review_text_result(content, config)
+        await asyncio.to_thread(
+            save_review_to_directory,
+            review_dir=workspace.task_dir,
+            file_bytes=None,
+            original_filename=workspace.filename,
+            sender=workspace.sender_userid,
+            msgid="",
+            task_id=workspace.task_id,
+            result=result,
+            parsed_paragraphs=paragraphs,
+            text_content=content,
+            doc_type=DocumentType.GENERAL,
+            mark_processing_completed=False,
+        )
+        if result.findings and result.findings[0].rule_id == "__empty_text__":
+            return PreparedReviewDelivery.text("发送的内容为空，无法审核。")
+        return PreparedReviewDelivery.text(
+            format_review_result(result, "文字消息", doc_type=DocumentType.GENERAL)
+        )
+
+    parsed = await asyncio.to_thread(_parse_docx, workspace.input_file)
+    if doc_type != DocumentType.OFFICIAL_FORMAT:
+        detected_type = detect_document_type(workspace.filename, parsed.paragraphs)
+        if detected_type != doc_type:
+            raise ValueError("审核任务类型与文件识别结果不一致")
+
+    if doc_type == DocumentType.GENERAL:
+        from app.review.general_reviewer import review_general  # noqa: E402
+
+        result = await review_general(
+            parsed.paragraphs,
+            load_rules("app/review/rules_general.md"),
+            workspace.filename,
+        )
+    elif doc_type == DocumentType.HALF_MONTHLY:
+        from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
+
+        result = await review_halfmonthly(
+            parsed.paragraphs,
+            load_rules("app/review/rules_halfmonthly.md"),
+            workspace.filename,
+            numbering=parsed.numbering,
+            file_path=workspace.input_file,
+        )
+    elif doc_type == DocumentType.OFFICIAL_FORMAT:
+        from app.review.official_format_checker import review_official_format  # noqa: E402
+
+        result = await asyncio.to_thread(
+            review_official_format,
+            workspace.input_file,
+            workspace.filename,
+        )
+    else:
+        from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
+
+        phase1_result, phase2_task, timings = await _start_neican_review(
+            phase1_runner=review_phase1,
+            phase2_runner=review_phase2,
+            paragraphs=parsed.paragraphs,
+            rules_text=neican_rules_text,
+            filename=workspace.filename,
+            file_path=workspace.input_file,
+        )
+        phase2_result, phase2_ms = await phase2_task
+        findings = [*phase1_result.findings, *phase2_result.findings]
+        findings.sort(key=lambda finding: finding.paragraph_index)
+        result = ReviewResult(
+            findings=findings,
+            total_rules=phase1_result.total_rules + phase2_result.total_rules,
+            passed_rules=phase1_result.passed_rules + phase2_result.passed_rules,
+            filename=workspace.filename,
+        )
+        logger.info(
+            "内参持久任务阶段耗时: phase1=%.1fms phase2=%.1fms task_id=%s",
+            timings["phase1_ms"],
+            phase2_ms,
+            workspace.task_id,
+            extra=log_extra(workspace.sender_userid, workspace.sender_name),
+        )
+
+    file_bytes = await asyncio.to_thread(workspace.input_file.read_bytes)
+    await asyncio.to_thread(
+        save_review_to_directory,
+        review_dir=workspace.task_dir,
+        file_bytes=file_bytes,
+        original_filename=workspace.filename,
+        sender=workspace.sender_userid,
+        msgid="",
+        task_id=workspace.task_id,
+        result=result,
+        parsed_paragraphs=parsed.paragraphs,
+        doc_type=doc_type,
+        mark_processing_completed=False,
+    )
+    reply = build_user_review_reply(result, workspace.filename, doc_type=doc_type)
+    if reply is not None:
+        return PreparedReviewDelivery.text(reply)
+    marked_path = await asyncio.to_thread(
+        _prepare_review_reply_file,
+        workspace.task_dir,
+        workspace.filename,
+        result.findings,
+    )
+    if marked_path is None:
+        raise RuntimeError(f"{_review_label(doc_type)}发现问题但未生成标注文档")
+    return PreparedReviewDelivery.attachment(marked_path)
 
 
 # ============================================================
@@ -1140,7 +1316,7 @@ async def _run_review_task_worker_supervised(
                     severity="error",
                     subject="审核后台任务 worker 异常退出",
                     detail="持久任务 worker 已退出，系统将自动重启。",
-                    skill_id="review_general_docx",
+                    skill_id="review_single_item",
                 )
             except Exception:
                 logger.exception(
@@ -1357,71 +1533,47 @@ async def run_review_bot(config: ReviewConfig) -> None:
         file = decision.files[0]
         filename = file.filename
         buffer = file.read_bytes()
-        tmp_path: Path | None = None
         try:
+            try:
+                message_id = extract_message_id(frame)
+                if not message_id:
+                    raise ValueError("企业微信消息缺少稳定消息标识")
+                submission = review_tasks.submit_file(
+                    channel="wecom",
+                    sender_userid=sender,
+                    sender_name=registry.get_name(sender) or sender,
+                    message_id=message_id,
+                    task_type=OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+                    filename=filename,
+                    file_bytes=buffer,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "公文格式审核任务入队失败 from %s",
+                    sender,
+                    exc_info=exc,
+                    extra=log_extra(sender, registry.get_name(sender) or sender),
+                )
+                await notifier.notify_file_review_error(sender, filename, "公文格式审核任务入队", exc)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("公文格式审核任务受理", exc),
+                    True,
+                )
+                return
             await ws_client.reply_stream(
                 frame,
-                generate_req_id("review-format"),
-                "已找到需要检查的文件，正在按公文模板审核实际格式，请稍等……",
-                True,
-            )
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as temporary:
-                temporary.write(buffer)
-                tmp_path = Path(temporary.name)
-            parsed = _parse_docx(tmp_path)
-            from app.review.official_format_checker import review_official_format  # noqa: E402
-
-            result = review_official_format(tmp_path, filename)
-            review_dir = save_review(
-                reviews_dir=config.reviews_dir,
-                file_bytes=buffer,
-                original_filename=filename,
-                sender=sender,
-                msgid=extract_message_id(frame),
-                result=result,
-                parsed_paragraphs=parsed.paragraphs,
-                doc_type=DocumentType.OFFICIAL_FORMAT,
-            )
-            reply_file = _prepare_review_reply_file(review_dir, filename, result.findings)
-            reply = build_user_review_reply(
-                result,
-                filename,
-                doc_type=DocumentType.OFFICIAL_FORMAT,
-            )
-            if reply:
-                await send_text_result(
-                    frame,
-                    reply,
-                    prefix="review-format-done",
-                    sender=sender,
-                    label="公文格式审核结果",
-                )
-            if reply_file is not None:
-                await send_review_file(
-                    frame,
-                    reply_file,
-                    sender=sender,
-                    label="公文格式审核文档",
-                )
-        except Exception as exc:
-            logger.exception(
-                "公文格式审核失败 from %s",
-                sender,
-                exc_info=exc,
-                extra=log_extra(sender, registry.get_name(sender) or sender),
-            )
-            await notifier.notify_file_review_error(sender, filename, "公文格式审核", exc)
-            await ws_client.reply_stream(
-                frame,
-                generate_req_id("review-err"),
-                _build_processing_failure_user_reply("公文格式审核", exc),
+                generate_req_id("review-format-queued"),
+                _queued_review_acceptance_message(
+                    review_label="公文格式审核",
+                    task_id=submission.task.task_id,
+                    created=submission.created,
+                    input_label="这份文件",
+                ),
                 True,
             )
         finally:
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
             review_intake_store.cleanup_files(decision.files)
 
     async def run_multi_file_decision(frame, sender: str, decision) -> None:
@@ -1487,50 +1639,14 @@ async def run_review_bot(config: ReviewConfig) -> None:
         finally:
             review_intake_store.cleanup_files(decision.files)
 
-    async def process_queued_general_review(
+    async def process_queued_review(
         workspace: GeneralReviewWorkspace,
     ) -> PreparedReviewDelivery:
-        parsed = await asyncio.to_thread(_parse_docx, workspace.input_file)
-        doc_type = detect_document_type(workspace.filename, parsed.paragraphs)
-        if doc_type != DocumentType.GENERAL:
-            raise ValueError("持久队列只处理单文件通用审核")
-        from app.review.general_reviewer import review_general  # noqa: E402
-
-        general_rules_text = load_rules("app/review/rules_general.md")
-        result = await review_general(
-            parsed.paragraphs,
-            general_rules_text,
-            workspace.filename,
+        return await _process_queued_single_review(
+            workspace,
+            config=config,
+            neican_rules_text=rules_text,
         )
-        await asyncio.to_thread(
-            save_review_to_directory,
-            review_dir=workspace.task_dir,
-            file_bytes=workspace.input_file.read_bytes(),
-            original_filename=workspace.filename,
-            sender=workspace.sender_userid,
-            msgid="",
-            task_id=workspace.task_id,
-            result=result,
-            parsed_paragraphs=parsed.paragraphs,
-            doc_type=DocumentType.GENERAL,
-            mark_processing_completed=False,
-        )
-        reply = build_user_review_reply(
-            result,
-            workspace.filename,
-            doc_type=DocumentType.GENERAL,
-        )
-        if reply is not None:
-            return PreparedReviewDelivery.text(reply)
-        marked_path = await asyncio.to_thread(
-            _prepare_review_reply_file,
-            workspace.task_dir,
-            workspace.filename,
-            result.findings,
-        )
-        if marked_path is None:
-            raise RuntimeError("通用审核发现问题但未生成标注文档")
-        return PreparedReviewDelivery.attachment(marked_path)
 
     async def send_queued_review_attachment(
         recipient: str,
@@ -1547,7 +1663,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             path=path,
             sender=recipient,
             sender_name=registry.get_name(recipient) or recipient,
-            label="单文件通用审核文档",
+            label="单项审核文档",
             req_id_factory=generate_req_id,
             notify_user_on_failure=False,
             raise_on_uncertain=True,
@@ -1591,10 +1707,10 @@ async def run_review_bot(config: ReviewConfig) -> None:
             ops_event_logger=ops_event_logger,
         ),
     )
-    general_review_tasks = GeneralReviewTaskService(
+    review_tasks = GeneralReviewTaskService(
         repository=task_repository,
         reviews_root=config.reviews_dir,
-        processor=process_queued_general_review,
+        processor=process_queued_review,
         text_sender=lambda recipient, text: _send_queued_review_text(
             ws_client,
             recipient,
@@ -1613,7 +1729,8 @@ async def run_review_bot(config: ReviewConfig) -> None:
         worker_id=f"review-bot-{uuid4().hex[:12]}",
         lease_duration=timedelta(seconds=config.task_lease_seconds),
     )
-    task_executor.register_handler(GENERAL_REVIEW_TASK_TYPE, general_review_tasks.handle)
+    for task_type in REVIEW_TASK_TYPES:
+        task_executor.register_handler(task_type, review_tasks.handle)
 
     async def on_text(frame):
         """文本消息走通用审核(不生成 marked 文档)."""
@@ -1692,76 +1809,37 @@ async def run_review_bot(config: ReviewConfig) -> None:
             return
 
         recent_submission_tracker.remember(sender, "text")
-
-        # ACK
-        await ws_client.reply_stream(
-            frame, stream_id,
-            "收到文字啦，正在加紧审核，请稍等……", True,
-        )
-
         logger.info("收到文字消息 from %s: %s...", sender, content[:80], extra=extra)
-
         try:
-            result, paragraphs = await _review_text_result(content, config)
-            if result.findings and result.findings[0].rule_id == "__empty_text__":
-                reply = "❌ 发送的内容为空,无法审核。"
-            else:
-                reply = format_review_result(
-                    result, "文字消息", doc_type=DocumentType.GENERAL
-                )
-                try:
-                    review_dir = save_review(
-                        reviews_dir=config.reviews_dir,
-                        file_bytes=None,
-                        original_filename="文字消息.txt",
-                        sender=sender,
-                        msgid=extract_message_id(frame),
-                        result=result,
-                        parsed_paragraphs=paragraphs,
-                        text_content=content,
-                        doc_type=DocumentType.GENERAL,
-                    )
-                    logger.info("文字审核已存档: %s", review_dir, extra=extra)
-                except Exception as archive_exc:
-                    logger.exception("文字审核存档失败 from %s", sender, exc_info=archive_exc, extra=extra)
+            message_id = extract_message_id(frame)
+            if not message_id:
+                raise ValueError("企业微信消息缺少稳定消息标识")
+            submission = review_tasks.submit_text(
+                channel="wecom",
+                sender_userid=sender,
+                sender_name=english_name,
+                message_id=message_id,
+                text=content,
+            )
         except Exception as exc:
-            logger.exception("文字审核失败 from %s", sender, exc_info=exc, extra=extra)
+            logger.exception("文字审核任务入队失败 from %s", sender, exc_info=exc, extra=extra)
             await notifier.notify_text_review_error(sender, exc)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
-                _build_processing_failure_user_reply("文字审核", exc), True,
+                _build_processing_failure_user_reply("文字审核任务受理", exc), True,
             )
             return
-
-        done_id = generate_req_id("review-text-done")
-        sent = False
-        for retry in range(3):
-            try:
-                await asyncio.wait_for(
-                    ws_client.reply_stream(frame, done_id, reply, True),
-                    timeout=30.0,
-                )
-                logger.info("文字审核结果已发送 to %s", sender, extra=extra)
-                sent = True
-                break
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "文字审核结果发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra
-                )
-            except Exception as exc:
-                logger.warning(
-                    "文字审核结果发送失败 to %s: %s, 第 %d 次重试",
-                    sender,
-                    exc,
-                    retry + 1,
-                    extra=extra,
-                )
-            if retry < 2:
-                await asyncio.sleep(2 * (retry + 1))
-
-        if not sent:
-            logger.error("文字审核结果发送失败（已重试3次） to %s", sender, extra=extra)
-            await notifier.notify_send_failure(sender, "text", Exception("发送失败（已重试3次）"))
+        await ws_client.reply_stream(
+            frame,
+            generate_req_id("review-text-queued"),
+            _queued_review_acceptance_message(
+                review_label="文字审核",
+                task_id=submission.task.task_id,
+                created=submission.created,
+                input_label="这段文字",
+            ),
+            True,
+        )
 
     async def on_file(frame):
         sender = get_sender_id(frame)
@@ -1922,14 +2000,14 @@ async def run_review_bot(config: ReviewConfig) -> None:
             await run_official_format_decision(frame, sender, intake_decision)
             return
 
-        # 5. 解析（保留临时文件供后续格式检查使用）
+        # 5. 仅在入口解析一次，用于识别单文件审核类型。
+        tmp_path: Path | None = None
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
                 tmp.write(buffer)
                 tmp_path = Path(tmp.name)
             parsed = _parse_docx(tmp_path)
-            # 保留 tmp_path 供半月报正文格式检查使用，在审核完成后删除
         except Exception as exc:
             recent_submission_tracker.forget(sender)
             logger.exception("文件解析失败 from %s", sender, exc_info=exc, extra=extra)
@@ -1939,6 +2017,9 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 _build_processing_failure_user_reply("文件解析", exc), True,
             )
             return
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
 
         # 6. 识别文档类型并分发到对应审核引擎
         doc_type = detect_document_type(filename, parsed.paragraphs)
@@ -1950,380 +2031,48 @@ async def run_review_bot(config: ReviewConfig) -> None:
             extra=extra,
         )
 
-        if doc_type == DocumentType.GENERAL:
-            tmp_path.unlink(missing_ok=True)
-            message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
-            try:
-                submission = general_review_tasks.submit(
-                    channel="wecom",
-                    sender_userid=sender,
-                    sender_name=english_name,
-                    message_id=message_id,
-                    filename=filename,
-                    file_bytes=buffer,
-                )
-            except Exception as exc:
-                logger.exception(
-                    "通用审核任务入队失败 from %s",
-                    sender,
-                    exc_info=exc,
-                    extra=extra,
-                )
-                await notifier.notify_file_review_error(sender, filename, "审核任务入队", exc)
-                await ws_client.reply_stream(
-                    frame,
-                    generate_req_id("review-err"),
-                    _build_processing_failure_user_reply("审核任务受理", exc),
-                    True,
-                )
-                return
-            if submission.created:
-                accepted = f"已进入审核队列，任务编号：{submission.task.task_id}。完成后会自动发送结果。"
-            else:
-                accepted = f"这份文件已经在处理中，无需重复提交。任务编号：{submission.task.task_id}。"
+        review_label = _review_label(doc_type)
+        try:
+            message_id = extract_message_id(frame)
+            if not message_id:
+                raise ValueError("企业微信消息缺少稳定消息标识")
+            submission = review_tasks.submit_file(
+                channel="wecom",
+                sender_userid=sender,
+                sender_name=english_name,
+                message_id=message_id,
+                task_type=_review_task_type_for_document_type(doc_type),
+                filename=filename,
+                file_bytes=buffer,
+            )
+        except Exception as exc:
+            logger.exception(
+                "%s任务入队失败 from %s",
+                review_label,
+                sender,
+                exc_info=exc,
+                extra=extra,
+            )
+            await notifier.notify_file_review_error(sender, filename, f"{review_label}任务入队", exc)
             await ws_client.reply_stream(
                 frame,
-                generate_req_id("review-queued"),
-                accepted,
+                generate_req_id("review-err"),
+                _build_processing_failure_user_reply(f"{review_label}任务受理", exc),
                 True,
             )
             return
-
-        if doc_type == DocumentType.HALF_MONTHLY:
-            from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
-            halfmonthly_rules_text = load_rules("app/review/rules_halfmonthly.md")
-            try:
-                combined_result = await review_halfmonthly(
-                    parsed.paragraphs, halfmonthly_rules_text, filename,
-                    numbering=parsed.numbering,
-                    file_path=tmp_path,
-                )
-            except Exception as exc:
-                logger.exception("半月报审核失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "半月报审核", exc)
-                await ws_client.reply_stream(
-                    frame, generate_req_id("review-err"),
-                    _build_processing_failure_user_reply("半月报审核", exc), True,
-                )
-                return
-
-            msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
-            review_dir = None
-            try:
-                review_dir = save_review(
-                    reviews_dir=config.reviews_dir,
-                    file_bytes=buffer,
-                    original_filename=filename,
-                    sender=sender,
-                    msgid=msgid,
-                    result=combined_result,
-                    parsed_paragraphs=parsed.paragraphs,
-                )
-                logger.info(
-                    "半月报审核完成: %s (%d 个问题), 存档: %s",
-                    filename,
-                    len(combined_result.findings),
-                    review_dir,
-                    extra=extra,
-                )
-            except Exception as exc:
-                logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "存档", exc)
-            finally:
-                # 清理临时文件（半月报格式检查用完后释放）
-                tmp_path.unlink(missing_ok=True)
-
-            reply = build_user_review_reply(combined_result, filename, doc_type=doc_type)
-            reply_file_path: Path | None = None
-            try:
-                reply_file_path = _prepare_review_reply_file(
-                    review_dir,
-                    filename,
-                    combined_result.findings,
-                )
-                if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
-                    logger.info("半月报标注文档已生成: %s", reply_file_path, extra=extra)
-            except Exception as exc:
-                logger.exception("生成半月报标注文档失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "半月报标注文档生成", exc)
-                reply_file_path = None
-
-            if reply is not None:
-                done_id = generate_req_id("review-halfmonthly")
-                text_sent = False
-                for retry in range(3):
-                    try:
-                        await asyncio.wait_for(
-                            ws_client.reply_stream(frame, done_id, reply, True),
-                            timeout=30.0,
-                        )
-                        logger.info("半月报审核结果已发送 to %s", sender, extra=extra)
-                        text_sent = True
-                        break
-                    except asyncio.TimeoutError:
-                        logger.warning("半月报结果发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
-                    except Exception as exc:
-                        logger.warning(
-                            "半月报结果发送失败 to %s: %s, 第 %d 次重试",
-                            sender,
-                            exc,
-                            retry + 1,
-                            extra=extra,
-                        )
-                    if retry < 2:
-                        await asyncio.sleep(2 * (retry + 1))
-                if not text_sent:
-                    logger.error("半月报结果发送失败（已重试3次） to %s", sender, extra=extra)
-                    await notifier.notify_send_failure(sender, "半月报结果", Exception("发送失败（已重试3次）"))
-
-            if reply_file_path is not None:
-                await send_review_file(
-                    frame,
-                    reply_file_path,
-                    sender=sender,
-                    label="半月报文档",
-                )
-            return
-
-        if doc_type == DocumentType.OFFICIAL_FORMAT:
-            review_label = document_type_label(doc_type)
-            try:
-                if doc_type == DocumentType.OFFICIAL_FORMAT:
-                    from app.review.official_format_checker import review_official_format  # noqa: E402
-
-                    combined_result = review_official_format(tmp_path, filename)
-                else:
-                    from app.review.general_reviewer import review_general  # noqa: E402
-
-                    general_rules_text = load_rules("app/review/rules_general.md")
-                    combined_result = await review_general(
-                        parsed.paragraphs, general_rules_text, filename
-                    )
-            except Exception as exc:
-                logger.exception("%s失败 from %s", review_label, sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, review_label, exc)
-                await ws_client.reply_stream(
-                    frame, generate_req_id("review-err"),
-                    _build_processing_failure_user_reply(review_label, exc), True,
-                )
-                return
-            finally:
-                tmp_path.unlink(missing_ok=True)
-
-            msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
-            review_dir = None
-            try:
-                review_dir = save_review(
-                    reviews_dir=config.reviews_dir,
-                    file_bytes=buffer,
-                    original_filename=filename,
-                    sender=sender,
-                    msgid=msgid,
-                    result=combined_result,
-                    parsed_paragraphs=parsed.paragraphs,
-                    doc_type=doc_type,
-                )
-                logger.info(
-                    "%s完成: %s (%d 个问题), 存档: %s",
-                    review_label,
-                    filename,
-                    len(combined_result.findings),
-                    review_dir,
-                    extra=extra,
-                )
-            except Exception as exc:
-                logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "存档", exc)
-
-            reply = build_user_review_reply(combined_result, filename, doc_type=doc_type)
-            reply_file_path: Path | None = None
-            try:
-                reply_file_path = _prepare_review_reply_file(
-                    review_dir,
-                    filename,
-                    combined_result.findings,
-                )
-                if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
-                    logger.info("标注文档已生成: %s", reply_file_path, extra=extra)
-            except Exception as exc:
-                logger.exception("生成标注文档失败 from %s", sender, exc_info=exc, extra=extra)
-                await notifier.notify_file_review_error(sender, filename, "标注文档生成", exc)
-                reply_file_path = None
-
-            if reply is not None:
-                text_id = generate_req_id("review-general-text")
-                text_sent = False
-                for retry in range(3):
-                    try:
-                        await asyncio.wait_for(
-                            ws_client.reply_stream(frame, text_id, reply, True),
-                            timeout=30.0,
-                        )
-                        logger.info("%s文本提示已发送 to %s", review_label, sender, extra=extra)
-                        text_sent = True
-                        break
-                    except asyncio.TimeoutError:
-                        logger.warning("%s文本发送超时 to %s, 第 %d 次重试", review_label, sender, retry + 1, extra=extra)
-                    except Exception as exc:
-                        logger.warning(
-                            "%s文本发送失败 to %s: %s, 第 %d 次重试",
-                            review_label,
-                            sender,
-                            exc,
-                            retry + 1,
-                            extra=extra,
-                        )
-                    if retry < 2:
-                        await asyncio.sleep(2 * (retry + 1))
-                if not text_sent:
-                    logger.error("%s文本发送失败（已重试3次） to %s", review_label, sender, extra=extra)
-                    await notifier.notify_send_failure(sender, f"{review_label}结果", Exception("发送失败（已重试3次）"))
-
-            if reply_file_path is not None:
-                await send_review_file(
-                    frame,
-                    reply_file_path,
-                    sender=sender,
-                    label="标注文档",
-                )
-
-            return
-
-        # 7. 内参周报:第一阶段审核（格式正则 + 基础内容 LLM）
-        from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
-
-        try:
-            phase1_result, phase2_task, neican_timings = await _start_neican_review(
-                phase1_runner=review_phase1,
-                phase2_runner=review_phase2,
-                paragraphs=parsed.paragraphs,
-                rules_text=rules_text,
-                filename=filename,
-                file_path=tmp_path,
-            )
-            logger.info(
-                "内参阶段耗时: phase1=%.1fms（phase2 已后台启动） from %s",
-                neican_timings["phase1_ms"],
-                sender,
-                extra=extra,
-            )
-        except Exception as exc:
-            logger.exception("内参第一阶段审核失败 from %s", sender, exc_info=exc, extra=extra)
-            await notifier.notify_file_review_error(sender, filename, "内参第一阶段审核", exc)
-            await ws_client.reply_stream(
-                frame, generate_req_id("review-err"),
-                _build_processing_failure_user_reply("内参第一阶段审核", exc), True,
-            )
-            return
-
-        # 8. 第二阶段审核（深度内容 LLM）
-        try:
-            phase2_result, phase2_ms = await phase2_task
-            neican_timings["phase2_ms"] = phase2_ms
-            neican_timings["wall_ms"] = (perf_counter() - neican_timings["wall_start"]) * 1000
-            logger.info(
-                "内参阶段耗时: phase1=%.1fms phase2=%.1fms total=%.1fms from %s",
-                neican_timings["phase1_ms"],
-                neican_timings["phase2_ms"],
-                neican_timings["wall_ms"],
-                sender,
-                extra=extra,
-            )
-        except Exception as exc:
-            logger.exception("内参第二阶段审核失败 from %s", sender, exc_info=exc, extra=extra)
-            await notifier.notify_file_review_error(sender, filename, "内参第二阶段审核", exc)
-            tmp_path.unlink(missing_ok=True)
-            return
-
-        # 9. 合并两个阶段的 findings，存档用完整结果
-        from app.review.reviewer import ReviewResult
-        all_findings = list(phase1_result.findings)
-        all_findings.extend(phase2_result.findings)
-        all_findings.sort(key=lambda f: f.paragraph_index)
-        combined_result = ReviewResult(
-            findings=all_findings,
-            total_rules=phase1_result.total_rules + phase2_result.total_rules,
-            passed_rules=phase1_result.passed_rules + phase2_result.passed_rules,
-            filename=filename,
+        await ws_client.reply_stream(
+            frame,
+            generate_req_id("review-queued"),
+            _queued_review_acceptance_message(
+                review_label=review_label,
+                task_id=submission.task.task_id,
+                created=submission.created,
+                input_label="这份文件",
+            ),
+            True,
         )
-
-        msgid = str(frame.get("body", {}).get("msgid", "") or frame.get("headers", {}).get("req_id", ""))
-        review_dir = None
-        try:
-            review_dir = save_review(
-                reviews_dir=config.reviews_dir,
-                file_bytes=buffer,
-                original_filename=filename,
-                sender=sender,
-                msgid=msgid,
-                result=combined_result,
-                parsed_paragraphs=parsed.paragraphs,
-                doc_type=DocumentType.NEI_CAN,
-            )
-            logger.info(
-                "内参审核完成: %s (%d 个问题), 存档: %s",
-                filename,
-                len(combined_result.findings),
-                review_dir,
-                extra=extra,
-            )
-        except Exception as exc:
-            logger.exception("存档失败 from %s", sender, exc_info=exc, extra=extra)
-            await notifier.notify_file_review_error(sender, filename, "存档", exc)
-
-        reply_file_path: Path | None = None
-        try:
-            reply_file_path = _prepare_review_reply_file(
-                review_dir,
-                filename,
-                combined_result.findings,
-            )
-            if reply_file_path is not None and reply_file_path.name.startswith("marked_"):
-                logger.info("内参标注文档已生成: %s", reply_file_path, extra=extra)
-        except Exception as exc:
-            logger.exception("生成内参标注文档失败 from %s", sender, exc_info=exc, extra=extra)
-            await notifier.notify_file_review_error(sender, filename, "内参标注文档生成", exc)
-            reply_file_path = None
-
-        reply = build_user_review_reply(combined_result, filename, doc_type=DocumentType.NEI_CAN)
-        if reply is not None:
-            done_id = generate_req_id("review-neican-pass")
-            text_sent = False
-            for retry in range(3):
-                try:
-                    await asyncio.wait_for(
-                        ws_client.reply_stream(frame, done_id, reply, True),
-                        timeout=30.0,
-                    )
-                    logger.info("内参审核通过提示已发送 to %s", sender, extra=extra)
-                    text_sent = True
-                    break
-                except asyncio.TimeoutError:
-                    logger.warning("内参通过提示发送超时 to %s, 第 %d 次重试", sender, retry + 1, extra=extra)
-                except Exception as exc:
-                    logger.warning(
-                        "内参通过提示发送失败 to %s: %s, 第 %d 次重试",
-                        sender,
-                        exc,
-                        retry + 1,
-                        extra=extra,
-                    )
-                if retry < 2:
-                    await asyncio.sleep(2 * (retry + 1))
-            if not text_sent:
-                logger.error("内参通过提示发送失败（已重试3次） to %s", sender, extra=extra)
-                await notifier.notify_send_failure(sender, "内参审核通过提示", Exception("发送失败（已重试3次）"))
-
-        if reply_file_path is not None:
-            await send_review_file(
-                frame,
-                reply_file_path,
-                sender=sender,
-                label="内参审核文档",
-            )
-
-        # 清理临时文件（内参正文格式检查用完后释放）
-        tmp_path.unlink(missing_ok=True)
+        return
 
     async def on_enter(frame):
         sender = get_sender_id(frame)
@@ -2352,7 +2101,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             recovery_interval=config.task_recovery_seconds,
             ops_event_logger=ops_event_logger,
         ),
-        name="review-general-task-worker",
+        name="review-persistent-task-worker",
     )
     try:
         await asyncio.Event().wait()

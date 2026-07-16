@@ -12,9 +12,9 @@
 4. **公文格式审核**：用户在发送 `.docx` 前或后明确说“格式审核”“按公文格式检查”；只检查实际格式，不审核文字内容。
 5. **多文件联合审核**：用户直接连续发送 2 至 5 份 `.docx` 即可；系统自动归为一次任务，逐份执行原有内容审核，并检查正文与其他文件的一致性。
 
-普通文件仍根据文件名和文档头自动分发到内容审核引擎。公文格式审核不会被自动识别，也不会接入通用 Word 审核主流程。
+普通文件仍根据文件名和文档头自动分发到内容审核引擎。公文格式审核不会被自动识别，只在用户明确提出时建立独立任务。
 
-当前只有“单个 `.docx` 且识别为通用审核”的分支接入底座持久任务执行器。Bot 在 8 秒单/多文件静默分流后先返回任务编号，再由审核专用后台 worker 完成模型审核和结果发送。内参、半月报、公文格式、多文件联合审核和文字审核保持原执行方式，因此不能把本次接入理解为审核模块整体迁移。
+当前五类单项审核已经接入审核专用持久任务执行器：纯文字、单个通用 Word、内参、半月报和公文格式。Bot 对普通文件仍先等待 8 秒完成单/多文件分流；确认是单项审核后返回任务编号，由后台 worker 调用原有对应审核引擎并主动发送结果。多文件联合审核仍保持原执行方式，尚未迁移到持久任务执行器。
 
 ## 架构定位
 
@@ -26,9 +26,12 @@
   -> app/review/document_type.py    (识别内参/半月报)
   -> 内参: app/review/parser.py + format_checker.py + reviewer.py
   -> 半月报: app/review/parser.py + format_checker.py + halfmonthly_reviewer.py
-  -> 用户明确要求格式审核: official_format_checker.py
+  -> 单项审核: task_execution.py + 审核专用 SQLite 队列
+       -> 内参: app/review/parser.py + format_checker.py + reviewer.py
+       -> 半月报: app/review/parser.py + format_checker.py + halfmonthly_reviewer.py
+       -> 通用 Word/文字: general_reviewer.py
+       -> 用户明确要求格式审核: official_format_checker.py
   -> 连续多文件自动联合审核: intake.py + multi_file_reviewer.py
-  -> 单个 Word 通用审核: task_execution.py + 审核专用 SQLite 队列
   -> ../M-Agent-Files/tasks/review/
 
 后续迁移目标：
@@ -48,7 +51,7 @@ app/review/
 ├── reviewer.py             # 内参周报：LLM 调用 + 语义类规则审核
 ├── halfmonthly_reviewer.py # 半月报：LLM 调用 + 半月报专属规则 + 标红定位
 ├── general_reviewer.py     # 通用审核：文字质量审核
-├── task_execution.py       # 单个 Word 通用审核：持久任务、检查点和安全交付
+├── task_execution.py       # 单项审核：持久任务、检查点和安全交付
 ├── quality_evaluation.py   # 通用审核真实文件评测：去重选样、运行和评分数据
 ├── review_metrics.py       # 评测用模型请求、失败和降级阶段统计
 ├── intake.py               # 格式/多文件审核的持久化消息与文件组装
@@ -121,20 +124,20 @@ uv run --locked pytest tests/test_official_format_review.py -q
 # 文件/指令衔接和多文件联合审核测试
 uv run --locked pytest tests/test_review_intake.py tests/test_review_multi_file.py -q
 
-# 单个 Word 通用审核持久任务测试
+# 单项审核持久任务测试
 uv run --locked pytest tests/test_review_task_execution.py tests/test_review_intake.py tests/test_review_bot.py -v
 ```
 
-## 单个 Word 通用审核持久任务
+## 单项审核持久任务
 
-该分支使用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个通用审核任务。独立数据库用于防止未来写作 worker 误领审核任务。
+纯文字、单个通用 Word、内参、半月报和公文格式共用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个单项审核任务。独立数据库用于防止写作 worker 误领审核任务。
 
 执行分为两个检查点：
 
-1. 审核处理：解析 Word、调用通用审核模型、保存报告或 `marked_` Word。
+1. 审核处理：读取冻结的文字或 Word 快照，调用对应审核引擎，保存报告或 `marked_` Word。
 2. 结果交付：记录即将发送，再主动发送文字或附件；成功后记录已交付。
 
-同一企业微信消息重复投递时只保留一个任务。Bot 在审核完成后重启会复用已保存结果，不重复调用模型。队列最终文字或附件只尝试发送一次；如果发送回执超时或恰好在发送过程中中断，系统无法确定企业微信是否已收到，为避免重复文件会停止自动重发，同时提示用户并向运维记录失败任务。管理员根据任务编号核对后处理。后台 worker 意外退出时会记录运维事件并自动重启，不允许 Bot 继续受理而队列静默停止。
+同一企业微信消息重复投递时只保留一个任务。文字正文和 Word 原件保存在任务目录，不写入 SQLite 任务载荷；任务只允许访问自己的 `input/`。Bot 在审核完成后重启会复用已保存结果，不重复调用模型。队列最终文字或附件只尝试发送一次；如果发送回执超时或恰好在发送过程中中断，系统无法确定企业微信是否已收到，为避免重复文件会停止自动重发，同时提示用户并向运维记录失败任务。管理员根据任务编号核对后处理。后台 worker 意外退出时会记录运维事件并自动重启，不允许 Bot 继续受理而队列静默停止。
 
 单文件内容审核启动后，原暂存文件仍保留到 30 分钟有效期结束，供用户随后补说“格式审核”时复用；接入队列不能提前删除这份文件。
 
@@ -148,7 +151,7 @@ M_AGENT_REVIEW_TASK_RECOVERY_SECONDS=5
 M_AGENT_REVIEW_TASK_LEASE_SECONDS=120
 ```
 
-当前尚未给用户开放队列任务取消命令，真实试点验收时一并确定交互方式。内参、半月报、公文格式、多文件和文字审核不得使用这组配置推断为已切流。
+当前尚未给用户开放队列任务取消命令，真实试点验收时一并确定交互方式。多文件联合审核没有使用这组持久任务配置，仍需单独完成稳定性建设后再迁移。
 
 ## 文档类型识别
 
@@ -175,6 +178,8 @@ Bot 根据文件名和文档头前 5 段自动识别：
 3. 格式审核状态为一次性，使用后清除；默认 30 分钟过期，Bot 重启后仍可恢复未过期状态。
 
 文件先发时，原有内容审核可能已经启动；后续格式指令会追加一次独立格式检查，不会取消已经开始的内容审核。
+
+两种顺序最终都会冻结一份独立文件快照并返回“公文格式审核”任务编号，由审核 worker 后台处理；不会与已经开始的内容审核共用检查点。
 
 直接发送文件、只说“帮我审核”，或者明确说“只审核内容，格式不用看”，都不会进入公文格式审核。
 
@@ -277,14 +282,14 @@ Bot 根据文件名和文档头前 5 段自动识别：
 ### 审核流程
 
 1. 用户丢一个 `.docx` 文件到审核 Bot
-2. Bot 立即回:"已收到文件,在努力审核了,请稍等……"
-3. 解析 `.docx`
+2. Bot 立即确认收件，8 秒单/多文件分流后返回内参审核任务编号
+3. 后台 worker 从任务 `input/` 解析 `.docx`
 4. 启动两阶段审核：第二阶段会先在后台启动；第一阶段继续负责格式类规则 + 基础语义审核（默认 1 次模型调用,失败再重试 1 次）
 5. 第二阶段在后台继续完成目录/内容质量审核（默认 1 次模型调用,失败再重试 1 次）
 6. 合并结果后，基于原文生成审核文档：
    - 有问题时返回 `marked_原文件名.docx`
    - 无问题时不回传文档，只回复“没有发现问题，可以走审批了”
-7. 存档到 `../M-Agent-Files/tasks/review/YYYY/MM/<task_id>/`
+7. 存档到 `../M-Agent-Files/tasks/review/YYYY/MM/<task_id>/`，交付成功后记录检查点
 
 ## 半月报
 
@@ -341,14 +346,14 @@ Bot 根据文件名和文档头前 5 段自动识别：
 ### 审核流程
 
 1. 识别文档类型为半月报
-2. 解析 `.docx`
+2. 冻结原文件、返回半月报审核任务编号，后台 worker 解析 `.docx`
 3. 单阶段审核：格式正则 + 代码预检（时间范围、领导职务/排序）+ LLM 语义
 4. 生成 findings，代码类 findings 会带上 `target_text`（如越界日期、错误职务、缺失党内职务对应的人名、排序错误的人名），便于回原文标红
 5. 用 `app/review/error_marker.py` 在原文对应位置添加**红色高亮 + 批注**，生成 `marked_{原文件名}.docx`
 6. 企业微信不再发送"错误1/错误2..."文字列表，直接返回文档：
    - 有问题时返回 `marked_原文件名.docx`
    - 无问题时不回传文档，只回复“没有发现问题，可以走审批了”
-7. 存档到 `../M-Agent-Files/tasks/review/YYYY/MM/YYYYMMDD-NNN/`
+7. 存档到 `../M-Agent-Files/tasks/review/YYYY/MM/<task_id>/`
 
 ### 标红能力
 
@@ -427,7 +432,7 @@ app/review/general_term_checker.py
 ### 审核流程
 
 1. 识别文档类型为通用审核
-2. 解析 `.docx`
+2. 冻结原文件、返回通用审核任务编号，后台 worker 解析 `.docx`
 3. 单阶段审核：格式正则 + 代码规则 + LLM 语义，生成 findings
 4. 有问题时，用 `app/review/error_marker.py` 在原文对应位置添加**红色高亮 + 批注**，生成并发送 `marked_{原文件名}.docx`；不再额外发送重复的“审核完成”文字。
 5. 没有发现问题时，只回复通过话术，不生成、不发送 marked 文件。

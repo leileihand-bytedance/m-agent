@@ -21,7 +21,33 @@ from app.platform.task_status import update_task_status, write_task_status
 
 
 GENERAL_REVIEW_TASK_TYPE = "review_general_docx"
+NEICAN_REVIEW_TASK_TYPE = "review_neican_docx"
+HALF_MONTHLY_REVIEW_TASK_TYPE = "review_halfmonthly_docx"
+OFFICIAL_FORMAT_REVIEW_TASK_TYPE = "review_official_format_docx"
+GENERAL_TEXT_REVIEW_TASK_TYPE = "review_general_text"
 GENERAL_REVIEW_COST_CLASS = "review_llm"
+REVIEW_FILE_TASK_TYPES = frozenset(
+    {
+        GENERAL_REVIEW_TASK_TYPE,
+        NEICAN_REVIEW_TASK_TYPE,
+        HALF_MONTHLY_REVIEW_TASK_TYPE,
+        OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    }
+)
+REVIEW_TASK_TYPES = (
+    GENERAL_REVIEW_TASK_TYPE,
+    NEICAN_REVIEW_TASK_TYPE,
+    HALF_MONTHLY_REVIEW_TASK_TYPE,
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    GENERAL_TEXT_REVIEW_TASK_TYPE,
+)
+_DOCUMENT_TYPE_BY_TASK_TYPE = {
+    GENERAL_REVIEW_TASK_TYPE: "general",
+    NEICAN_REVIEW_TASK_TYPE: "neican",
+    HALF_MONTHLY_REVIEW_TASK_TYPE: "half_monthly",
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE: "official_format",
+    GENERAL_TEXT_REVIEW_TASK_TYPE: "general_text",
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +58,8 @@ class GeneralReviewWorkspace:
     filename: str
     sender_userid: str
     sender_name: str
+    task_type: str = GENERAL_REVIEW_TASK_TYPE
+    input_kind: Literal["docx", "text"] = "docx"
 
 
 @dataclass(frozen=True)
@@ -64,7 +92,7 @@ FailureNotifier = Callable[[str, str, str], Awaitable[None]]
 
 
 class GeneralReviewTaskService:
-    """单文件通用审核的持久任务工作区和分阶段恢复。"""
+    """单项文件/文字审核的持久任务工作区和分阶段恢复。"""
 
     def __init__(
         self,
@@ -93,16 +121,93 @@ class GeneralReviewTaskService:
         filename: str,
         file_bytes: bytes,
     ) -> ReviewTaskSubmission:
+        """兼容原单个通用 Word 审核提交接口。"""
+        return self.submit_file(
+            channel=channel,
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            message_id=message_id,
+            task_type=GENERAL_REVIEW_TASK_TYPE,
+            filename=filename,
+            file_bytes=file_bytes,
+        )
+
+    def submit_file(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        sender_name: str,
+        message_id: str,
+        task_type: str,
+        filename: str,
+        file_bytes: bytes,
+    ) -> ReviewTaskSubmission:
+        if task_type not in REVIEW_FILE_TASK_TYPES:
+            raise ValueError(f"不支持的单项审核任务类型：{task_type}")
+        if Path(filename).suffix.lower() != ".docx":
+            raise ValueError("单项文件审核只支持 .docx")
+        return self._submit_input(
+            channel=channel,
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            message_id=message_id,
+            task_type=task_type,
+            filename=filename,
+            input_kind="docx",
+            input_bytes=file_bytes,
+        )
+
+    def submit_text(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        sender_name: str,
+        message_id: str,
+        text: str,
+    ) -> ReviewTaskSubmission:
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("审核文字不能为空")
+        return self._submit_input(
+            channel=channel,
+            sender_userid=sender_userid,
+            sender_name=sender_name,
+            message_id=message_id,
+            task_type=GENERAL_TEXT_REVIEW_TASK_TYPE,
+            filename="文字消息.txt",
+            input_kind="text",
+            input_bytes=clean_text.encode("utf-8"),
+        )
+
+    def _submit_input(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        sender_name: str,
+        message_id: str,
+        task_type: str,
+        filename: str,
+        input_kind: Literal["docx", "text"],
+        input_bytes: bytes,
+    ) -> ReviewTaskSubmission:
         if not message_id.strip():
             raise ValueError("message_id 不能为空")
-        if not file_bytes:
-            raise ValueError("审核文件不能为空")
+        if not input_bytes:
+            raise ValueError("审核输入不能为空")
         idempotency_key = build_idempotency_key(channel, sender_userid, message_id)
-        task_dir = self._create_workspace(filename=filename, file_bytes=file_bytes)
+        task_dir = self._create_workspace(
+            filename=filename,
+            input_bytes=input_bytes,
+            input_kind=input_kind,
+        )
         input_file = next((task_dir / "input").iterdir())
         payload = {
             "task_dir": str(task_dir),
             "input_file": str(input_file.relative_to(task_dir)),
+            "input_kind": input_kind,
             "filename": filename,
             "sender_name": sender_name,
         }
@@ -111,7 +216,7 @@ class GeneralReviewTaskService:
                 idempotency_key=idempotency_key,
                 channel=channel,
                 user_id=sender_userid,
-                task_type=GENERAL_REVIEW_TASK_TYPE,
+                task_type=task_type,
                 cost_class=GENERAL_REVIEW_COST_CLASS,
                 payload=payload,
                 max_attempts=2,
@@ -133,7 +238,12 @@ class GeneralReviewTaskService:
             source="review_task_submission",
             state_version=task.state_version,
         )
-        self._write_submission_meta(task_dir=task_dir, task=task, filename=filename)
+        self._write_submission_meta(
+            task_dir=task_dir,
+            task=task,
+            filename=filename,
+            document_type=_DOCUMENT_TYPE_BY_TASK_TYPE[task_type],
+        )
         return ReviewTaskSubmission(task=task, created=True)
 
     async def handle(self, task: TaskRecord) -> TaskHandlerResult:
@@ -271,8 +381,18 @@ class GeneralReviewTaskService:
         }
 
     def _workspace_from_task(self, task: TaskRecord) -> GeneralReviewWorkspace:
-        if task.task_type != GENERAL_REVIEW_TASK_TYPE:
-            raise ValueError("任务类型不是单文件通用审核")
+        if task.task_type not in REVIEW_TASK_TYPES:
+            raise ValueError("任务类型不是受支持的单项审核")
+        allowed_payload_fields = {
+            "task_dir",
+            "input_file",
+            "input_kind",
+            "filename",
+            "sender_name",
+        }
+        unexpected_fields = set(task.payload) - allowed_payload_fields
+        if unexpected_fields:
+            raise ValueError("审核任务包含未授权载荷字段")
         task_dir = Path(str(task.payload.get("task_dir", ""))).resolve(strict=True)
         if task_dir == self._reviews_root or not task_dir.is_relative_to(self._reviews_root):
             raise ValueError("任务目录超出审核根目录")
@@ -280,11 +400,21 @@ class GeneralReviewTaskService:
         if relative_input.is_absolute() or ".." in relative_input.parts:
             raise ValueError("审核输入文件引用不安全")
         input_file = (task_dir / relative_input).resolve(strict=True)
-        if not input_file.is_file() or not input_file.is_relative_to(task_dir):
+        input_root = (task_dir / "input").resolve(strict=True)
+        if not input_file.is_file() or not input_file.is_relative_to(input_root):
             raise ValueError("审核输入文件不存在或超出任务目录")
         filename = str(task.payload.get("filename", "")).strip()
         if not filename:
             raise ValueError("审核文件名不能为空")
+        default_kind = "docx" if task.task_type == GENERAL_REVIEW_TASK_TYPE else ""
+        input_kind = str(task.payload.get("input_kind", "") or default_kind)
+        expected_kind = "text" if task.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE else "docx"
+        if input_kind != expected_kind:
+            raise ValueError("审核任务输入类型与任务类型不一致")
+        if input_kind == "docx" and input_file.suffix.lower() != ".docx":
+            raise ValueError("审核任务文件类型无效")
+        if input_kind == "text" and input_file.suffix.lower() != ".txt":
+            raise ValueError("审核文字快照类型无效")
         return GeneralReviewWorkspace(
             task_id=task.task_id,
             task_dir=task_dir,
@@ -292,9 +422,17 @@ class GeneralReviewTaskService:
             filename=filename,
             sender_userid=task.user_id,
             sender_name=str(task.payload.get("sender_name", "")).strip() or task.user_id,
+            task_type=task.task_type,
+            input_kind=input_kind,
         )
 
-    def _create_workspace(self, *, filename: str, file_bytes: bytes) -> Path:
+    def _create_workspace(
+        self,
+        *,
+        filename: str,
+        input_bytes: bytes,
+        input_kind: Literal["docx", "text"],
+    ) -> Path:
         now = datetime.now().astimezone()
         month_dir = self._reviews_root / f"{now:%Y}" / f"{now:%m}"
         month_dir.mkdir(parents=True, exist_ok=True)
@@ -303,8 +441,8 @@ class GeneralReviewTaskService:
         output_dir = task_dir / "output"
         input_dir.mkdir(parents=True, exist_ok=False)
         output_dir.mkdir(parents=True, exist_ok=False)
-        safe_name = _safe_docx_name(filename)
-        (input_dir / safe_name).write_bytes(file_bytes)
+        safe_name = _safe_input_name(filename, input_kind=input_kind)
+        (input_dir / safe_name).write_bytes(input_bytes)
         return task_dir
 
     def _remove_owned_workspace(self, task_dir: Path) -> None:
@@ -373,6 +511,7 @@ class GeneralReviewTaskService:
         task_dir: Path,
         task: TaskRecord,
         filename: str,
+        document_type: str,
     ) -> None:
         meta_path = task_dir / "meta.json"
         temporary = task_dir / f".meta.{uuid4().hex}.tmp"
@@ -380,11 +519,12 @@ class GeneralReviewTaskService:
             json.dumps(
                 {
                     "task_id": task.task_id,
+                    "task_type": task.task_type,
                     "original_filename": filename,
                     "sender_userid": task.user_id,
                     "message_id": "",
                     "queued_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                    "document_type": "general",
+                    "document_type": document_type,
                     "queue_mode": "persistent",
                 },
                 ensure_ascii=False,
@@ -401,16 +541,24 @@ class GeneralReviewTaskService:
             return
 
 
-def _safe_docx_name(filename: str) -> str:
-    path = Path(filename or "uploaded.docx")
+def _safe_input_name(filename: str, *, input_kind: Literal["docx", "text"]) -> str:
+    fallback = "文字消息.txt" if input_kind == "text" else "uploaded.docx"
+    path = Path(filename or fallback)
     stem = path.stem or "uploaded"
     safe_stem = re.sub(r"[^\w一-鿿\-_]", "_", stem)
-    return f"{safe_stem}.docx"
+    suffix = ".txt" if input_kind == "text" else ".docx"
+    return f"{safe_stem}{suffix}"
 
 
 __all__ = [
+    "GENERAL_TEXT_REVIEW_TASK_TYPE",
     "GENERAL_REVIEW_COST_CLASS",
     "GENERAL_REVIEW_TASK_TYPE",
+    "HALF_MONTHLY_REVIEW_TASK_TYPE",
+    "NEICAN_REVIEW_TASK_TYPE",
+    "OFFICIAL_FORMAT_REVIEW_TASK_TYPE",
+    "REVIEW_FILE_TASK_TYPES",
+    "REVIEW_TASK_TYPES",
     "GeneralReviewTaskService",
     "GeneralReviewWorkspace",
     "PreparedReviewDelivery",

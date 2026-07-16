@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import zipfile
@@ -51,9 +52,20 @@ from app.review.main import (  # noqa: E402
     _build_queued_attachment_delivery,
     _run_review_task_worker_supervised,
     _send_queued_review_text,
+    _process_queued_single_review,
+    _queued_review_acceptance_message,
+    _review_task_type_for_document_type,
     ReviewDeliveryStatusUncertain,
 )
 from app.review.document_type import DocumentType  # noqa: E402
+from app.review.task_execution import (  # noqa: E402
+    GENERAL_TEXT_REVIEW_TASK_TYPE,
+    GENERAL_REVIEW_TASK_TYPE,
+    HALF_MONTHLY_REVIEW_TASK_TYPE,
+    NEICAN_REVIEW_TASK_TYPE,
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    GeneralReviewWorkspace,
+)
 from app.review.reviewer import ReviewResult, Finding  # noqa: E402
 from app.review.multi_file_reviewer import (  # noqa: E402
     MultiFileReviewBundle,
@@ -291,6 +303,18 @@ def test_save_review_to_existing_queue_directory_keeps_running_status(tmp_path: 
         source="task_execution",
         state_version=2,
     )
+    (review_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "task_id": "queue-task-1",
+                "queue_mode": "persistent",
+                "task_type": GENERAL_REVIEW_TASK_TYPE,
+                "queued_at": "2026-07-16T09:00:00+08:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     result = ReviewResult(
         findings=[],
         total_rules=10,
@@ -320,6 +344,201 @@ def test_save_review_to_existing_queue_directory_keeps_running_status(tmp_path: 
     meta = json.loads((review_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["task_id"] == "queue-task-1"
     assert meta["message_id"] == "message-1"
+    assert meta["queue_mode"] == "persistent"
+    assert meta["task_type"] == GENERAL_REVIEW_TASK_TYPE
+    assert meta["queued_at"] == "2026-07-16T09:00:00+08:00"
+
+
+@pytest.mark.parametrize(
+    ("doc_type", "task_type"),
+    [
+        (DocumentType.GENERAL, GENERAL_REVIEW_TASK_TYPE),
+        (DocumentType.HALF_MONTHLY, HALF_MONTHLY_REVIEW_TASK_TYPE),
+        (DocumentType.NEI_CAN, NEICAN_REVIEW_TASK_TYPE),
+        (DocumentType.OFFICIAL_FORMAT, OFFICIAL_FORMAT_REVIEW_TASK_TYPE),
+    ],
+)
+def test_review_task_type_mapping_covers_every_single_file_review(
+    doc_type: DocumentType,
+    task_type: str,
+):
+    assert _review_task_type_for_document_type(doc_type) == task_type
+
+
+def test_queued_review_acceptance_message_names_actual_review_type():
+    assert _queued_review_acceptance_message(
+        review_label="半月报审核",
+        task_id="task-123",
+        created=True,
+        input_label="这份文件",
+    ) == "已进入半月报审核队列，任务编号：task-123。完成后会自动发送结果。"
+    assert "无需重复提交" in _queued_review_acceptance_message(
+        review_label="文字审核",
+        task_id="task-123",
+        created=False,
+        input_label="这段文字",
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_type", "filename", "engine_name"),
+    [
+        (GENERAL_REVIEW_TASK_TYPE, "材料.docx", "general"),
+        (HALF_MONTHLY_REVIEW_TASK_TYPE, "信息动态半月报.docx", "halfmonthly"),
+        (NEICAN_REVIEW_TASK_TYPE, "信息内参周报.docx", "neican"),
+        (OFFICIAL_FORMAT_REVIEW_TASK_TYPE, "请示.docx", "official_format"),
+    ],
+)
+def test_persistent_single_review_routes_to_existing_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    task_type: str,
+    filename: str,
+    engine_name: str,
+):
+    from app.review import general_reviewer, halfmonthly_reviewer, official_format_checker, reviewer
+
+    calls: list[str] = []
+
+    def passed_result(name: str) -> ReviewResult:
+        return ReviewResult(findings=[], total_rules=1, passed_rules=1, filename=name)
+
+    async def fake_general(_paragraphs, _rules, name):
+        calls.append("general")
+        return passed_result(name)
+
+    async def fake_halfmonthly(_paragraphs, _rules, name, **_kwargs):
+        calls.append("halfmonthly")
+        return passed_result(name)
+
+    async def fake_phase1(_paragraphs, _rules, name, **_kwargs):
+        calls.append("neican-phase1")
+        return passed_result(name)
+
+    async def fake_phase2(_paragraphs, _rules, name, **_kwargs):
+        calls.append("neican-phase2")
+        return passed_result(name)
+
+    def fake_official_format(_path, name):
+        calls.append("official_format")
+        return passed_result(name)
+
+    monkeypatch.setattr(general_reviewer, "review_general", fake_general)
+    monkeypatch.setattr(halfmonthly_reviewer, "review_halfmonthly", fake_halfmonthly)
+    monkeypatch.setattr(reviewer, "review_phase1", fake_phase1)
+    monkeypatch.setattr(reviewer, "review_phase2", fake_phase2)
+    monkeypatch.setattr(official_format_checker, "review_official_format", fake_official_format)
+
+    task_dir = tmp_path / "reviews" / "queued-task"
+    input_dir = task_dir / "input"
+    (task_dir / "output").mkdir(parents=True)
+    input_dir.mkdir(parents=True)
+    input_file = input_dir / filename
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("测试内容")
+    document.save(input_file)
+    workspace = GeneralReviewWorkspace(
+        task_id="task-123",
+        task_dir=task_dir,
+        input_file=input_file,
+        filename=filename,
+        sender_userid="user-1",
+        sender_name="User One",
+        task_type=task_type,
+    )
+    config = ReviewConfig(
+        wecom_bot_id="bot",
+        wecom_bot_secret="secret",
+        rules_path=tmp_path / "rules.md",
+        reviews_dir=tmp_path / "reviews",
+        logs_dir=tmp_path / "logs",
+        admin_user_id="",
+        admin_name="",
+        notification_cooldown=300,
+        direct_admin_notifications=False,
+        require_registration=False,
+    )
+
+    delivery = asyncio.run(
+        _process_queued_single_review(
+            workspace,
+            config=config,
+            neican_rules_text="rules",
+        )
+    )
+
+    assert delivery.kind == "text"
+    if engine_name == "neican":
+        assert sorted(calls) == ["neican-phase1", "neican-phase2"]
+    else:
+        assert calls == [engine_name]
+    assert (task_dir / "output" / "report.md").is_file()
+
+
+def test_persistent_text_review_uses_snapshotted_text_and_returns_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import app.review.main as review_main
+
+    seen: list[str] = []
+
+    async def fake_text_review(content: str, _config: ReviewConfig):
+        seen.append(content)
+        return (
+            ReviewResult(
+                findings=[],
+                total_rules=1,
+                passed_rules=1,
+                filename="文字消息",
+            ),
+            [content],
+        )
+
+    monkeypatch.setattr(review_main, "_review_text_result", fake_text_review)
+    task_dir = tmp_path / "reviews" / "queued-text"
+    input_dir = task_dir / "input"
+    (task_dir / "output").mkdir(parents=True)
+    input_dir.mkdir(parents=True)
+    input_file = input_dir / "文字消息.txt"
+    input_file.write_text("需要审核的文字", encoding="utf-8")
+    workspace = GeneralReviewWorkspace(
+        task_id="task-text",
+        task_dir=task_dir,
+        input_file=input_file,
+        filename="文字消息.txt",
+        sender_userid="user-1",
+        sender_name="User One",
+        task_type=GENERAL_TEXT_REVIEW_TASK_TYPE,
+        input_kind="text",
+    )
+    config = ReviewConfig(
+        wecom_bot_id="bot",
+        wecom_bot_secret="secret",
+        rules_path=tmp_path / "rules.md",
+        reviews_dir=tmp_path / "reviews",
+        logs_dir=tmp_path / "logs",
+        admin_user_id="",
+        admin_name="",
+        notification_cooldown=300,
+        direct_admin_notifications=False,
+        require_registration=False,
+    )
+
+    delivery = asyncio.run(
+        _process_queued_single_review(
+            workspace,
+            config=config,
+            neican_rules_text="rules",
+        )
+    )
+
+    assert seen == ["需要审核的文字"]
+    assert delivery.kind == "text"
+    assert "未发现低级错误" in delivery.text
+    assert (task_dir / "output" / "report.md").is_file()
 
 
 def test_save_review_increments_index():
