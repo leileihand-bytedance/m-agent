@@ -20,6 +20,15 @@ OOXML_MAIN_CONTENT_TYPES = {
     ),
 }
 
+CONTENT_TYPES_NAMESPACE = (
+    "http://schemas.openxmlformats.org/package/2006/content-types"
+)
+CONTENT_TYPE_DEFAULT_TAG = f"{{{CONTENT_TYPES_NAMESPACE}}}Default"
+CONTENT_TYPE_OVERRIDE_TAG = f"{{{CONTENT_TYPES_NAMESPACE}}}Override"
+EMBEDDED_XLSB_CONTENT_TYPE = (
+    "application/vnd.ms-excel.sheet.binary.macroenabled.12"
+)
+
 
 class DocumentSecurityError(ValueError):
     pass
@@ -104,25 +113,108 @@ class DocumentSecurityValidator:
                 content_type_root = ET.fromstring(content_types)
             except ET.ParseError as exc:
                 raise DocumentSecurityError("Office 文件类型信息无法读取") from exc
-            part_content_types = {
-                str(item.attrib.get("PartName", "")).lstrip("/"): str(
-                    item.attrib.get("ContentType", "")
-                )
-                for item in content_type_root
-                if item.attrib.get("PartName")
-            }
-            main_content_type = part_content_types.get(expected_part, "")
+            content_type_entries = list(content_type_root)
             has_vba_project = any(
                 "vbaproject" in name.lower() for name in names
             ) or any(
                 "vbaproject" in str(item.attrib.get("PartName", "")).lower()
                 or "vbaproject" in str(item.attrib.get("ContentType", "")).lower()
-                for item in content_type_root
+                for item in content_type_entries
+            ) or _has_vba_project_relationship(
+                archive,
+                names,
             )
-            if "macroenabled" in main_content_type.lower() or has_vba_project:
+            if has_vba_project:
                 raise DocumentSecurityError("暂不支持包含宏的 Office 文件")
+
+            for item in content_type_entries:
+                content_type = str(item.attrib.get("ContentType", ""))
+                if "macroenabled" not in content_type.lower():
+                    continue
+                if not _is_allowed_pptx_embedded_xlsb(
+                    item,
+                    names=names,
+                    document_format=document_format,
+                ):
+                    raise DocumentSecurityError("暂不支持包含宏的 Office 文件")
+
+            canonical_main_part = f"/{expected_part}"
+            main_overrides = [
+                item
+                for item in content_type_entries
+                if item.tag == CONTENT_TYPE_OVERRIDE_TAG
+                and item.attrib.get("PartName") == canonical_main_part
+            ]
+            if len(main_overrides) != 1:
+                raise DocumentSecurityError("Office 文件内容与扩展名不一致")
+            main_content_type = str(main_overrides[0].attrib.get("ContentType", ""))
             if main_content_type.lower() != expected_content_type.lower():
                 raise DocumentSecurityError("Office 文件内容与扩展名不一致")
+
+
+def _has_vba_project_relationship(
+    archive: zipfile.ZipFile,
+    names: set[str],
+) -> bool:
+    for name in names:
+        if not name.lower().endswith(".rels"):
+            continue
+        try:
+            relationship_root = ET.fromstring(archive.read(name))
+        except (ET.ParseError, KeyError, RuntimeError, zipfile.BadZipFile) as exc:
+            raise DocumentSecurityError("Office 文件关系信息无法读取") from exc
+        if any(
+            "vbaproject" in str(item.attrib.get("Type", "")).lower()
+            for item in relationship_root.iter()
+        ):
+            return True
+    return False
+
+
+def _is_allowed_pptx_embedded_xlsb(
+    item: ET.Element,
+    *,
+    names: set[str],
+    document_format: DocumentFormat,
+) -> bool:
+    content_type = str(item.attrib.get("ContentType", "")).lower()
+    if (
+        document_format != DocumentFormat.PPTX
+        or content_type != EMBEDDED_XLSB_CONTENT_TYPE
+    ):
+        return False
+
+    if item.tag == CONTENT_TYPE_DEFAULT_TAG:
+        if str(item.attrib.get("Extension", "")).lower() != "xlsb":
+            return False
+        xlsb_parts = [name for name in names if name.lower().endswith(".xlsb")]
+        return bool(xlsb_parts) and all(
+            _is_canonical_pptx_embedding(name) for name in xlsb_parts
+        )
+
+    if item.tag == CONTENT_TYPE_OVERRIDE_TAG:
+        part_name = str(item.attrib.get("PartName", ""))
+        if not part_name.startswith("/") or part_name.startswith("//"):
+            return False
+        archive_name = part_name[1:]
+        return archive_name in names and _is_canonical_pptx_embedding(archive_name)
+
+    return False
+
+
+def _is_canonical_pptx_embedding(name: str) -> bool:
+    prefix = "ppt/embeddings/"
+    if not name.startswith(prefix):
+        return False
+    filename = name[len(prefix):]
+    return (
+        bool(filename)
+        and filename.endswith(".xlsb")
+        and "/" not in filename
+        and "\\" not in filename
+        and "%" not in filename
+        and filename not in {".", ".."}
+    )
 
 
 def _format_from_suffix(suffix: str) -> DocumentFormat:

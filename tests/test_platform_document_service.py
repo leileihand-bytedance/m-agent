@@ -81,8 +81,11 @@ def _inject_ooxml_parts(
     *,
     content_type_entries: str,
     parts: dict[str, bytes],
+    content_type_replacements: dict[str, str] | None = None,
+    relationship_entries: str = "",
 ) -> None:
     rebuilt = path.with_suffix(".rebuilt")
+    relationship_updated = False
     with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
         rebuilt,
         "w",
@@ -92,11 +95,32 @@ def _inject_ooxml_parts(
             payload = source.read(info.filename)
             if info.filename == "[Content_Types].xml":
                 text = payload.decode("utf-8")
+                for old, new in (content_type_replacements or {}).items():
+                    text = text.replace(old, new)
                 payload = text.replace(
                     "</Types>",
                     f"{content_type_entries}</Types>",
                 ).encode("utf-8")
+            if (
+                relationship_entries
+                and info.filename == "ppt/slides/_rels/slide1.xml.rels"
+            ):
+                text = payload.decode("utf-8")
+                payload = text.replace(
+                    "</Relationships>",
+                    f"{relationship_entries}</Relationships>",
+                ).encode("utf-8")
+                relationship_updated = True
             target.writestr(info, payload)
+        if relationship_entries and not relationship_updated:
+            target.writestr(
+                "ppt/slides/_rels/slide1.xml.rels",
+                (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                    'package/2006/relationships">'
+                    f"{relationship_entries}</Relationships>"
+                ).encode("utf-8"),
+            )
         for name, payload in parts.items():
             target.writestr(name, payload)
     rebuilt.replace(path)
@@ -216,6 +240,11 @@ def test_document_service_allows_inert_embedded_xlsb_chart_data(tmp_path):
             'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
         ),
         parts={"ppt/embeddings/chart-data.xlsb": b"inert chart cache"},
+        relationship_entries=(
+            '<Relationship Id="rIdChartData" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+            'relationships/package" Target="../embeddings/chart-data.xlsb"/>'
+        ),
     )
 
     artifact = DocumentService().parse(
@@ -225,6 +254,88 @@ def test_document_service_allows_inert_embedded_xlsb_chart_data(tmp_path):
     )
 
     assert artifact.format == DocumentFormat.PPTX
+
+
+def test_document_service_allows_canonical_embedded_xlsb_override(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "含覆盖声明图表数据.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Override PartName="/ppt/embeddings/chart-data.xlsb" '
+            'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
+        ),
+        parts={"ppt/embeddings/chart-data.xlsb": b"inert chart cache"},
+        relationship_entries=(
+            '<Relationship Id="rIdChartData" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+            'relationships/package" Target="../embeddings/chart-data.xlsb"/>'
+        ),
+    )
+
+    artifact = DocumentService().parse(
+        path,
+        allowed_root=input_dir,
+        work_dir=tmp_path / "work",
+    )
+
+    assert artifact.format == DocumentFormat.PPTX
+
+
+def test_document_service_rejects_xlsb_outside_ppt_embeddings(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "异常位置二进制工作簿.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xlsb" '
+            'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
+        ),
+        parts={"ppt/custom/chart-data.xlsb": b"unexpected workbook"},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+@pytest.mark.parametrize(
+    "part_name",
+    (
+        "ppt/embeddings/%2e%2e%2fevil.xlsb",
+        "ppt/embeddings/..\\evil.xlsb",
+    ),
+)
+def test_document_service_rejects_noncanonical_xlsb_embedding_paths(
+    tmp_path,
+    part_name,
+):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "非规范嵌入路径.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            f'<Override PartName="/{part_name}" '
+            'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
+        ),
+        parts={part_name: b"unexpected workbook"},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
 
 
 def test_document_service_still_rejects_actual_vba_project_in_pptx(tmp_path):
@@ -239,6 +350,184 @@ def test_document_service_still_rejects_actual_vba_project_in_pptx(tmp_path):
             'ContentType="application/vnd.ms-office.vbaProject"/>'
         ),
         parts={"ppt/vbaProject.bin": b"macro project"},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_macro_enabled_presentation_main_part(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "伪装主文档宏.pptx"
+    _make_pptx(path)
+    safe_type = (
+        "application/vnd.openxmlformats-officedocument.presentationml."
+        "presentation.main+xml"
+    )
+    macro_type = "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml"
+    _inject_ooxml_parts(
+        path,
+        content_type_entries="",
+        parts={},
+        content_type_replacements={safe_type: macro_type},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_noncanonical_main_override_bypass(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "非规范主部件.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xml" '
+            'ContentType="application/vnd.ms-powerpoint.presentation.'
+            'macroEnabled.main+xml"/>'
+        ),
+        parts={},
+        content_type_replacements={
+            'PartName="/ppt/presentation.xml"':
+            'PartName="//ppt/presentation.xml"'
+        },
+    )
+
+    with pytest.raises(DocumentSecurityError):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_fake_content_type_element_bypass(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "伪元素主部件.pptx"
+    _make_pptx(path)
+    safe_type = (
+        "application/vnd.openxmlformats-officedocument.presentationml."
+        "presentation.main+xml"
+    )
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xml" '
+            'ContentType="application/vnd.ms-powerpoint.presentation.'
+            'macroEnabled.main+xml"/>'
+            f'<Fake PartName="/ppt/presentation.xml" ContentType="{safe_type}"/>'
+        ),
+        parts={},
+        content_type_replacements={
+            'PartName="/ppt/presentation.xml"':
+            'PartName="/ppt/not-the-main-presentation.xml"'
+        },
+    )
+
+    with pytest.raises(DocumentSecurityError):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_duplicate_main_overrides(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "重复主部件声明.pptx"
+    _make_pptx(path)
+    safe_type = (
+        "application/vnd.openxmlformats-officedocument.presentationml."
+        "presentation.main+xml"
+    )
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Override PartName="/ppt/presentation.xml" '
+            f'ContentType="{safe_type}"/>'
+        ),
+        parts={},
+    )
+
+    with pytest.raises(DocumentSecurityError):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_other_macro_enabled_embedded_types(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "嵌入宏工作簿.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xlsm" '
+            'ContentType="application/vnd.ms-excel.sheet.macroEnabled.12"/>'
+        ),
+        parts={"ppt/embeddings/embedded.xlsm": b"macro-enabled workbook"},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_rejects_vba_project_relationship(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "宏关系.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries="",
+        parts={},
+        relationship_entries=(
+            '<Relationship Id="rIdVba" '
+            'Type="http://schemas.microsoft.com/office/2006/relationships/'
+            'vbaProject" Target="../hidden.bin"/>'
+        ),
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
+
+
+def test_document_service_does_not_allow_embedded_xlsb_in_docx(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "嵌入二进制工作簿.docx"
+    _make_docx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xlsb" '
+            'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
+        ),
+        parts={"word/embeddings/chart-data.xlsb": b"embedded workbook"},
     )
 
     with pytest.raises(DocumentSecurityError, match="包含宏"):

@@ -123,6 +123,15 @@ uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_p
 
 重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖七类单项任务分派、处理与发送检查点、已完成任务不重复审核、单段/多段队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、Word 单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、可见/隐藏/嵌套/未闭合 slide 页码映射、普通 HTML 段落兜底、消息与报告定位、短文数据一致性、正文不进 SQLite 和不生成标记文件。PPT 专项按上文命令覆盖独立规则、双边证据、无建议格式和多段交付。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
 
+修改独立材料润色 Bot 或入口级 Skill 白名单时，还要运行：
+
+```bash
+uv run --locked pytest tests/test_rewrite_bot.py tests/test_rewrite_workflow.py tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_app.py -v
+uv run --locked python -m app.rewrite_bot --check-config
+```
+
+重点验证入口注册表中只有 `rewrite`，直报、简报等请求不能被执行；文件和网页链接被明确拒绝；任务和会话目录与原写作 Bot 隔离；配置检查只显示遮罩后的 Bot ID，不输出 Secret。
+
 ### 持久任务生产接入验收
 
 持久化执行器按任务类型分批接入。当前已接入纯文字、单个通用 Word、内参、半月报、公文格式、单个静态 HTML 和单份 PPTX 七类单项审核，以及直报、`writer1`、`writer2`；审核和写作使用独立 SQLite。`research_synthesis` 和多文件联合审核仍走旧路径，不能因为共用入口就视为已切流。
@@ -322,7 +331,7 @@ uv run --locked pytest tests/test_platform_tools.py tests/test_platform_builtin_
 uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_file_readers.py tests/test_platform_data_paths.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点确认：格式伪造、路径越界、异常压缩包、真实 VBA 项目和超限文件被拦截；PPT 图表内嵌 `.xlsb` 数据不会仅因内容类型含 `macroEnabled` 被误判为主文档宏，也不会被执行或进入审核正文；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 只 OCR 标记页，失败仍保留待 OCR 位置；PPT 转换不复用旧 PDF；页面输出不无限累积；总时间、页数、像素和容量限制生效；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
+重点确认：格式伪造、路径越界、异常压缩包、真实 VBA 项目、VBA 关系、其他 `macroEnabled` 部件和超限文件被拦截；主部件声明必须使用标准命名空间、规范路径且保持唯一。只允许 PPTX 中 `ppt/embeddings/*.xlsb` 使用标准 XLSB 类型例外；PPT 独立审核不会单独解析该工作簿或把其内容送入模型。DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 只 OCR 标记页，失败仍保留待 OCR 位置；PPT 转换不复用旧 PDF；页面输出不无限累积；总时间、页数、像素和容量限制生效；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
 
 审核 Bot 的格式指令衔接或多文件联合审核另需跑：
 
