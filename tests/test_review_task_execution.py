@@ -14,6 +14,7 @@ from app.platform.task_execution import (
     TaskRepository,
 )
 from app.review.task_execution import (
+    GENERAL_HTML_REVIEW_TASK_TYPE,
     GENERAL_TEXT_REVIEW_TASK_TYPE,
     HALF_MONTHLY_REVIEW_TASK_TYPE,
     NEICAN_REVIEW_TASK_TYPE,
@@ -211,6 +212,80 @@ def test_text_review_content_is_snapshotted_outside_sqlite_payload(tmp_path: Pat
     assert content.encode("utf-8") not in db_path.read_bytes()
     assert seen[0].input_kind == "text"
     assert seen[0].input_file.read_text(encoding="utf-8") == content
+
+
+def test_html_review_submission_freezes_input_without_sqlite_body(tmp_path: Path):
+    db_path = tmp_path / "runtime" / "review.sqlite3"
+    repository = TaskRepository(db_path)
+    seen = []
+
+    async def processor(workspace):
+        seen.append(workspace)
+        return PreparedReviewDelivery.text("HTML审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    content = b"<p>unique-html-body-20260716</p>"
+
+    first = service.submit_file(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="html-message-001",
+        task_type=GENERAL_HTML_REVIEW_TASK_TYPE,
+        filename="report.htm",
+        file_bytes=content,
+    )
+    duplicate = service.submit_file(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="html-message-001",
+        task_type=GENERAL_HTML_REVIEW_TASK_TYPE,
+        filename="report.htm",
+        file_bytes=content,
+    )
+    result = asyncio.run(service.handle(first.task))
+
+    assert result.status == "completed"
+    assert first.created is True
+    assert duplicate.created is False
+    assert duplicate.task.task_id == first.task.task_id
+    assert repository.count_tasks() == 1
+    assert first.task.payload["input_kind"] == "html"
+    assert content not in db_path.read_bytes()
+    task_dir = Path(str(first.task.payload["task_dir"]))
+    input_file = task_dir / str(first.task.payload["input_file"])
+    assert input_file.name == "report.htm"
+    assert input_file.read_bytes() == content
+    assert seen[0].input_kind == "html"
+
+
+def test_html_review_task_rejects_non_html_suffix(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("HTML审核完成。")
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+
+    with pytest.raises(ValueError, match="文件后缀"):
+        service.submit_file(
+            channel="wecom",
+            sender_userid="user-1",
+            sender_name="User One",
+            message_id="html-message-002",
+            task_type=GENERAL_HTML_REVIEW_TASK_TYPE,
+            filename="forged.docx",
+            file_bytes=b"<p>HTML body</p>",
+        )
 
 
 def test_multi_file_task_type_cannot_enter_single_review_service(tmp_path: Path):

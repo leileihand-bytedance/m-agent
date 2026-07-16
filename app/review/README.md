@@ -4,18 +4,19 @@
 
 ## 这是什么
 
-`app/review/` 是 M-Agent 的旧审核企业微信 Bot，支持三种自动识别的 Word 内容审核类型、一种需要用户明确提出的独立格式审核、独立 PPT 低级错误审核，以及多文件联合审核：
+`app/review/` 是 M-Agent 的旧审核企业微信 Bot，支持 Word、直接文字、静态 HTML 文字审核、独立 PPT 低级错误审核、一种需要用户明确提出的公文格式审核，以及 Word 多文件联合审核：
 
 1. **内参周报** (`微众银行信息内参周报...`)：按 `app/data/rules.md` 审核。
 2. **半月报** (`信息动态半月报...`)：按 `app/review/rules_halfmonthly.md` 审核。
 3. **通用审核** (其他 `.docx`)：按 `app/review/rules_general.md` 审核文字质量。
-4. **公文格式审核**：用户在发送 `.docx` 前或后明确说“格式审核”“按公文格式检查”；只检查实际格式，不审核文字内容。
-5. **多文件联合审核**：用户直接连续发送 2 至 5 份 `.docx` 即可；系统自动归为一次任务，逐份执行原有内容审核，并检查正文与其他文件的一致性。
-6. **PPT 低级错误审核**：用户直接发送单份 `.pptx`；检查可编辑文本框、表格和图表文字中的低级错误及单份 PPT 内部一致性，只返回文字结果。
+4. **HTML 文字审核**：单个 `.html/.htm` 文件只提取静态可见文字，复用通用审核检查低级错误、语病和前后数据一致性，只返回审核消息。
+5. **PPT 低级错误审核**：用户直接发送单份 `.pptx`；检查可编辑文本框、表格和图表文字中的低级错误及单份 PPT 内部一致性，只返回文字结果。
+6. **公文格式审核**：用户在发送 `.docx` 前或后明确说“格式审核”“按公文格式检查”；只检查实际格式，不审核文字内容。
+7. **多文件联合审核**：用户直接连续发送 2 至 5 份 `.docx` 即可；系统自动归为一次任务，逐份执行原有内容审核，并检查正文与其他文件的一致性。
 
 普通文件仍根据文件名和文档头自动分发到内容审核引擎。公文格式审核不会被自动识别，只在用户明确提出时建立独立任务。
 
-当前六类单项审核已经接入审核专用持久任务执行器：纯文字、单个通用 Word、内参、半月报、公文格式和 PPT 低级错误审核。Bot 对普通 Word 仍先等待 8 秒完成单/多文件分流；PPTX 不进入该归集过程，直接作为独立单文件任务入队。文件到达时已经即时确认收件，确认是单项审核并入队后不再重复发送“进入队列”或审核类型提示，由后台 worker 调用对应审核引擎并主动发送结果。后台始终保留任务编号，正常受理和重复提交提示不向用户展示。多文件联合审核仍保持原执行方式，尚未迁移到持久任务执行器。
+当前七类单项审核已经接入审核专用持久任务执行器：纯文字、单个通用 Word、内参、半月报、公文格式、单个 HTML 和单份 PPTX。普通 Word 仍先等待 8 秒完成单/多文件分流；HTML 和 PPTX 不进入该窗口，分别直接作为独立单项任务入队。文件到达时已经即时确认收件，确认是单项审核并入队后不再重复发送“进入队列”或审核类型提示，由后台 worker 调用对应审核引擎并主动发送结果。后台始终保留任务编号，正常受理和重复提交提示不向用户展示。多文件联合审核仍保持原执行方式，尚未迁移到持久任务执行器。
 
 “也做一下文字审核”“再做一下内容审核”等完整短句属于对刚发文件的操作要求，不作为一段待审正文另建纯文字任务；包含正常陈述内容的长句仍按文字材料处理。直接发送普通 Word 已经默认包含文字内容审核，重复要求只返回简短确认。
 
@@ -37,6 +38,7 @@ PPT 低级错误审核已经作为独立业务包接入企业微信审核 Bot。
        -> 内参: app/review/parser.py + format_checker.py + reviewer.py
        -> 半月报: app/review/parser.py + format_checker.py + halfmonthly_reviewer.py
        -> 通用 Word/文字: general_reviewer.py
+       -> 静态 HTML: html_parser.py + general_reviewer.py
        -> 用户明确要求格式审核: official_format_checker.py
        -> 单份 PPTX 低级错误: ppt/（独立提取、规则、模型证据校验和文字格式）
   -> 连续多文件自动联合审核: intake.py + multi_file_reviewer.py
@@ -56,6 +58,7 @@ PPT 低级错误审核已经作为独立业务包接入企业微信审核 Bot。
 app/review/
 ├── __init__.py             # 公开 API
 ├── parser.py               # .docx 解析(复用 zipfile + ET)
+├── html_parser.py          # .html/.htm 静态可见文字解析（不执行脚本/网络）
 ├── reviewer.py             # 内参周报：LLM 调用 + 语义类规则审核
 ├── halfmonthly_reviewer.py # 半月报：LLM 调用 + 半月报专属规则 + 标红定位
 ├── general_reviewer.py     # 通用审核：文字质量审核
@@ -127,6 +130,9 @@ uv run --locked pytest tests/test_review_halfmonthly.py -q
 uv run --locked pytest tests/test_review_general.py -q
 uv run --locked pytest tests/test_review_general_rules.py -q
 
+# HTML 静态文字审核测试
+uv run --locked pytest tests/test_review_html.py -q
+
 # 独立公文格式审核测试
 uv run --locked pytest tests/test_official_format_review.py -q
 
@@ -142,11 +148,11 @@ uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_
 
 ## 单项审核持久任务
 
-纯文字、单个通用 Word、内参、半月报、公文格式和单份 PPTX 共用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个单项审核任务。独立数据库用于防止写作 worker 误领审核任务。队列生成的纯文字结果和异常提示使用企业微信主动 Markdown 消息发送；主动发送接口不支持普通 `text` 类型。较长的纯文字结果可以在同一个持久检查点中保存为多段并按顺序发送，全部发送成功后才标记为已交付。
+纯文字、单个通用 Word、内参、半月报、公文格式、单个 HTML 和单份 PPTX 共用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个单项审核任务。独立数据库用于防止写作 worker 误领审核任务。队列生成的纯文字、HTML 或 PPTX 审核结果和异常提示使用企业微信主动 Markdown 消息发送；主动发送接口不支持普通 `text` 类型。较长的纯文字结果可以在同一个持久检查点中保存为多段并按顺序发送，全部发送成功后才标记为已交付。
 
 执行分为两个检查点：
 
-1. 审核处理：读取冻结的文字或 Word 快照，调用对应审核引擎，保存报告或 `marked_` Word。
+1. 审核处理：读取冻结的文字、Word、HTML 或 PPTX 快照，调用对应审核引擎，保存结果；只有 Word 内容/格式审核按原规则生成 `marked_` Word。
 2. 结果交付：记录即将发送，再主动发送文字或附件；成功后记录已交付。
 
 同一企业微信消息重复投递时只保留一个任务。文字正文和 Word 原件保存在任务目录，不写入 SQLite 任务载荷；任务只允许访问自己的 `input/`。Bot 在审核完成后重启会复用已保存结果，不重复调用模型。队列最终文字或附件只尝试发送一次；如果发送回执超时或恰好在发送过程中中断，系统无法确定企业微信是否已收到，为避免重复文件会停止自动重发，同时提示用户并向运维记录失败任务。此时用户看到“处理编号”，管理员据此关联后台完整任务记录。后台 worker 意外退出时会记录运维事件并自动重启，不允许 Bot 继续受理而队列静默停止。
@@ -637,8 +643,8 @@ uv run --locked pytest tests/test_review_quality_evaluation.py -v
 
 ## 拒接规则
 
-- **非文件/文字消息**(图片/语音/链接等)→ 回:"本入口接收 .docx 文件或直接发送文字,请发送需要审核的内容"
-- **非 .docx 文件**(.pdf/.txt/.md 等)→ 同上拒接
+- **非文件/文字消息**(图片/语音/链接等)→ 回:"本入口接收 .docx、.html/.htm、.pptx 文件或直接发送文字，请发送需要审核的内容"
+- **其他文件**(.pdf/.txt/.md 等)→ 同上拒接
 - **空文件/解析失败/空文字** → 回明确错误信息
 
 ## 文字消息审核
@@ -658,6 +664,20 @@ uv run --locked pytest tests/test_review_quality_evaluation.py -v
 - 文字消息**不会生成 marked 文档**,只返回文本意见，但现在会保存 `input/文字消息.txt`、`output/report.md` 和 `meta.json`，便于事后复盘
 - 文字消息固定走**通用审核**,不走内参/半月报规则
 - 超长文字会自动按 `6000` 字符拆 chunk 做逐段审核；`200` 至 `100000` 字同时增加通篇逻辑校对
+
+## HTML 文件审核
+
+用户可以直接发送单个 `.html` 或 `.htm` 文件。HTML 不进入 Word 多文件静默归集，下载和大小校验后直接登记为独立持久任务。
+
+处理规则：
+
+1. 只读取文件源码中已有的静态文字，不执行 JavaScript，不下载脚本、样式、接口数据、图片或字体，也不访问页面链接。
+2. 忽略注释、`head`、`script`、`style`、`template`、`noscript`、`svg`、`canvas`，以及带 `hidden`、`aria-hidden="true"` 或行内 `display:none` / `visibility:hidden` 的元素；未打开的 `dialog` 不提取，未展开的 `details` 只保留首个 `summary`。
+3. 按标题、段落、列表和表格行保留阅读顺序；表格单元格按行连接，供金额、数量、比例和统计口径的一致性检查使用。
+4. 复用通用审核的错别字、名称、语病、标点、残句、重复和内部逻辑规则；存在至少两个可见段落时，短于 200 字也执行通篇数据一致性检查。
+5. 原始 HTML 保存到任务 `input/`，完整意见保存到 `output/report.md`；企业微信只返回 Markdown 审核消息，不生成 `marked_*.html`。
+
+编码优先读取真实 `meta` 元素中的声明，并支持 UTF-8/BOM/GB18030 回退；注释、脚本和正文里出现的 `charset=` 不作为编码声明。第一版不解释复杂 CSS 选择器。仅靠 CSS 类隐藏、但没有显式隐藏属性或行内隐藏样式的文字，可能仍被提取。动态渲染文字、图片 OCR、图表视觉识别、页面排版审核和多 HTML 联合审核均不在当前范围。
 
 ## 日志系统
 
@@ -745,12 +765,12 @@ REVIEW_REQUIRE_REGISTRATION=true
 2. 用户发送名字（支持中文、英文、数字、下划线、短横线，2-30 字符）→ 记录到统一运行数据目录的用户名表
    如果用户发来的文字本身就是一个合法名字，Bot 会直接完成注册，并回复：
    > 你好，XXX：
-   > 我可以帮你审内参、半月报，或者其他文字材料，直接发文字或docx给我就可以。另外请注意，涉及行内数据请务必脱敏哦。
+   > 我可以帮你审内参、半月报，或者其他文字材料，直接发文字、docx、html或pptx给我就可以。另外请注意，涉及行内数据请务必脱敏哦。
    如果用户第一句发的是“你好”“在吗”或“我要审个材料”这类寒暄/说明文字，Bot 不会把它误记成名字，而是继续引导先报名字。
 
 3. 之后该用户可正常使用审核功能
    已注册用户进入会话时，Bot 会提示：
-   > 你好，需要我帮你审核什么呢？请直接发送 .docx 文档或直接发送文字,我会认真审核。
+   > 你好，需要我帮你审核什么呢？请直接发送 .docx、.html/.htm、.pptx 文件或直接发送文字，我会认真审核。
 
 4. 如果用户先发待审核的 `.docx` 或正文，紧接着又补一句“帮我审一下”“帮我看看有无问题”这类催审短句，Bot 会把第二句当补充说明，不会再把它单独按文字材料审核。
    如果用户先发一句“帮我审一下这个材料”，后面才补发正文或 `.docx`，Bot 也不会先审核这句短话，而是提示继续把材料发过来。
@@ -789,6 +809,8 @@ user-001: 测试用户
 - `tests/test_review_bot.py`:覆盖存档机制 + 配置加载
 - `tests/test_review_halfmonthly.py`:覆盖半月报类型识别、时间范围、领导职务规范
 - `tests/test_review_general.py`:覆盖通用审核类型识别、mock LLM 审核
+- `tests/test_review_html.py`:覆盖静态可见文字、隐藏内容、表格、编码、短文数据一致性和只返回消息
+- `tests/test_review_task_execution.py`:覆盖单项审核任务冻结、幂等、恢复、载荷和路径安全
 - `tests/test_review_intake.py`:覆盖格式审核前后置触发、持久化恢复、超时清理、文件隔离和主文件确认
 - `tests/test_review_multi_file.py`:覆盖附件缺失/重复/名称错配、双边证据校验、主文件选择和多文件结果合并
 - `tests/test_error_marker.py`:覆盖通用审核 docx 批注和高亮
@@ -798,3 +820,4 @@ user-001: 测试用户
 
 - 两阶段拆分设计：`docs/superpowers/specs/2026-06-24-review-two-phase-design.md`
 - 搜索增强方案：`docs/superpowers/specs/2026-06-29-review-search-enhancement-design.md`
+- HTML 文字审核设计：`docs/superpowers/specs/2026-07-16-review-html-design.md`

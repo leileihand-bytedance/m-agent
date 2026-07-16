@@ -22,16 +22,18 @@ from app.platform.task_status import update_task_status, write_task_status
 
 
 GENERAL_REVIEW_TASK_TYPE = "review_general_docx"
+GENERAL_HTML_REVIEW_TASK_TYPE = "review_general_html"
 NEICAN_REVIEW_TASK_TYPE = "review_neican_docx"
 HALF_MONTHLY_REVIEW_TASK_TYPE = "review_halfmonthly_docx"
 OFFICIAL_FORMAT_REVIEW_TASK_TYPE = "review_official_format_docx"
 GENERAL_TEXT_REVIEW_TASK_TYPE = "review_general_text"
 PPT_REVIEW_TASK_TYPE = "review_pptx"
 GENERAL_REVIEW_COST_CLASS = "review_llm"
-ReviewInputKind = Literal["docx", "text", "pptx"]
+ReviewInputKind = Literal["docx", "text", "html", "pptx"]
 REVIEW_FILE_TASK_TYPES = frozenset(
     {
         GENERAL_REVIEW_TASK_TYPE,
+        GENERAL_HTML_REVIEW_TASK_TYPE,
         NEICAN_REVIEW_TASK_TYPE,
         HALF_MONTHLY_REVIEW_TASK_TYPE,
         OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
@@ -40,6 +42,7 @@ REVIEW_FILE_TASK_TYPES = frozenset(
 )
 REVIEW_TASK_TYPES = (
     GENERAL_REVIEW_TASK_TYPE,
+    GENERAL_HTML_REVIEW_TASK_TYPE,
     NEICAN_REVIEW_TASK_TYPE,
     HALF_MONTHLY_REVIEW_TASK_TYPE,
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
@@ -48,6 +51,7 @@ REVIEW_TASK_TYPES = (
 )
 _DOCUMENT_TYPE_BY_TASK_TYPE = {
     GENERAL_REVIEW_TASK_TYPE: "general",
+    GENERAL_HTML_REVIEW_TASK_TYPE: "general_html",
     NEICAN_REVIEW_TASK_TYPE: "neican",
     HALF_MONTHLY_REVIEW_TASK_TYPE: "half_monthly",
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE: "official_format",
@@ -59,6 +63,7 @@ _FILE_INPUT_SPEC: dict[str, tuple[ReviewInputKind, frozenset[str]]] = {
     NEICAN_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
     HALF_MONTHLY_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
+    GENERAL_HTML_REVIEW_TASK_TYPE: ("html", frozenset({".html", ".htm"})),
     PPT_REVIEW_TASK_TYPE: ("pptx", frozenset({".pptx"})),
 }
 
@@ -169,8 +174,8 @@ class GeneralReviewTaskService:
             raise ValueError(f"不支持的单项审核任务类型：{task_type}")
         input_kind, allowed_suffixes = input_spec
         if Path(filename).suffix.lower() not in allowed_suffixes:
-            allowed = "、".join(sorted(allowed_suffixes))
-            raise ValueError(f"{task_type} 只支持 {allowed}")
+            allowed = "/".join(sorted(allowed_suffixes))
+            raise ValueError(f"{task_type} 文件后缀必须是 {allowed}")
         return self._submit_input(
             channel=channel,
             sender_userid=sender_userid,
@@ -464,12 +469,12 @@ class GeneralReviewTaskService:
             expected_kind = input_spec[0]
         if input_kind != expected_kind:
             raise ValueError("审核任务输入类型与任务类型不一致")
-        if input_kind == "docx" and input_file.suffix.lower() != ".docx":
-            raise ValueError("审核任务文件类型无效")
         if input_kind == "text" and input_file.suffix.lower() != ".txt":
             raise ValueError("审核文字快照类型无效")
-        if input_kind == "pptx" and input_file.suffix.lower() != ".pptx":
-            raise ValueError("PPT审核任务文件类型无效")
+        if input_kind != "text" and input_file.suffix.lower() not in _FILE_INPUT_SPEC[
+            task.task_type
+        ][1]:
+            raise ValueError("审核任务文件类型无效")
         return GeneralReviewWorkspace(
             task_id=task.task_id,
             task_dir=task_dir,
@@ -609,18 +614,28 @@ def _safe_input_name(filename: str, *, input_kind: ReviewInputKind) -> str:
     fallback_by_kind = {
         "text": "文字消息.txt",
         "docx": "uploaded.docx",
+        "html": "uploaded.html",
         "pptx": "uploaded.pptx",
     }
-    suffix_by_kind = {"text": ".txt", "docx": ".docx", "pptx": ".pptx"}
     fallback = fallback_by_kind[input_kind]
     path = Path(filename or fallback)
     stem = path.stem or "uploaded"
     safe_stem = re.sub(r"[^\w一-鿿\-_]", "_", stem)
-    suffix = suffix_by_kind[input_kind]
+    if input_kind == "text":
+        suffix = ".txt"
+    elif input_kind == "docx":
+        suffix = ".docx"
+    elif input_kind == "html":
+        suffix = path.suffix.lower()
+        if suffix not in {".html", ".htm"}:
+            suffix = ".html"
+    else:
+        suffix = ".pptx"
     return f"{safe_stem}{suffix}"
 
 
 __all__ = [
+    "GENERAL_HTML_REVIEW_TASK_TYPE",
     "GENERAL_TEXT_REVIEW_TASK_TYPE",
     "GENERAL_REVIEW_COST_CLASS",
     "GENERAL_REVIEW_TASK_TYPE",

@@ -61,7 +61,8 @@ def test_registration_flow_registers_valid_name():
     assert is_reg
     assert reply == (
         "你好，Tom：\n"
-        "我可以帮你审内参、半月报，或者其他文字材料，直接发文字或docx给我就可以。"
+        "我可以帮你审内参、半月报，或者其他文字材料，"
+        "直接发文字、docx、html或pptx给我就可以。"
         "另外请注意，涉及行内数据请务必脱敏哦。"
     )
     assert registry.is_registered("new_user")
@@ -86,7 +87,8 @@ def test_registration_flow_accepts_chinese_name():
     assert is_reg
     assert reply == (
         "你好，小明：\n"
-        "我可以帮你审内参、半月报，或者其他文字材料，直接发文字或docx给我就可以。"
+        "我可以帮你审内参、半月报，或者其他文字材料，"
+        "直接发文字、docx、html或pptx给我就可以。"
         "另外请注意，涉及行内数据请务必脱敏哦。"
     )
     assert registry.is_registered("new_user")
