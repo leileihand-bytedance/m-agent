@@ -1256,11 +1256,14 @@ def test_is_followup_review_request_text_matches_short_prompt():
     assert _is_followup_review_request_text("帮我看看有无问题") is True
     assert _is_followup_review_request_text("请审核一下。") is True
     assert _is_followup_review_request_text("帮我审一下这个材料") is True
+    assert _is_followup_review_request_text("也做一下文字审核") is True
+    assert _is_followup_review_request_text("再做一下内容审核") is True
 
 
 def test_is_followup_review_request_text_does_not_match_real_content():
     assert _is_followup_review_request_text("这是需要审核的正文第一段内容") is False
     assert _is_followup_review_request_text("今天召开专题会议，研究下半年工作安排。") is False
+    assert _is_followup_review_request_text("文字审核工作应重点关注材料中的事实错误。") is False
 
 
 def test_recent_submission_tracker_ignores_followup_prompt_after_file():
@@ -1296,6 +1299,20 @@ def test_resolve_instruction_only_text_reply_treats_followup_as_continue_when_re
     tracker.remember("u1", "file", now=100.0)
 
     reply = _resolve_instruction_only_text_reply(tracker, "u1", "帮我审一下这个材料", now=120.0)
+
+    assert reply == "收到，我会按你刚发的内容继续审核，请稍等……"
+
+
+def test_resolve_instruction_only_text_reply_does_not_audit_content_review_command():
+    tracker = RecentSubmissionTracker(ttl_seconds=90)
+    tracker.remember("u1", "file", now=100.0)
+
+    reply = _resolve_instruction_only_text_reply(
+        tracker,
+        "u1",
+        "也做一下文字审核",
+        now=120.0,
+    )
 
     assert reply == "收到，我会按你刚发的内容继续审核，请稍等……"
 
