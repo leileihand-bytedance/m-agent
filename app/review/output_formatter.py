@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import re
 
 from .reviewer import ReviewResult, Finding
@@ -37,6 +38,7 @@ def format_review_result(
     filename: str,
     max_findings: int = 20,
     doc_type: DocumentType = DocumentType.NEI_CAN,
+    paragraph_pages: Sequence[int | None] | None = None,
 ) -> str:
     """将审核结果格式化为纯文本."""
     findings = result.findings
@@ -59,6 +61,18 @@ def format_review_result(
         # 描述和原文都要脱敏
         safe_description = _sanitize_text(f.description)
         lines.append(f"错误{i}:【{rule_label}】{safe_description}")
+        if paragraph_pages is not None:
+            page = (
+                paragraph_pages[f.paragraph_index]
+                if 0 <= f.paragraph_index < len(paragraph_pages)
+                else None
+            )
+            location = (
+                f"第{page}页"
+                if page is not None
+                else f"第{f.paragraph_index + 1}段"
+            )
+            lines.append(f"位置：{location}")
         # 原文只显示前40字，且做敏感词替换
         original = _sanitize_text(f.original_text.replace("\n", " "))[:40]
         lines.append(f"所属段落：{original}...")

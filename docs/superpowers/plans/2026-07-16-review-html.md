@@ -368,3 +368,138 @@ uv run --locked python scripts/project_docs.py check-sync
 ```
 
 Expected: 提交成功、受管推送成功，`check-sync` 显示本地与远端已同步。
+
+---
+
+### Task 6: 网页 PPT 错误页码定位
+
+**Files:**
+- Modify: `app/review/html_parser.py`
+- Modify: `app/review/output_formatter.py`
+- Modify: `app/review/main.py`
+- Modify: `tests/test_review_html.py`
+- Modify: `tests/test_review_general.py`
+- Modify: `app/review/README.md`
+- Modify: `docs/development/README.md`
+- Modify: `docs/development/architecture.md`
+- Modify: `docs/development/TODO.md`
+- Modify: `docs/capabilities/README.md`
+- Modify: `docs/development/testing-and-delivery.md`
+
+**Interfaces:**
+- Extends: `ParsedHtmlResult(paragraphs: list[str], paragraph_pages: list[int | None], encoding: str)`；两个列表必须等长。
+- Extends: `format_review_result(..., paragraph_pages: Sequence[int | None] | None = None)`；只在 HTML 调用时传值。
+- Extends: `save_review_to_directory(..., paragraph_pages: Sequence[int | None] | None = None)`；归档报告与用户消息使用同一映射。
+- Preserves: Word、直接文字、内参、半月报和格式审核不传映射，输出不变。
+
+- [x] **Step 1: 写 slide 段落页码映射的失败测试**
+
+```python
+def test_parse_html_maps_visible_paragraphs_to_slide_pages(tmp_path: Path):
+    path = tmp_path / "deck.html"
+    path.write_text(
+        """<div class="slide slide-cover"><h1>封面</h1></div>
+        <div class="slide slide-content"><p>本期客户100户。</p>
+        <table><tr><td>客户</td><td>120户</td></tr></table></div>
+        <p>页外提示</p>""",
+        encoding="utf-8",
+    )
+    parsed = parse_html(path)
+    assert parsed.paragraphs == ["封面", "本期客户100户。", "客户 | 120户", "页外提示"]
+    assert parsed.paragraph_pages == [1, 2, 2, None]
+```
+
+- [x] **Step 2: 写 HTML 消息、归档报告和普通 HTML 兜底的失败测试**
+
+```python
+def test_format_review_result_uses_html_page_or_paragraph_location():
+    finding = Finding(
+        rule_id="general-logic-inconsistency",
+        paragraph_index=1,
+        line_number=2,
+        original_text="同口径客户为120户。",
+        description="与前页同口径的100户不一致",
+        target_text="120户",
+    )
+    result = ReviewResult(
+        findings=[finding],
+        total_rules=1,
+        passed_rules=0,
+        filename="deck.html",
+    )
+    paged = format_review_result(
+        result,
+        "deck.html",
+        doc_type=DocumentType.GENERAL,
+        paragraph_pages=[1, 2],
+    )
+    fallback = format_review_result(
+        result,
+        "article.html",
+        doc_type=DocumentType.GENERAL,
+        paragraph_pages=[None, None],
+    )
+    assert "位置：第2页" in paged
+    assert "位置：第2段" in fallback
+```
+
+持久任务测试把两段正文分别放进两个 `class="slide"` 容器，并同时断言 `delivery.text` 与 `output/report.md` 含 `位置：第2页`。
+
+- [x] **Step 3: 运行测试确认页码接口尚不存在**
+
+Run: `uv run --locked pytest tests/test_review_html.py -k 'slide_pages or html_page_or_paragraph or persistent_html' -v`
+
+Expected: FAIL，`ParsedHtmlResult` 没有 `paragraph_pages`，或 `format_review_result` 不接受该参数。
+
+- [x] **Step 4: 在静态解析器中保留 slide 页码**
+
+`_VisibleTextParser` 只把 class token 精确等于 `slide` 的可见元素视为页面容器，按 DOM 顺序编号。每次 `_flush_text()` 或 `_flush_row()` 写入段落时，同时写入当前 slide 页码；没有活动 slide 时写 `None`。关闭或畸形标签清理时同步退出页面上下文，不读取 `page-label` 文本推算页码。
+
+```python
+@dataclass(frozen=True)
+class ParsedHtmlResult:
+    paragraphs: list[str]
+    paragraph_pages: list[int | None]
+    encoding: str
+```
+
+- [x] **Step 5: 仅为 HTML 格式化位置并贯通归档**
+
+`format_review_result` 增加可选页码映射：映射有效且当前段落有页码时输出 `位置：第 N 页`；传入映射但当前段落为 `None` 时输出 `位置：第 N 段`；未传映射时不增加位置行。HTML 处理分支把 `parsed_html.paragraph_pages` 同时传给 `save_review_to_directory` 和最终 `PreparedReviewDelivery.text(...)`。
+
+```python
+if paragraph_pages is not None:
+    page = paragraph_pages[f.paragraph_index]
+    location = f"第{page}页" if page is not None else f"第{f.paragraph_index + 1}段"
+    lines.append(f"位置：{location}")
+```
+
+- [x] **Step 6: 运行专项测试并确认 Word 输出不变**
+
+Run: `uv run --locked pytest tests/test_review_html.py tests/test_review_general.py tests/test_review_bot.py -v`
+
+Expected: PASS；HTML 有页码或段落定位，未传 `paragraph_pages` 的 Word 通用审核输出不新增位置行。
+
+- [x] **Step 7: 同步核心文档与完成验证**
+
+在审核 README、能力、架构、路线和测试交付文档中记录：网页 PPT 按 `class="slide"` 的 DOM 顺序定位页码；普通 HTML 回退到段落位置；不计算浏览器打印分页。然后运行：
+
+```bash
+uv run --locked python scripts/project_docs.py check
+uv run --locked pytest tests --ignore=tests/test_reviewer.py -q
+uv run --locked python tests/test_review_bot.py
+git diff --check
+```
+
+Expected: 核心文档检查通过、全仓离线测试和审核 Bot 独立保护测试全部通过、差异格式检查无输出。
+
+- [x] **Step 8: 提交、受管推送并重启审核 Bot**
+
+```bash
+git add app/review/html_parser.py app/review/output_formatter.py app/review/main.py tests/test_review_html.py tests/test_review_general.py app/review/README.md docs/development/README.md docs/development/architecture.md docs/development/TODO.md docs/capabilities/README.md docs/development/testing-and-delivery.md docs/superpowers/plans/2026-07-16-review-html.md
+git commit -m "fix(review): show HTML slide locations"
+uv run --locked python scripts/project_docs.py push --summary "补充HTML审核页码定位" --impact "网页PPT审核消息和归档报告可显示每条错误所在页，普通HTML回退到段落位置" --next-step "使用同一份脱敏HTML复测页码与数据一致性结果"
+uv run --locked python scripts/project_docs.py check-sync
+```
+
+停止旧审核 Bot 进程后，用 `uv run --locked python -u -m app.review.main --console` 启动新进程，并确认企业微信认证成功。
