@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.review.ppt.formatter import format_ppt_review_messages
 from app.review.ppt.models import PptFinding, PptReviewResult
 
@@ -38,7 +40,7 @@ def test_formatter_returns_facts_without_suggestions():
     assert "【第4页 ↔ 第12页｜数据不一致】" in joined
     assert "原文一：客户100万户" in joined
     assert "原文二：客户120万户" in joined
-    assert "问题：同一统计口径的客户数前后不一致" in joined
+    assert "问题：两处原文数据不一致" in joined
     assert "建议" not in joined
     assert "修改为" not in joined
 
@@ -101,9 +103,41 @@ def test_formatter_removes_advice_even_from_prebuilt_finding():
 
     joined = "\n".join(format_ppt_review_messages(result))
 
-    assert "问题：语义重复" in joined
+    assert "问题：该处存在明显语病" in joined
     assert "建议" not in joined
     assert "修改为" not in joined
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "语义重复，推荐改成持续提升",
+        "语义重复，最好写成持续提升",
+        "语义重复，宜改成持续提升",
+        "语义重复，需要改成持续提升",
+        "语义重复，可考虑持续提升",
+    ],
+)
+def test_formatter_never_outputs_model_freeform_description(description: str):
+    result = PptReviewResult(
+        filename="经营汇报.pptx",
+        page_count=1,
+        findings=(
+            PptFinding(
+                rule_id="ppt-grammar",
+                category="grammar",
+                slide_number=1,
+                element_id="slide:1/shape:1",
+                target_text="持续不断提升",
+                description=description,
+            ),
+        ),
+    )
+
+    joined = "\n".join(format_ppt_review_messages(result))
+
+    assert "问题：该处存在明显语病" in joined
+    assert "持续提升" not in joined
 
 
 def test_formatter_surfaces_parser_warnings_and_avoids_complete_pass_claim():

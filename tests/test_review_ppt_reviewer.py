@@ -87,7 +87,7 @@ def test_local_candidate_requires_exact_page_element_and_source_text():
         slide_number=1,
         element_id="slide:1/shape:1",
         target_text="持续不断提升",
-        description="‘持续’与‘不断’语义重复",
+        description="该处存在明显语病",
     )
     assert validate_local_candidate(document, fabricated) is None
 
@@ -316,9 +316,35 @@ def test_reviewer_removes_model_advice_from_issue_description():
 
     result = asyncio.run(review_ppt_document(_document(), model_runner=fake_runner))
 
-    assert result.findings[0].description == "‘持续’与‘不断’语义重复"
+    assert result.findings[0].description == "该处存在明显语病"
     assert "建议" not in result.findings[0].description
     assert "修改为" not in result.findings[0].description
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "语义重复，推荐改成持续提升",
+        "语义重复，最好写成持续提升",
+        "语义重复，宜改成持续提升",
+        "语义重复，需要改成持续提升",
+        "语义重复，可考虑持续提升",
+    ],
+)
+def test_evidence_never_propagates_model_freeform_description(description: str):
+    candidate = PptLocalCandidate(
+        category="grammar",
+        slide_number=1,
+        element_id="slide:1/shape:1",
+        target_text="持续不断提升",
+        description=description,
+    )
+
+    finding = validate_local_candidate(_document(), candidate)
+
+    assert finding is not None
+    assert finding.description == "该处存在明显语病"
+    assert "持续提升" not in finding.description
 
 
 def test_consistency_failure_keeps_language_findings_and_marks_degraded():

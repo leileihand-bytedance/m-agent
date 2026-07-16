@@ -1,16 +1,8 @@
 from __future__ import annotations
 
-import re
-
 from .models import PptFindingCategory
 
 
-_ADVICE_RE = re.compile(
-    r"[，,；;。\s]*(?:建议(?:修改|改为)?|请修改|修改为|改为|应改为|"
-    r"正确写法|可改为|应为|可调整为|请调整).*",
-    re.DOTALL,
-)
-_TRAILING_PUNCTUATION_RE = re.compile(r"[，,；;。\s]+$")
 _FACT_FALLBACKS: dict[PptFindingCategory, str] = {
     "typo": "该处存在文字错误",
     "grammar": "该处存在明显语病",
@@ -21,13 +13,20 @@ _FACT_FALLBACKS: dict[PptFindingCategory, str] = {
     "data_inconsistency": "两处原文数据不一致",
     "content_inconsistency": "两处原文内容不一致",
 }
+_RULE_FACTS = {
+    "ppt-sequence-duplicate": "同一组序号重复出现",
+    "ppt-sequence-reverse": "同一组序号出现倒序",
+    "ppt-sequence-skip": "同一组序号存在跳号",
+    "ppt-placeholder": "该处存在未清理占位内容",
+    "ppt-quote-pair": "引号或成对标点未配对",
+    "ppt-consecutive-punctuation": "该处连续重复使用相同标点",
+}
 
 
 def factual_description(
     category: PptFindingCategory,
-    description: str,
+    *,
+    rule_id: str = "",
 ) -> str:
-    """移除模型可能夹带的修改指令，只保留事实描述。"""
-    factual = _ADVICE_RE.sub("", description.strip(), count=1)
-    factual = _TRAILING_PUNCTUATION_RE.sub("", factual).strip()
-    return factual or _FACT_FALLBACKS[category]
+    """只返回代码维护的事实说明，不透传模型自由文本。"""
+    return _RULE_FACTS.get(rule_id, _FACT_FALLBACKS[category])

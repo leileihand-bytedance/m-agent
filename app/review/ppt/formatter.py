@@ -52,7 +52,7 @@ def format_ppt_review_messages(
 
 def _format_finding(number: int, finding: PptFinding) -> str:
     label = _CATEGORY_LABELS[finding.category]
-    description = factual_description(finding.category, finding.description)
+    description = factual_description(finding.category, rule_id=finding.rule_id)
     if finding.related_slide_number is not None:
         return (
             f"{number}.【第{finding.slide_number}页 ↔ "

@@ -53,7 +53,7 @@ def validate_local_candidate(
         slide_number=candidate.slide_number,
         element_id=candidate.element_id,
         target_text=candidate.target_text,
-        description=factual_description(candidate.category, candidate.description),
+        description=factual_description(candidate.category),
     )
 
 
@@ -98,7 +98,7 @@ def validate_cross_candidate(
         slide_number=candidate.slide_number,
         element_id=candidate.element_id,
         target_text=candidate.target_text,
-        description=factual_description(candidate.category, candidate.description),
+        description=factual_description(candidate.category),
         related_slide_number=candidate.related_slide_number,
         related_element_id=candidate.related_element_id,
         related_text=candidate.related_text,
