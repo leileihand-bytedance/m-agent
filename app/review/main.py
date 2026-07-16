@@ -2,8 +2,8 @@
 
 功能:
   - 接入企业微信长连接(独立 Bot,只做审核)
-  - 接收文件消息 → 检查后缀(.docx 接受,其他拒)
-  - 解析 .docx → 加载 rules.md → 跑审核引擎 → 输出意见
+  - 接收文件消息 → 检查后缀(.docx/.pptx 接受,其他拒)
+  - Word 走原审核引擎；PPTX 走独立低级错误审核包
   - 存档到 M-Agent-Files/tasks/review/YYYY/MM/<日期-序号>/
 """
 
@@ -60,6 +60,7 @@ from app.review.task_execution import (  # noqa: E402
     HALF_MONTHLY_REVIEW_TASK_TYPE,
     NEICAN_REVIEW_TASK_TYPE,
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    PPT_REVIEW_TASK_TYPE,
     REVIEW_TASK_TYPES,
     GeneralReviewTaskService,
     GeneralReviewWorkspace,
@@ -245,7 +246,7 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
 # 拒接非审核消息
 # ============================================================
 
-REJECT_MESSAGE = "本入口接收 .docx 文件或直接发送文字，请发送需要审核的内容"
+REJECT_MESSAGE = "本入口接收 .docx、.pptx 文件或直接发送文字，请发送需要审核的内容"
 
 
 def is_docx_filename(filename: str | None) -> bool:
@@ -253,6 +254,23 @@ def is_docx_filename(filename: str | None) -> bool:
     if not filename:
         return False
     return filename.lower().endswith(".docx")
+
+
+def is_pptx_filename(filename: str | None) -> bool:
+    """判断文件名是否为可进入独立 PPT 审核的 .pptx。"""
+    if not filename:
+        return False
+    return filename.lower().endswith(".pptx")
+
+
+def is_supported_review_filename(filename: str | None) -> bool:
+    return is_docx_filename(filename) or is_pptx_filename(filename)
+
+
+def _review_file_rejection_message(filename: str) -> str:
+    if filename.lower().endswith(".ppt"):
+        return "❌ 暂不支持旧版 .ppt，请另存为 .pptx 后再发送。"
+    return f"❌ 本入口仅接收 .docx 或 .pptx 文件，你发的是：{filename}"
 
 
 def _build_file_ack(pending_mode: str | None) -> str:
@@ -984,6 +1002,27 @@ async def _process_queued_single_review(
     neican_rules_text: str,
 ) -> PreparedReviewDelivery:
     """执行一项已冻结输入的审核，并在任务目录内准备唯一交付结果。"""
+    if workspace.task_type == PPT_REVIEW_TASK_TYPE:
+        from app.review.ppt import format_ppt_review_messages, review_pptx  # noqa: E402
+
+        result = await review_pptx(
+            workspace.input_file,
+            task_dir=workspace.task_dir,
+        )
+        output_dir = workspace.task_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        result_path = output_dir / "result.json"
+        temporary = output_dir / f".result.{uuid4().hex}.tmp"
+        await asyncio.to_thread(
+            temporary.write_text,
+            json.dumps(result.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        await asyncio.to_thread(temporary.replace, result_path)
+        return PreparedReviewDelivery.multipart_text(
+            format_ppt_review_messages(result)
+        )
+
     doc_type = _document_type_for_review_task_type(workspace.task_type)
     if workspace.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE:
         content = await asyncio.to_thread(workspace.input_file.read_text, encoding="utf-8")
@@ -1925,12 +1964,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
         logger.info("下载完成: filename=%s, size=%d 字节 from %s", filename, len(buffer), sender, extra=extra)
 
         # 3. 检查后缀(用下载回来的真实文件名)
-        if not is_docx_filename(filename):
+        if not is_supported_review_filename(filename):
             recent_submission_tracker.forget(sender)
-            logger.info("拒接非 .docx 文件 from %s: %s", sender, filename, extra=extra)
+            logger.info("拒接非 .docx/.pptx 文件 from %s: %s", sender, filename, extra=extra)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-reject"),
-                f"❌ 本入口仅接收 .docx 文件,你发的是: {filename}", True,
+                _review_file_rejection_message(filename), True,
             )
             return
 
@@ -1944,6 +1983,52 @@ async def run_review_bot(config: ReviewConfig) -> None:
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
                 f"文件过大({size_mb:.1f}MB,上限 {config.max_file_size_mb}MB),暂不支持。", True,
+            )
+            return
+
+        # PPTX 是独立单文件审核，不进入 Word 暂存、格式审核或联合审核。
+        if is_pptx_filename(filename):
+            if pending_mode in {"format", "multi"}:
+                recent_submission_tracker.forget(sender)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-reject"),
+                    "PPT仅支持单文件低级错误审核，不参与公文格式或多文件联合审核。",
+                    True,
+                )
+                return
+            try:
+                message_id = extract_message_id(frame)
+                if not message_id:
+                    raise ValueError("企业微信消息缺少稳定消息标识")
+                submission = review_tasks.submit_file(
+                    channel="wecom",
+                    sender_userid=sender,
+                    sender_name=english_name,
+                    message_id=message_id,
+                    task_type=PPT_REVIEW_TASK_TYPE,
+                    filename=filename,
+                    file_bytes=buffer,
+                )
+            except Exception as exc:
+                recent_submission_tracker.forget(sender)
+                logger.exception("PPT审核任务入队失败 from %s", sender, exc_info=exc, extra=extra)
+                await notifier.notify_file_review_error(sender, filename, "PPT审核任务入队", exc)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("PPT审核任务受理", exc),
+                    True,
+                )
+                return
+            await _reply_queued_review_acceptance(
+                ws_client,
+                frame,
+                generate_req_id("review-ppt-queued"),
+                review_label="PPT低级错误审核",
+                created=submission.created,
+                input_label="这份PPT",
+                acknowledgment_already_sent=True,
             )
             return
 

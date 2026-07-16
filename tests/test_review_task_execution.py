@@ -18,6 +18,7 @@ from app.review.task_execution import (
     HALF_MONTHLY_REVIEW_TASK_TYPE,
     NEICAN_REVIEW_TASK_TYPE,
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
+    PPT_REVIEW_TASK_TYPE,
     REVIEW_FILE_TASK_TYPES,
     REVIEW_TASK_TYPES,
     GeneralReviewTaskService,
@@ -102,6 +103,41 @@ def test_general_review_submission_is_persistent_and_idempotent(tmp_path: Path):
     assert status["processing_status"] == "queued"
     meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["task_type"] == "review_general_docx"
+
+
+def test_ppt_submission_freezes_single_pptx_outside_sqlite_payload(tmp_path: Path):
+    database_path = tmp_path / "runtime" / "review.sqlite3"
+    repository = TaskRepository(database_path)
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.multipart_text(("PPT审核完成。",))
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    secret_body = b"pptx-secret-body"
+
+    submission = service.submit_file(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="ppt-message-001",
+        task_type=PPT_REVIEW_TASK_TYPE,
+        filename="经营汇报.pptx",
+        file_bytes=secret_body,
+    )
+
+    assert submission.task.payload["input_kind"] == "pptx"
+    assert secret_body not in database_path.read_bytes()
+    input_path = Path(str(submission.task.payload["task_dir"])) / str(
+        submission.task.payload["input_file"]
+    )
+    assert input_path.suffix == ".pptx"
+    assert input_path.read_bytes() == secret_body
+    assert PPT_REVIEW_TASK_TYPE in REVIEW_FILE_TASK_TYPES
+    assert PPT_REVIEW_TASK_TYPE in REVIEW_TASK_TYPES
 
 
 @pytest.mark.parametrize(
