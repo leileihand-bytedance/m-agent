@@ -165,13 +165,14 @@
 - `skills/research_synthesis/prompts/plan.md`
 - `skills/research_synthesis/prompts/draft.md`
 - `skills/research_synthesis/SKILL.md`
+- `skills/research_synthesis/config.yaml`（只同步能力描述，不改触发词和工具权限）
 - `tests/test_research_synthesis_workflow.py`
 - `docs/capabilities/README.md`
 - `docs/development/TODO.md`
 - `docs/development/architecture.md`
 - `docs/development/testing-and-delivery.md`
 
-本轮不需要修改 `config.yaml`、底座工具授权或企业微信入口。
+本轮只同步 `config.yaml` 的能力描述，不修改触发词、底座工具授权或企业微信入口。
 
 ## 验收标准
 

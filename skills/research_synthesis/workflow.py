@@ -1,10 +1,16 @@
 import re
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from app.platform.tools import ToolGateway
 from skills.research_synthesis.docx_output import write_research_synthesis_docx
-from skills.research_synthesis.schema import ResearchSynthesisPlan, ResearchSynthesisResult
+from skills.research_synthesis.schema import (
+    ResearchEvidencePoint,
+    ResearchPlanSection,
+    ResearchSynthesisPlan,
+    ResearchSynthesisResult,
+)
 from skills.writer1.workflow import _has_read_errors, _has_usable_materials, _source_materials
 
 
@@ -58,13 +64,23 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
         },
     )
     plan = ResearchSynthesisPlan.model_validate(plan_data)
-    if plan.needs_clarification and not plan.sections:
+    source_labels = _unique_source_labels(source_materials)
+    _validate_plan_evidence(plan, source_labels)
+    if plan.needs_clarification or plan.outline_type == "unknown":
         return ResearchSynthesisResult(
             title=plan.title,
             body="",
             sources=source_names,
             needs_clarification=True,
-            message=plan.message or "提纲结构仍无法可靠识别，请明确提纲层级后再整合。",
+            message=plan.message or "暂时无法判断提纲需要逐项覆盖，还是按相关性选择事项。请明确覆盖方式后再整合。",
+        )
+    if plan.coverage_mode == "selective" and not _expected_top_headings(plan, outline, source_labels):
+        return ResearchSynthesisResult(
+            title=plan.title,
+            body="",
+            sources=source_names,
+            needs_clarification=True,
+            message="当前材料没有可直接入稿的文字证据。请补充相关部门文字素材，或人工核对图片后再整合。",
         )
 
     draft = tools.call(
@@ -86,6 +102,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ResearchSynthesisResul
         str(draft.get("body", "") or ""),
         outline=outline,
         sources=source_materials,
+        plan=plan,
     )
     needs_clarification = bool(draft.get("needs_clarification", False)) and not (title.strip() or body.strip())
     if needs_clarification:
@@ -181,11 +198,12 @@ def _plan_stage_note(outline: dict[str, object], sources: list[dict[str, object]
         else "本次未检测到需要保留的图片提醒。\n"
     )
     return (
-        "先做材料台账，不写最终正文。以提纲问题为中心，把不同部门的同类事实放进同一个 evidence point。\n"
+        "先做材料台账，不写最终正文。先判断提纲类型和覆盖方式，再以提纲问题为中心，把不同部门的同类事实放进同一个 evidence point。\n"
         f"调研提纲：{_material_name(outline)}\n"
         f"部门素材：{source_names}\n"
         f"部门来源标签：{source_labels}\n"
-        "保留提纲一级主题和顺序；删除题号后的牵头部门说明，围绕具体问题合并或拆分二级结构。\n"
+        "问卷和报告骨架通常逐项覆盖；政策目录只有与本任务直接相关且有可用证据的事项才进入 selected_headings。\n"
+        "逐项覆盖时保留必答主题和顺序；选择性覆盖时记录未采用事项及理由，不要把整份目录机械复制为正文。\n"
         "重复事实要跨部门合并；只有对象、时间、单位和口径一致时才能计算合计，并在 derivation_note 写清算式。\n"
         "逐项登记缺口和冲突，不得用空话、推断或虚构事实填满。\n"
         "台账只能使用上面的规范化部门来源标签，不要复制文件名或本机路径。\n"
@@ -207,10 +225,12 @@ def _drafting_note(
         "按提纲章节综合表达，不要再按部门分别堆叠。以下材料台账是本轮正文的直接写作依据：\n"
         f"{plan.model_dump_json(indent=2)}\n\n"
         f"提纲一级主题：{'、'.join(_outline_top_headings(str(outline.get('text') or '')))}\n"
+        f"本次覆盖方式：{plan.coverage_mode}；正文采用主题：{'、'.join(_expected_top_headings(plan, outline, source_labels))}\n"
         f"正文允许使用的来源标签：{'、'.join(source_labels)}\n"
         f"图片核对总数：{image_note}。图片提醒要放在台账对应小节；连续提醒合并计数，不插入或描述图片。\n"
+        "不可使用 usable=false 的证据；image_candidate 和 external_missing 只能作为人工核验提示，不能写成已确认事实。\n"
         "综合事实写成一个连贯段落，在段末只保留一次合并后的来源标签，例如“【来源：甲部、乙部】”。\n"
-        "一级标题统一使用“一、”，二级标题统一使用“（一）”；正文列举使用“一是、二是”，不要使用阿拉伯数字充当一级、二级标题。\n"
+        "一级标题统一使用“一、”，二级标题统一使用“（一）”；明确的三级短标题可以保留“1.”，正文列举可使用“一是、二是”。\n"
         "不要撰写报告开头和结尾；Word 生成阶段会在开头和末尾加入待用户补充的备注。"
     )
 
@@ -306,20 +326,155 @@ def _normalize_draft_body(
     *,
     outline: dict[str, object],
     sources: list[dict[str, object]],
+    plan: ResearchSynthesisPlan,
 ) -> str:
     clean = _replace_raw_material_names(body, sources)
     allowed_labels = _unique_source_labels(sources)
-    top_headings = _outline_top_headings(str(outline.get("text") or ""))
+    top_headings = _expected_top_headings(plan, outline, allowed_labels)
+    allowed_numbers = _allowed_numeric_tokens(plan, allowed_labels)
     lines = [line.strip() for line in clean.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+    lines = _filter_unselected_sections(lines, plan=plan, outline=outline, expected_headings=top_headings)
     normalized_lines = [_normalize_heading_line(line, top_headings) for line in lines]
     normalized_lines = _ensure_outline_headings(normalized_lines, top_headings)
     normalized_lines = [_normalize_source_tags(line, allowed_labels) for line in normalized_lines]
+    normalized_lines = [_ensure_fact_attribution(line) for line in normalized_lines]
+    normalized_lines = [_mark_untraceable_numbers(line, allowed_numbers) for line in normalized_lines]
     normalized_lines = _collapse_consecutive_image_reminders(normalized_lines, allowed_labels)
     normalized_lines = _ensure_image_reminders(
         normalized_lines,
         expected_counts=_image_reminder_counts(sources),
     )
     return "\n".join(normalized_lines).strip()
+
+
+def _expected_top_headings(
+    plan: ResearchSynthesisPlan,
+    outline: dict[str, object],
+    allowed_labels: list[str] | None = None,
+) -> list[str]:
+    outline_headings = _outline_top_headings(str(outline.get("text") or ""))
+    if plan.coverage_mode != "selective":
+        return _unique_headings(outline_headings or plan.required_headings or plan.selected_headings)
+
+    selected = plan.selected_headings or [section.heading for section in plan.sections]
+    if not plan.sections:
+        return _unique_headings(selected)
+    usable_section_headings = [
+        section.heading for section in plan.sections if _section_has_usable_evidence(section, allowed_labels)
+    ]
+    return _unique_headings(
+        heading
+        for heading in selected
+        if any(_headings_match(heading, usable_heading) for usable_heading in usable_section_headings)
+    )
+
+
+def _unique_headings(headings: Iterable[str]) -> list[str]:
+    unique: list[str] = []
+    for heading in headings:
+        clean = _clean_outline_heading(str(heading))
+        if clean and clean not in unique:
+            unique.append(clean)
+    return unique
+
+
+def _section_has_usable_evidence(
+    section: ResearchPlanSection,
+    allowed_labels: list[str] | None = None,
+) -> bool:
+    return any(
+        _evidence_point_is_usable(point, allowed_labels)
+        for subsection in section.subsections
+        for point in subsection.evidence_points
+    )
+
+
+def _usable_evidence_points(
+    plan: ResearchSynthesisPlan,
+    allowed_labels: list[str] | None = None,
+) -> Iterator[ResearchEvidencePoint]:
+    for section in plan.sections:
+        for subsection in section.subsections:
+            for point in subsection.evidence_points:
+                if _evidence_point_is_usable(point, allowed_labels):
+                    yield point
+
+
+def _allowed_numeric_tokens(plan: ResearchSynthesisPlan, allowed_labels: list[str]) -> set[str]:
+    tokens: set[str] = set()
+    for point in _usable_evidence_points(plan, allowed_labels):
+        tokens.update(_numeric_tokens(point.content))
+        if point.evidence_kind == "derived":
+            tokens.update(_numeric_tokens(point.derivation_note))
+    return tokens
+
+
+def _validate_plan_evidence(plan: ResearchSynthesisPlan, allowed_labels: list[str]) -> None:
+    for section in plan.sections:
+        for subsection in section.subsections:
+            for point in subsection.evidence_points:
+                if not point.usable or _evidence_point_has_valid_sources(point, allowed_labels):
+                    continue
+                point.usable = False
+                if not point.verification_note:
+                    point.verification_note = "来源标签无法匹配本次上传材料，需人工核对。"
+
+
+def _evidence_point_is_usable(
+    point: ResearchEvidencePoint,
+    allowed_labels: list[str] | None = None,
+) -> bool:
+    if not point.usable:
+        return False
+    if allowed_labels is None:
+        return bool(point.source_labels)
+    return _evidence_point_has_valid_sources(point, allowed_labels)
+
+
+def _evidence_point_has_valid_sources(point: ResearchEvidencePoint, allowed_labels: list[str]) -> bool:
+    return bool(point.source_labels) and all(
+        _match_allowed_source_label(label, allowed_labels) for label in point.source_labels
+    )
+
+
+def _filter_unselected_sections(
+    lines: list[str],
+    *,
+    plan: ResearchSynthesisPlan,
+    outline: dict[str, object],
+    expected_headings: list[str],
+) -> list[str]:
+    if plan.coverage_mode != "selective":
+        return lines
+
+    possible_headings = _unique_headings(
+        [
+            *_outline_top_headings(str(outline.get("text") or "")),
+            *plan.required_headings,
+            *plan.selected_headings,
+            *(section.heading for section in plan.sections),
+            *(re.split(r"[:：]", item, maxsplit=1)[0] for item in plan.omitted_outline_items),
+        ]
+    )
+    filtered: list[str] = []
+    keep_section = True
+    for line in lines:
+        heading = _numbered_heading_text(line)
+        if heading and any(_headings_match(heading, candidate) for candidate in possible_headings):
+            keep_section = any(_headings_match(heading, expected) for expected in expected_headings)
+        if keep_section:
+            filtered.append(line)
+    return filtered
+
+
+def _numbered_heading_text(line: str) -> str:
+    chinese = re.match(r"^[一二三四五六七八九十百零〇]+、\s*(.+)$", line)
+    if chinese:
+        return _clean_outline_heading(chinese.group(1))
+    arabic = re.match(r"^\d+[.．、]\s*(.+)$", line)
+    if arabic:
+        return _clean_outline_heading(arabic.group(1))
+    return ""
 
 
 def _ensure_outline_headings(lines: list[str], top_headings: list[str]) -> list[str]:
@@ -389,8 +544,7 @@ def _normalize_heading_line(line: str, top_headings: list[str]) -> str:
         heading = _clean_outline_heading(arabic.group(2))
         if 1 <= number <= len(top_headings) and _headings_match(heading, top_headings[number - 1]):
             return f"{_chinese_number(number)}、{top_headings[number - 1]}"
-        if 1 <= number <= 10:
-            return f"{_chinese_number(number)}是{arabic.group(2).strip()}"
+        return f"{number}.{arabic.group(2).strip()}"
 
     chinese_sub = re.match(r"^（([一二三四五六七八九十百零〇]+)）\s*(.+)$", line)
     if chinese_sub:
@@ -441,6 +595,47 @@ def _normalize_source_tags(line: str, allowed_labels: list[str]) -> str:
         return text
     tag = f"【来源：{'、'.join(labels)}】" if labels else "【来源：待核对】"
     return f"{text.rstrip()}{tag}"
+
+
+def _ensure_fact_attribution(line: str) -> str:
+    if _is_structural_or_annotation_line(line) or "【来源：" in line:
+        return line
+    return f"{line.rstrip()}【来源：待核对】"
+
+
+def _mark_untraceable_numbers(line: str, allowed_numbers: set[str]) -> str:
+    if _is_structural_or_annotation_line(line):
+        return line
+    present = _numeric_tokens(line)
+    if not present or present.issubset(allowed_numbers):
+        return line
+    warning = "【来源待核对：该段包含材料台账未登记的数据，请人工核对。】"
+    return line if warning in line else f"{line.rstrip()}{warning}"
+
+
+def _numeric_tokens(text: str) -> set[str]:
+    raw_tokens = re.findall(r"(?<![A-Za-z0-9])\d[\d,，]*(?:\.\d+)?", text)
+    return {_normalize_numeric_token(token) for token in raw_tokens}
+
+
+def _normalize_numeric_token(token: str) -> str:
+    clean = token.replace(",", "").replace("，", "")
+    if "." in clean:
+        integer, decimal = clean.split(".", maxsplit=1)
+        integer = integer.lstrip("0") or "0"
+        decimal = decimal.rstrip("0") or "0"
+        return f"{integer}.{decimal}"
+    return clean.lstrip("0") or "0"
+
+
+def _is_structural_or_annotation_line(line: str) -> bool:
+    if line.startswith("【"):
+        return True
+    if re.match(r"^[一二三四五六七八九十百零〇]+、", line):
+        return True
+    if re.match(r"^（[一二三四五六七八九十百零〇]+）", line):
+        return True
+    return bool(re.match(r"^\d+[.．、]\s*[^。；;]{1,40}$", line))
 
 
 def _match_allowed_source_label(raw_label: str, allowed_labels: list[str]) -> str:
