@@ -218,6 +218,31 @@ def test_format_review_result_general_rule_labels():
     assert "标点错误" in output
 
 
+def test_format_review_result_keeps_word_output_without_location():
+    result = ReviewResult(
+        findings=[
+            Finding(
+                rule_id="general-typo",
+                paragraph_index=1,
+                line_number=2,
+                original_text="本周布署了工作。",
+                description="‘布署’应为‘部署’",
+            )
+        ],
+        total_rules=1,
+        passed_rules=0,
+        filename="工作总结.docx",
+    )
+
+    output = format_review_result(
+        result,
+        "工作总结.docx",
+        doc_type=DocumentType.GENERAL,
+    )
+
+    assert "位置：" not in output
+
+
 def test_format_review_result_hides_internal_paragraph_reference():
     result = ReviewResult(
         findings=[

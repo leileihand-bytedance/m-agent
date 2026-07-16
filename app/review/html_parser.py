@@ -88,6 +88,7 @@ _HIDDEN_STYLE_RE = re.compile(
 @dataclass(frozen=True)
 class ParsedHtmlResult:
     paragraphs: list[str]
+    paragraph_pages: list[int | None]
     encoding: str
 
 
@@ -95,6 +96,7 @@ class ParsedHtmlResult:
 class _OpenElement:
     tag: str
     ignored: bool
+    opened_page: bool = False
 
 
 @dataclass
@@ -121,6 +123,13 @@ def _is_explicitly_hidden(attrs: list[tuple[str, str | None]]) -> bool:
 
 def _has_attribute(attrs: list[tuple[str, str | None]], name: str) -> bool:
     return any(attr_name.lower() == name for attr_name, _value in attrs)
+
+
+def _is_slide_container(attrs: list[tuple[str, str | None]]) -> bool:
+    for name, value in attrs:
+        if name.lower() == "class":
+            return "slide" in (value or "").split()
+    return False
 
 
 class _MetaCharsetParser(HTMLParser):
@@ -168,13 +177,22 @@ class _VisibleTextParser(HTMLParser):
         self._text_parts: list[str] = []
         self._cell_parts: list[str] | None = None
         self._row_cells: list[str] | None = None
+        self._row_page: int | None = None
         self._paragraphs: list[str] = []
+        self._paragraph_pages: list[int | None] = []
+        self._page_stack: list[int] = []
+        self._next_page_number = 1
         self._finished = False
 
     @property
     def paragraphs(self) -> list[str]:
         self._finish()
         return list(self._paragraphs)
+
+    @property
+    def paragraph_pages(self) -> list[int | None]:
+        self._finish()
+        return list(self._paragraph_pages)
 
     def handle_starttag(
         self,
@@ -203,6 +221,7 @@ class _VisibleTextParser(HTMLParser):
                 self._flush_text()
                 self._flush_row()
                 self._row_cells = []
+                self._row_page = self._current_page()
             elif tag in _CELL_TAGS:
                 self._flush_text()
                 self._flush_cell()
@@ -211,7 +230,20 @@ class _VisibleTextParser(HTMLParser):
                 self._flush_text()
 
         if tag not in _VOID_TAGS:
-            self._stack.append(_OpenElement(tag=tag, ignored=ignored))
+            opened_page = (
+                not ignored
+                and _is_slide_container(attrs)
+            )
+            self._stack.append(
+                _OpenElement(
+                    tag=tag,
+                    ignored=ignored,
+                    opened_page=opened_page,
+                )
+            )
+            if opened_page:
+                self._page_stack.append(self._next_page_number)
+                self._next_page_number += 1
             if ignored:
                 if opening_summary is not None:
                     opening_summary.summary_seen = True
@@ -257,6 +289,9 @@ class _VisibleTextParser(HTMLParser):
         removed = self._stack[matching_index:]
         del self._stack[matching_index:]
         self._ignored_depth -= sum(element.ignored for element in removed)
+        opened_pages = sum(element.opened_page for element in removed)
+        if opened_pages:
+            del self._page_stack[-opened_pages:]
         remaining_details: list[_ClosedDetailsState] = []
         for state in self._closed_details:
             if (
@@ -298,11 +333,15 @@ class _VisibleTextParser(HTMLParser):
             for state in self._closed_details
         )
 
+    def _current_page(self) -> int | None:
+        return self._page_stack[-1] if self._page_stack else None
+
     def _flush_text(self) -> None:
         text = _normalize_text(self._text_parts)
         self._text_parts = []
         if text:
             self._paragraphs.append(text)
+            self._paragraph_pages.append(self._current_page())
 
     def _flush_cell(self) -> None:
         if self._cell_parts is None:
@@ -312,6 +351,7 @@ class _VisibleTextParser(HTMLParser):
         if text:
             if self._row_cells is None:
                 self._row_cells = []
+                self._row_page = self._current_page()
             self._row_cells.append(text)
 
     def _flush_row(self) -> None:
@@ -321,6 +361,8 @@ class _VisibleTextParser(HTMLParser):
         self._row_cells = None
         if row:
             self._paragraphs.append(row)
+            self._paragraph_pages.append(self._row_page)
+        self._row_page = None
 
     def _finish(self) -> None:
         if self._finished:
@@ -367,7 +409,11 @@ def parse_html(path: Path | str) -> ParsedHtmlResult:
     paragraphs = parser.paragraphs
     if not paragraphs:
         raise ValueError("HTML 文件中没有可审核的可见文字")
-    return ParsedHtmlResult(paragraphs=paragraphs, encoding=encoding)
+    return ParsedHtmlResult(
+        paragraphs=paragraphs,
+        paragraph_pages=parser.paragraph_pages,
+        encoding=encoding,
+    )
 
 
 __all__ = ["ParsedHtmlResult", "parse_html"]

@@ -443,6 +443,7 @@ def save_review_to_directory(
     parsed_paragraphs: list[str],
     text_content: str | None = None,
     doc_type: DocumentType = DocumentType.NEI_CAN,
+    paragraph_pages: list[int | None] | None = None,
     mark_processing_completed: bool = True,
 ) -> Path:
     """把审核产物写入指定任务目录，供持久队列恢复时复用。"""
@@ -462,7 +463,12 @@ def save_review_to_directory(
     # 2. 保存 report.md
     report_path = output_dir / "report.md"
     report_path.write_text(
-        format_review_result(result, original_filename, doc_type=doc_type),
+        format_review_result(
+            result,
+            original_filename,
+            doc_type=doc_type,
+            paragraph_pages=paragraph_pages,
+        ),
         encoding="utf-8",
     )
 
@@ -1107,6 +1113,7 @@ async def _process_queued_single_review(
             result=result,
             parsed_paragraphs=parsed_html.paragraphs,
             doc_type=DocumentType.GENERAL,
+            paragraph_pages=parsed_html.paragraph_pages,
             mark_processing_completed=False,
         )
         return PreparedReviewDelivery.text(
@@ -1114,6 +1121,7 @@ async def _process_queued_single_review(
                 result,
                 workspace.filename,
                 doc_type=DocumentType.GENERAL,
+                paragraph_pages=parsed_html.paragraph_pages,
             )
         )
 

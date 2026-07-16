@@ -673,11 +673,11 @@ uv run --locked pytest tests/test_review_quality_evaluation.py -v
 
 1. 只读取文件源码中已有的静态文字，不执行 JavaScript，不下载脚本、样式、接口数据、图片或字体，也不访问页面链接。
 2. 忽略注释、`head`、`script`、`style`、`template`、`noscript`、`svg`、`canvas`，以及带 `hidden`、`aria-hidden="true"` 或行内 `display:none` / `visibility:hidden` 的元素；未打开的 `dialog` 不提取，未展开的 `details` 只保留首个 `summary`。
-3. 按标题、段落、列表和表格行保留阅读顺序；表格单元格按行连接，供金额、数量、比例和统计口径的一致性检查使用。
+3. 按标题、段落、列表和表格行保留阅读顺序；表格单元格按行连接，供金额、数量、比例和统计口径的一致性检查使用。网页 PPT 中 class 精确包含 `slide` 的可见容器按 DOM 顺序从第 1 页编号，段落同步保留所属页码。
 4. 复用通用审核的错别字、名称、语病、标点、残句、重复和内部逻辑规则；存在至少两个可见段落时，短于 200 字也执行通篇数据一致性检查。
-5. 原始 HTML 保存到任务 `input/`，完整意见保存到 `output/report.md`；企业微信只返回 Markdown 审核消息，不生成 `marked_*.html`。
+5. 原始 HTML 保存到任务 `input/`，完整意见保存到 `output/report.md`；企业微信只返回 Markdown 审核消息，不生成 `marked_*.html`。网页 PPT 的每条意见显示“位置：第 N 页”，普通 HTML 没有 `slide` 容器时显示“位置：第 N 段”，消息与报告使用同一定位。
 
-编码优先读取真实 `meta` 元素中的声明，并支持 UTF-8/BOM/GB18030 回退；注释、脚本和正文里出现的 `charset=` 不作为编码声明。第一版不解释复杂 CSS 选择器。仅靠 CSS 类隐藏、但没有显式隐藏属性或行内隐藏样式的文字，可能仍被提取。动态渲染文字、图片 OCR、图表视觉识别、页面排版审核和多 HTML 联合审核均不在当前范围。
+编码优先读取真实 `meta` 元素中的声明，并支持 UTF-8/BOM/GB18030 回退；注释、脚本和正文里出现的 `charset=` 不作为编码声明。页码来自源码中的 `slide` 容器，不启动浏览器计算打印分页，也不读取 `page-label` 推算页码。第一版不解释复杂 CSS 选择器。仅靠 CSS 类隐藏、但没有显式隐藏属性或行内隐藏样式的文字，可能仍被提取。动态渲染文字、图片 OCR、图表视觉识别、页面排版审核和多 HTML 联合审核均不在当前范围。
 
 ## 日志系统
 

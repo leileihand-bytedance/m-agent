@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.review.html_parser import parse_html
+from app.review.document_type import DocumentType
 from app.review.main import (
     ReviewConfig,
     _process_queued_single_review,
@@ -11,6 +12,7 @@ from app.review.main import (
     is_supported_review_filename,
 )
 from app.review.reviewer import Finding, ReviewResult
+from app.review.output_formatter import format_review_result
 from app.review.task_execution import (
     GENERAL_HTML_REVIEW_TASK_TYPE,
     GeneralReviewWorkspace,
@@ -63,6 +65,58 @@ def test_parse_html_extracts_visible_blocks_and_table_rows(tmp_path: Path):
     assert "internal.example" not in combined
     assert "属性文字" not in combined
     assert parsed.encoding == "utf-8"
+    assert parsed.paragraph_pages == [None, None, None, None, None, None]
+
+
+def test_parse_html_maps_visible_paragraphs_to_slide_pages(tmp_path: Path):
+    path = tmp_path / "deck.html"
+    path.write_text(
+        """<div class="slide" hidden><p>隐藏页面</p></div>
+        <div class="slide slide-cover"><h1>封面</h1></div>
+        <div class="slide slide-content"><p>本期客户100户。</p>
+        <table><tr><td>客户</td><td>120户</td></tr></table></div>
+        <div class="slide-content"><p>页外提示</p></div>""",
+        encoding="utf-8",
+    )
+
+    parsed = parse_html(path)
+
+    assert parsed.paragraphs == [
+        "封面",
+        "本期客户100户。",
+        "客户 | 120户",
+        "页外提示",
+    ]
+    assert parsed.paragraph_pages == [1, 2, 2, None]
+
+
+def test_parse_html_maps_nested_slides_in_dom_order(tmp_path: Path):
+    path = tmp_path / "nested-deck.html"
+    path.write_text(
+        """<div class="slide"><p>第一页</p>
+        <div class="slide"><p>第二页</p></div>
+        <p>回到第一页容器</p></div>""",
+        encoding="utf-8",
+    )
+
+    parsed = parse_html(path)
+
+    assert parsed.paragraphs == ["第一页", "第二页", "回到第一页容器"]
+    assert parsed.paragraph_pages == [1, 2, 1]
+
+
+def test_parse_html_maps_unclosed_slide_as_next_dom_page(tmp_path: Path):
+    path = tmp_path / "unclosed-deck.html"
+    path.write_text(
+        """<div class="slide"><p>第一页
+        <div class="slide"><p>第二页</div>""",
+        encoding="utf-8",
+    )
+
+    parsed = parse_html(path)
+
+    assert parsed.paragraphs == ["第一页", "第二页"]
+    assert parsed.paragraph_pages == [1, 2]
 
 
 def test_parse_html_uses_utf8_bom(tmp_path: Path):
@@ -178,6 +232,46 @@ def _review_config(tmp_path: Path) -> ReviewConfig:
     )
 
 
+def _location_result(filename: str = "deck.html") -> ReviewResult:
+    return ReviewResult(
+        findings=[
+            Finding(
+                rule_id="general-logic-inconsistency",
+                paragraph_index=1,
+                line_number=2,
+                original_text="同口径客户为120户。",
+                description="与前文同口径的100户前后不一致",
+                target_text="120户",
+            )
+        ],
+        total_rules=1,
+        passed_rules=0,
+        filename=filename,
+    )
+
+
+def test_format_review_result_uses_html_slide_page_location():
+    output = format_review_result(
+        _location_result(),
+        "deck.html",
+        doc_type=DocumentType.GENERAL,
+        paragraph_pages=[1, 2],
+    )
+
+    assert "位置：第2页" in output
+
+
+def test_format_review_result_falls_back_to_html_paragraph_location():
+    output = format_review_result(
+        _location_result("article.html"),
+        "article.html",
+        doc_type=DocumentType.GENERAL,
+        paragraph_pages=[None, None],
+    )
+
+    assert "位置：第2段" in output
+
+
 def test_persistent_html_review_returns_message_without_marked_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -210,7 +304,10 @@ def test_persistent_html_review_returns_message_without_marked_file(
     (task_dir / "output").mkdir(parents=True)
     input_dir.mkdir(parents=True)
     input_file = input_dir / "经营报告.html"
-    source = "<p>本期客户100户。</p><p>同口径客户为120户。</p>"
+    source = (
+        '<div class="slide"><p>本期客户100户。</p></div>'
+        '<div class="slide"><p>同口径客户为120户。</p></div>'
+    )
     input_file.write_text(source, encoding="utf-8")
     workspace = GeneralReviewWorkspace(
         task_id="task-html",
@@ -234,7 +331,10 @@ def test_persistent_html_review_returns_message_without_marked_file(
     assert delivery.kind == "text"
     assert "前后逻辑不一致" in delivery.text
     assert "120户" in delivery.text
-    assert (task_dir / "output" / "report.md").is_file()
+    assert "位置：第2页" in delivery.text
+    report_path = task_dir / "output" / "report.md"
+    assert report_path.is_file()
+    assert "位置：第2页" in report_path.read_text(encoding="utf-8")
     assert input_file.read_text(encoding="utf-8") == source
     assert list((task_dir / "output").glob("marked_*")) == []
 
