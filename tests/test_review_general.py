@@ -38,8 +38,12 @@ class _FakeMessages:
         self._counter = counter
         self._text = text
 
-    def create(self, **_: object) -> _FakeMessage:
+    def create(self, **kwargs: object) -> _FakeMessage:
         self._counter["calls"] += 1
+        messages = kwargs.get("messages", [])
+        prompt = messages[0]["content"] if messages else ""
+        if "# 高精度候选复核" in prompt:
+            return _FakeMessage('{"keep_candidate_ids": [0, 1, 2, 3]}')
         return _FakeMessage(self._text)
 
 
@@ -82,7 +86,7 @@ class _LongReviewFakeMessages:
             self._counter["verification_calls"] = (
                 self._counter.get("verification_calls", 0) + 1
             )
-            return _FakeMessage('{"keep_candidate_ids": []}')
+            return _FakeMessage('{"keep_candidate_ids": [0]}')
         if "# 通篇逻辑校对" in prompt:
             self._counter["logic_calls"] = self._counter.get("logic_calls", 0) + 1
             return _FakeMessage('{"issues": []}')
@@ -123,6 +127,35 @@ class _SuspiciousTypoFakeMessages:
 class _SuspiciousTypoFakeClient:
     def __init__(self, counter: dict[str, int]):
         self.messages = _SuspiciousTypoFakeMessages(counter)
+
+
+class _ContextSensitiveTypoFakeMessages:
+    def __init__(self, counter: dict[str, int]):
+        self._counter = counter
+
+    def create(self, **kwargs: object) -> _FakeMessage:
+        messages = kwargs.get("messages", [])
+        prompt = messages[0]["content"] if messages else ""
+        if "# 高精度候选复核" in prompt:
+            self._counter["verification_calls"] = (
+                self._counter.get("verification_calls", 0) + 1
+            )
+            assert "既要做惠及当下的实事，也要做为长远发展打基础的好事" in prompt
+            keep_ids = [0] if self._counter["verification_calls"] == 1 else []
+            return _FakeMessage(
+                '{"keep_candidate_ids": ' + str(keep_ids) + "}"
+            )
+        self._counter["local_calls"] = self._counter.get("local_calls", 0) + 1
+        return _FakeMessage(
+            '''{"issues": [
+                {"paragraph_index": 1, "rule_id": "general-typo", "target_text": "做为", "original_text": "既要做惠及当下的实事，也要做为长远发展打基础的好事。", "description": "“做为”应为“为”"}
+            ]}'''
+        )
+
+
+class _ContextSensitiveTypoFakeClient:
+    def __init__(self, counter: dict[str, int]):
+        self.messages = _ContextSensitiveTypoFakeMessages(counter)
 
 
 def test_detect_document_type_general():
@@ -582,6 +615,24 @@ def test_review_general_rechecks_self_contradictory_typo_candidate(monkeypatch):
     assert not any(
         finding.target_text == "7×24小时" for finding in result.findings
     )
+
+
+def test_review_general_rechecks_typo_candidates_against_sentence_context(monkeypatch):
+    counter: dict[str, int] = {}
+    monkeypatch.setattr(
+        "app.review.general_reviewer.build_anthropic_client",
+        lambda: (_ContextSensitiveTypoFakeClient(counter), "fake-model"),
+    )
+    paragraphs = [
+        "工作要求",
+        "既要做惠及当下的实事，也要做为长远发展打基础的好事。",
+    ]
+
+    result = asyncio.run(review_general(paragraphs, "", "专题材料.html"))
+
+    assert counter["local_calls"] == 1
+    assert counter["verification_calls"] == 2
+    assert not any(finding.target_text == "做为" for finding in result.findings)
 
 
 def test_finding_with_real_claimed_source_is_kept():

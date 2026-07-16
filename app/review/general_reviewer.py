@@ -60,6 +60,7 @@ _LONG_DOCUMENT_VERIFICATION_RULE_IDS = {
     "general-duplicate",
     "general-logic-inconsistency",
 }
+_ALWAYS_STRICT_VERIFICATION_RULE_IDS = {"general-typo"}
 _GENERAL_QUOTED_TEXT_RE = re.compile(
     r"[\"'《【“‘]([^\"'》】”’]{1,30})[\"'》】”’]"
 )
@@ -177,6 +178,7 @@ def _build_general_prompt(
 - 标题、栏目名、问卷题目、表单字段不要求以句号结尾，不能据此报内容不完整
 - 同一套统计字段按不同年份重复出现，属于表单结构，不算重复内容
 - 标点错误必须准确区分中文标点和英文标点，不能把中文逗号误称为英文逗号
+- 不能把相邻但分属不同语法成分的字强行拼成错词；例如“也要做为长远发展打基础的好事”中，“做”支配“好事”，“为长远发展……”是定语，不是“作为”的错写
 - 只审核当前批次标签中出现的段落，不得返回其他段落编号
 
 ## 步骤 3:输出 JSON
@@ -528,6 +530,7 @@ def _build_long_document_verification_prompt(
 - 上下级组织、当前数与累计数、机构数与应用数等统计对象不同，却被报数量矛盾
 - 同一主题在不同问题下分别回答，内容用途不同却被报重复
 - 目标词虽然存在，但描述中的修改建议并不符合语法或原意
+- 相邻字符分属不同语法成分，却被拼成一个词来纠错；必须先按完整句子判断主干、修饰语和并列关系
 - description 声称的修改前文本不在原文，或与 target_text 不一致
 
 文件名：{filename}
@@ -1156,21 +1159,25 @@ async def review_general(
     is_long_document = total_chars >= _GENERAL_LONG_DOCUMENT_MIN_CHARS
     verification_candidates: list[Finding] = []
     findings_not_requiring_verification: list[Finding] = []
-    suspicious_candidate_ids: set[int] = set()
+    strict_candidate_ids: set[int] = set()
     for finding in semantic_findings:
         is_suspicious = _claims_unsupported_replacement_source(
             finding,
             paragraphs[finding.paragraph_index],
         )
-        requires_verification = is_suspicious or (
+        requires_strict_verification = (
+            is_suspicious
+            or finding.rule_id in _ALWAYS_STRICT_VERIFICATION_RULE_IDS
+        )
+        requires_verification = requires_strict_verification or (
             is_long_document
             and finding.rule_id in _LONG_DOCUMENT_VERIFICATION_RULE_IDS
         )
         if requires_verification:
             candidate_id = len(verification_candidates)
             verification_candidates.append(finding)
-            if is_suspicious:
-                suspicious_candidate_ids.add(candidate_id)
+            if requires_strict_verification:
+                strict_candidate_ids.add(candidate_id)
         else:
             findings_not_requiring_verification.append(finding)
 
@@ -1178,14 +1185,14 @@ async def review_general(
         paragraphs,
         verification_candidates,
         filename,
-        force=bool(suspicious_candidate_ids),
+        force=bool(strict_candidate_ids),
     )
     if verification_prompt:
         keep_ids, verification_error = await _verify_long_document_findings(
             verification_prompt,
             len(verification_candidates),
             metrics,
-            consensus_candidate_ids=frozenset(suspicious_candidate_ids),
+            consensus_candidate_ids=frozenset(strict_candidate_ids),
         )
         if keep_ids is not None:
             verified_findings = [
@@ -1200,10 +1207,10 @@ async def review_general(
             semantic_findings = findings_not_requiring_verification + [
                 finding
                 for candidate_id, finding in enumerate(verification_candidates)
-                if candidate_id not in suspicious_candidate_ids
+                if candidate_id not in strict_candidate_ids
             ]
             print(
-                "  候选复核已降级，保留普通第一轮结果并移除证据矛盾项: "
+                "  候选复核已降级，保留普通第一轮结果并移除高风险项: "
                 f"{verification_error}",
                 flush=True,
             )
