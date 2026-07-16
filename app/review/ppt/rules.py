@@ -11,9 +11,9 @@ from .models import (
 )
 
 
-_ARABIC_RE = re.compile(r"^\s*(\d{1,3})([、.．])")
-_PAREN_RE = re.compile(r"^\s*[（(](\d{1,3})[）)]")
-_CHINESE_RE = re.compile(r"^\s*([一二三四五六七八九十]{1,3})、")
+_ARABIC_RE = re.compile(r"^[ \t]*(\d{1,3})([、.．])(?!\d)")
+_PAREN_RE = re.compile(r"^[ \t]*[（(](\d{1,3})[）)]")
+_CHINESE_RE = re.compile(r"^[ \t]*([一二三四五六七八九十]{1,3})、")
 _PLACEHOLDER_RE = re.compile(
     r"(?<![A-Za-z])(?:X{2,}|待补充|待填写|待确认)(?![A-Za-z])",
     re.IGNORECASE,
@@ -51,16 +51,23 @@ def _check_element_sequence(element: PptElement) -> list[PptFinding]:
         ("paren", _PAREN_RE, int),
         ("chinese", _CHINESE_RE, _parse_chinese_number),
     )
-    previous_by_family: dict[str, int] = {}
+    previous_by_family_level: dict[tuple[str, int], int] = {}
     findings: list[PptFinding] = []
     for line in element.text.splitlines():
+        matched_line = False
         for family, pattern, parser in patterns:
             match = pattern.match(line)
             if match is None:
                 continue
+            matched_line = True
             current = parser(match.group(1))
-            previous = previous_by_family.get(family)
-            previous_by_family[family] = current
+            level = _indent_width(line)
+            key = (family, level)
+            for deeper_key in tuple(previous_by_family_level):
+                if deeper_key[1] > level:
+                    del previous_by_family_level[deeper_key]
+            previous = previous_by_family_level.get(key)
+            previous_by_family_level[key] = current
             if previous is None or current == previous + 1:
                 break
             target = match.group(0).strip()
@@ -83,7 +90,14 @@ def _check_element_sequence(element: PptElement) -> list[PptFinding]:
                 )
             )
             break
+        if not matched_line and line.strip():
+            previous_by_family_level.clear()
     return findings
+
+
+def _indent_width(line: str) -> int:
+    leading = line[: len(line) - len(line.lstrip(" \t"))]
+    return len(leading.expandtabs(2))
 
 
 def _check_placeholders(element: PptElement) -> list[PptFinding]:

@@ -16,6 +16,7 @@ from app.platform.documents import (
     DocumentSecurityError,
     DocumentService,
 )
+from app.platform.documents.parsers.pptx import _chart_text
 
 
 def _make_docx(path: Path) -> None:
@@ -54,6 +55,23 @@ def _make_pptx(path: Path) -> None:
     table_shape = slide.shapes.add_table(1, 2, 0, 0, 4_000_000, 1_000_000)
     table_shape.table.cell(0, 0).text = "指标"
     table_shape.table.cell(0, 1).text = "100万户"
+    presentation.save(path)
+
+
+def _make_pptx_with_nested_paragraphs(path: Path) -> None:
+    pptx = pytest.importorskip("pptx")
+    presentation = pptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    text_box = slide.shapes.add_textbox(0, 0, 4_000_000, 2_000_000)
+    frame = text_box.text_frame
+    frame.clear()
+    parent = frame.paragraphs[0]
+    parent.text = "1、一级"
+    child = frame.add_paragraph()
+    child.level = 1
+    child.text = "1、二级"
+    parent_two = frame.add_paragraph()
+    parent_two.text = "2、一级"
     presentation.save(path)
 
 
@@ -141,6 +159,47 @@ def test_document_service_parses_pptx_with_slide_locations_and_tables(tmp_path):
     assert "指标\t100万户" in artifact.full_text
     assert all(block.location.startswith("slide:1") for block in artifact.blocks)
     assert any(block.kind == "table" for block in artifact.blocks)
+
+
+def test_document_service_preserves_pptx_paragraph_levels_as_indentation(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "分级序号.pptx"
+    _make_pptx_with_nested_paragraphs(path)
+
+    artifact = DocumentService().parse(
+        path,
+        allowed_root=input_dir,
+        work_dir=tmp_path / "work",
+    )
+
+    text_block = next(block for block in artifact.blocks if block.kind == "text")
+    assert text_block.text.splitlines() == ["1、一级", "  1、二级", "2、一级"]
+
+
+def test_pptx_chart_parser_reports_unreadable_series_values():
+    class BrokenSeries:
+        name = "客户数"
+
+        @property
+        def values(self):
+            raise ValueError("unreadable chart cache")
+
+    class BrokenChart:
+        has_title = False
+        series = (BrokenSeries(),)
+
+    text, warnings = _chart_text(
+        BrokenChart(),
+        slide_number=2,
+        location="slide:2/shape:3",
+    )
+
+    assert text == "客户数"
+    assert len(warnings) == 1
+    assert warnings[0].code == "pptx_chart_values_unreadable"
+    assert warnings[0].message == "第2页图表“客户数”数据未完整读取"
+    assert warnings[0].locations == ("slide:2/shape:3",)
 
 
 def test_document_service_rejects_extension_signature_mismatch(tmp_path):

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
+import hashlib
 import json
 from pathlib import Path
 import re
 from typing import Any, cast
+from uuid import uuid4
 
 from app.review.model_config import build_anthropic_client
 
@@ -59,17 +61,30 @@ async def review_ppt_document(
     document: PptReviewDocument,
     *,
     model_runner: PptModelRunner | None = None,
+    progress_path: Path | None = None,
+    input_digest: str = "",
 ) -> PptReviewResult:
     """独立审核 PPT 文档；模型候选必须经过原文证据校验。"""
     runner = model_runner or _build_default_model_runner()
     findings = list(check_ppt_rules(document))
+    progress = _load_progress(progress_path, input_digest=input_digest)
+    stored_batches = cast(dict[str, object], progress["language_batches"])
 
     language_template = _load_prompt("language.md")
-    for batch in _language_batches(document):
-        payload = await runner(
-            "language",
-            f"{language_template}\n\n以下是待审核材料：\n{batch}",
-        )
+    for batch_number, batch in enumerate(_language_batches(document), 1):
+        batch_key = _stage_key(f"language:{batch_number}", batch)
+        stored_payload = stored_batches.get(batch_key)
+        if stored_payload is not None:
+            payload = _checked_payload(stored_payload)
+        else:
+            payload = _checked_payload(
+                await runner(
+                    "language",
+                    f"{language_template}\n\n以下是待审核材料：\n{batch}",
+                )
+            )
+            stored_batches[batch_key] = payload
+            _write_progress(progress_path, progress)
         for candidate in _local_candidates(payload):
             finding = validate_local_candidate(document, candidate)
             if finding is not None:
@@ -77,13 +92,29 @@ async def review_ppt_document(
 
     consistency_complete = True
     try:
-        consistency_payload = await runner(
-            "consistency",
-            (
-                f"{_load_prompt('consistency.md')}\n\n"
-                f"以下是同一份 PPT 的全部可审核材料：\n{_document_text(document)}"
-            ),
-        )
+        document_text = _document_text(document)
+        consistency_key = _stage_key("consistency", document_text)
+        stored_consistency = progress.get("consistency")
+        if (
+            isinstance(stored_consistency, dict)
+            and stored_consistency.get("key") == consistency_key
+        ):
+            consistency_payload = _checked_payload(stored_consistency.get("payload"))
+        else:
+            consistency_payload = _checked_payload(
+                await runner(
+                    "consistency",
+                    (
+                        f"{_load_prompt('consistency.md')}\n\n"
+                        f"以下是同一份 PPT 的全部可审核材料：\n{document_text}"
+                    ),
+                )
+            )
+            progress["consistency"] = {
+                "key": consistency_key,
+                "payload": consistency_payload,
+            }
+            _write_progress(progress_path, progress)
         for candidate in _cross_candidates(consistency_payload):
             finding = validate_cross_candidate(document, candidate)
             if finding is not None:
@@ -108,7 +139,13 @@ async def review_pptx(
     model_runner: PptModelRunner | None = None,
 ) -> PptReviewResult:
     document = await asyncio.to_thread(extract_ppt_document, path, task_dir=task_dir)
-    return await review_ppt_document(document, model_runner=model_runner)
+    input_digest = await asyncio.to_thread(_file_sha256, path)
+    return await review_ppt_document(
+        document,
+        model_runner=model_runner,
+        progress_path=task_dir / "work" / "ppt_review_progress.json",
+        input_digest=input_digest,
+    )
 
 
 def _build_default_model_runner() -> PptModelRunner:
@@ -130,6 +167,82 @@ def _build_default_model_runner() -> PptModelRunner:
         return parse_model_payload(text)
 
     return run
+
+
+def _load_progress(
+    path: Path | None,
+    *,
+    input_digest: str,
+) -> dict[str, object]:
+    if path is None:
+        return {
+            "schema_version": 1,
+            "input_digest": "",
+            "language_batches": {},
+            "consistency": None,
+        }
+    if not input_digest.strip():
+        raise ValueError("PPT审核断点缺少输入摘要")
+    if not path.is_file():
+        return {
+            "schema_version": 1,
+            "input_digest": input_digest,
+            "language_batches": {},
+            "consistency": None,
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("PPT审核断点损坏") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("PPT审核断点版本无效")
+    if payload.get("input_digest") != input_digest:
+        raise ValueError("PPT审核断点与当前输入不一致")
+    batches = payload.get("language_batches")
+    if not isinstance(batches, dict):
+        raise ValueError("PPT审核分批断点无效")
+    for value in batches.values():
+        _checked_payload(value)
+    consistency = payload.get("consistency")
+    if consistency is not None:
+        if not isinstance(consistency, dict) or not isinstance(
+            consistency.get("key"), str
+        ):
+            raise ValueError("PPT审核一致性断点无效")
+        _checked_payload(consistency.get("payload"))
+    return cast(dict[str, object], payload)
+
+
+def _write_progress(path: Path | None, payload: dict[str, object]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("PPT审核断点包含不可保存数据") from exc
+    temporary.write_text(serialized, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _checked_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("issues"), list):
+        raise ValueError("模型输出格式无效：issues 必须是数组")
+    return cast(dict[str, object], payload)
+
+
+def _stage_key(stage: str, content: str) -> str:
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return f"{stage}:{digest}"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_prompt(filename: str) -> str:

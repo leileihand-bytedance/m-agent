@@ -76,6 +76,30 @@ def test_sequence_rule_does_not_join_different_elements_or_decimal_values():
     assert not [item for item in findings if item.category == "sequence"]
 
 
+def test_sequence_rule_does_not_treat_line_starting_decimals_as_ordinals():
+    document = _document_with_elements("1.5个百分点\n1.6个百分点")
+
+    assert not [
+        item for item in check_ppt_rules(document) if item.category == "sequence"
+    ]
+
+
+def test_sequence_rule_tracks_nested_levels_independently():
+    document = _document_with_elements("1、一级\n  1、二级\n2、一级")
+
+    assert not [
+        item for item in check_ppt_rules(document) if item.category == "sequence"
+    ]
+
+
+def test_sequence_rule_resets_after_non_list_text_between_independent_lists():
+    document = _document_with_elements("1、第一组\n2、第一组\n说明文字\n1、第二组\n2、第二组")
+
+    assert not [
+        item for item in check_ppt_rules(document) if item.category == "sequence"
+    ]
+
+
 def test_placeholder_quote_and_punctuation_rules_are_independent():
     document = _document_with_elements("XX项目已完成。。“阶段目标")
 

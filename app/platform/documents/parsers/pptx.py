@@ -45,7 +45,13 @@ def parse_pptx_document(path: Path, *, asset_dir: Path) -> dict[str, object]:
                 add_block("table", "\n".join(row for row in rows if row.strip()), location, shape)
                 continue
             if getattr(shape, "has_chart", False):
-                add_block("chart", _chart_text(shape.chart), location, shape)
+                chart_text, chart_warnings = _chart_text(
+                    shape.chart,
+                    slide_number=slide_index,
+                    location=location,
+                )
+                warnings.extend(chart_warnings)
+                add_block("chart", chart_text, location, shape)
                 continue
             if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 asset = _save_picture(shape, slide_index=slide_index, shape_index=shape_index, asset_dir=asset_dir)
@@ -53,7 +59,7 @@ def parse_pptx_document(path: Path, *, asset_dir: Path) -> dict[str, object]:
                     assets.append(asset)
                 continue
             if getattr(shape, "has_text_frame", False):
-                add_block("text", shape.text_frame.text, location, shape)
+                add_block("text", _text_frame_text(shape.text_frame), location, shape)
 
         if getattr(slide, "has_notes_slide", False):
             notes_frame = slide.notes_slide.notes_text_frame
@@ -110,21 +116,45 @@ def _shape_style(shape: Any) -> dict[str, object]:
     return {key: value for key, value in style.items() if value not in (None, "")}
 
 
-def _chart_text(chart: Any) -> str:
+def _text_frame_text(frame: Any) -> str:
+    lines: list[str] = []
+    for paragraph in getattr(frame, "paragraphs", ()):
+        text = str(getattr(paragraph, "text", "") or "").strip()
+        if not text:
+            continue
+        level = max(0, int(getattr(paragraph, "level", 0) or 0))
+        lines.append(f"{'  ' * level}{text}")
+    return "\n".join(lines)
+
+
+def _chart_text(
+    chart: Any,
+    *,
+    slide_number: int,
+    location: str,
+) -> tuple[str, tuple[DocumentWarning, ...]]:
     parts: list[str] = []
+    warnings: list[DocumentWarning] = []
     if getattr(chart, "has_title", False) and chart.chart_title.has_text_frame:
-        parts.append(chart.chart_title.text_frame.text)
+        parts.append(_text_frame_text(chart.chart_title.text_frame))
     for series in getattr(chart, "series", ()):
         name = str(getattr(series, "name", "") or "")
         values = []
         try:
             values = [str(value) for value in series.values]
         except Exception:
-            pass
+            label = f"“{name}”" if name else ""
+            warnings.append(
+                DocumentWarning(
+                    code="pptx_chart_values_unreadable",
+                    message=f"第{slide_number}页图表{label}数据未完整读取",
+                    locations=(location,),
+                )
+            )
         text = "：".join(item for item in (name, "、".join(values)) if item)
         if text:
             parts.append(text)
-    return "\n".join(parts)
+    return "\n".join(parts), tuple(warnings)
 
 
 def _save_picture(shape: Any, *, slide_index: int, shape_index: int, asset_dir: Path) -> DocumentAsset | None:

@@ -113,7 +113,7 @@ uv run --locked pytest tests/test_review_html.py tests/test_review_task_executio
 uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_ppt_formatter.py tests/test_review_ppt_bot.py tests/test_review_task_execution.py tests/test_platform_document_service.py tests/test_review_bot.py -v
 ```
 
-重点验证：只提取任务目录内 `.pptx` 的可编辑文本框、表格和可读图表内容；图片文字和备注不进入审核；序号、占位符和标点规则不跨对象拼接；模型伪造页码、对象或原文会被丢弃；不同时间或不同指标口径不报跨页矛盾；PPT 包不导入其他业务审核引擎；结果不含修改建议，长结果按编号分段；任务完成后不重复审核或发送。自动化通过后仍要用经授权真实 PPT 人工核对误报、漏报、页码、图表读取和企业微信展示。
+重点验证：只提取任务目录内 `.pptx` 的可编辑文本框、表格和可读图表内容；图片文字和备注不进入审核；序号按对象、段落层级和连续列表分组，小数不当作序号；模型伪造页码、对象或原文会被丢弃；即使模型声称同口径，明确不同年份、时间范围、单位或目标/实际状态也不报跨页矛盾；同一首侧证据与不同第二侧证据不会被错误合并；PPT 包不导入其他业务审核引擎；模型夹带的修改建议在证据层和格式化层均被清除；图表读取失败会显示页码提示；长结果按编号分段；处理中断后已完成模型批次不重复调用，发送完成后不重复发送。自动化通过后仍要用经授权真实 PPT 人工核对误报、漏报、页码、图表读取和企业微信展示。
 
 直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
 

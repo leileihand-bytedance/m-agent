@@ -81,3 +81,41 @@ def test_formatter_reports_consistency_degradation_without_advice():
 
     assert "已完成文字检查，但全篇一致性检查未完成" in message
     assert "建议" not in message
+
+
+def test_formatter_removes_advice_even_from_prebuilt_finding():
+    result = PptReviewResult(
+        filename="经营汇报.pptx",
+        page_count=1,
+        findings=(
+            PptFinding(
+                rule_id="ppt-grammar",
+                category="grammar",
+                slide_number=1,
+                element_id="slide:1/shape:1",
+                target_text="持续不断提升",
+                description="语义重复，建议修改为持续提升",
+            ),
+        ),
+    )
+
+    joined = "\n".join(format_ppt_review_messages(result))
+
+    assert "问题：语义重复" in joined
+    assert "建议" not in joined
+    assert "修改为" not in joined
+
+
+def test_formatter_surfaces_parser_warnings_and_avoids_complete_pass_claim():
+    result = PptReviewResult(
+        filename="经营汇报.pptx",
+        page_count=2,
+        findings=(),
+        warnings=("第2页图表数据未完整读取",),
+    )
+
+    message, = format_ppt_review_messages(result)
+
+    assert "未发现低级文字或内部一致性问题" not in message
+    assert "已成功读取范围内" in message
+    assert "第2页图表数据未完整读取" in message

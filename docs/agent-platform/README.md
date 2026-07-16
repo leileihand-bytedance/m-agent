@@ -279,7 +279,7 @@ users:
 - `web_reader`：已实现，读取用户给出的网页链接。
 - `word_reader`：已实现，读取用户本次任务目录内的 Word 文件。
 - `pdf_reader`：已实现，读取用户本次任务目录内的 PDF 文件。
-- `document_reader`：已实现，统一安全读取 DOCX、PDF 和 PPTX，返回适合模型使用的标准材料片段，同时把完整解析结果写入任务 `work/documents/`。扫描 PDF 只对明确标记的页面按需 OCR；PDF/PPTX 页面渲染按工作流显式启用。DOCX 内嵌图片不默认 OCR，在原位置生成可传给模型的人工评估提醒；长材料抽样会强制保留提醒。
+- `document_reader`：已实现，统一安全读取 DOCX、PDF 和 PPTX，返回适合模型使用的标准材料片段，同时把完整解析结果写入任务 `work/documents/`。PPTX 文本保留段落层级缩进，图表底层数值读取失败会留下带幻灯片位置的结构化告警。扫描 PDF 只对明确标记的页面按需 OCR；PDF/PPTX 页面渲染按工作流显式启用。DOCX 内嵌图片不默认 OCR，在原位置生成可传给模型的人工评估提醒；长材料抽样会强制保留提醒。
 - `llm_writer`：已实现，通过 Pydantic AI 调用模型生成文稿。
 - `search`：已实现，调用搜索 API 返回标题、摘要、链接和来源类型。
 - `policy_research` / `policy_materials` / `policy_search`：已实现，提供共享政策挂靠判断、政策知识库材料包和底层检索。
