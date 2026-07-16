@@ -9,6 +9,7 @@ triggers:
   - 改写这段
   - 优化这段文字
 allowed_tools:
+  - bank_materials
   - llm_writer
 workflow: skills.rewrite.workflow:run
 supports_revision: true

@@ -41,7 +41,9 @@
 ../M-Agent-Files/knowledge/bank/bank.sqlite3
 ```
 
-该数据库包含内部或敏感材料，已加入 `.gitignore`，不要提交。
+该数据库属于本机资料库，未来可能纳入内部或敏感材料，已加入 `.gitignore`，不要提交。
+
+2026-07-16 用户确认当前已导入语料均为公开信息，并授权 `rewrite` 在微众相关材料润色时，把每次最多 3 条相关短摘录发送给当前配置的 DeepSeek，仅作口径复核。该授权不自动覆盖未来新导入材料；当前条目元数据尚无公开/内部可见性字段，后续必须由 `TODO-010` 补齐来源可见性治理，未分类的新材料不能视为已获外发授权。
 
 ## 当前能力
 
@@ -131,6 +133,7 @@ uv run --locked python -m app.bank_knowledge.cli import-folder "/path/to/authori
 skills/direct_report/
 skills/writer1/
 skills/writer2/
+skills/rewrite/
 ```
 
 当前 workflow 顺序：
@@ -141,6 +144,18 @@ skills/writer2/
   -> policy_materials
   -> llm_writer
 ```
+
+`rewrite` 使用更严格的独立流程：
+
+```text
+直接粘贴原文
+  -> 先判断是否有明确微众机构/产品信号
+  -> 仅相关时调用 bank_materials
+  -> 语料只核对机构名、产品名和已有标准表述
+  -> llm_writer 在不新增事实的边界内润色
+```
+
+该流程把检索结果标记为 `verification_reference`，不使用信息库补数据、案例、日期或荣誉；复核通过不等于允许补充。用户原文与语料或不同语料之间存在实质冲突时，必须提示确认；信息库无结果时继续普通润色，但不能声称已核实。
 
 ## 口径管理
 

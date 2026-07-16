@@ -1,13 +1,43 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 
-from app.platform.tools import ToolGateway
+from app.platform.tools import ToolGateway, ToolNotAllowedError
 from skills.revision_support import build_revision_payload
 from skills.rewrite.schema import RewriteResult
 
 
 REWRITE_HINTS = ("润色", "改写", "优化", "正式", "简洁", "顺一下", "口语化", "文字")
+WEBANK_STRONG_MARKERS = (
+    "微众银行",
+    "深圳前海微众银行",
+    "微众",
+    "WeBank",
+    "WEBANK",
+    "微业贷",
+    "微粒贷",
+    "微贸贷",
+)
+WEBANK_CONTEXT_MARKERS = ("我行", "本行")
+WEBANK_CONTEXT_TERMS = (
+    "数字银行",
+    "普惠金融",
+    "小微企业",
+    "科技金融",
+    "数字金融",
+    "金融科技",
+    "消保",
+    "消费者权益",
+    "反诈",
+    "无障碍",
+    "绿色金融",
+)
+WEBANK_REFERENCE_RULES = """微众银行语料使用约束：
+1. 语料只用于核对机构名称、产品名称和已有标准表述，用户原文仍是本次润色的事实边界。
+2. 不得把复核语料中原文没有的任何内容写入正文；复核通过不等于允许补充。尤其不得补入数据、日期、荣誉或新事实，也不得因为语料更丰富就扩写内容。
+3. 只有在语料提供唯一、直接依据时，才可规范明显写错的专有名称；不能确认时保留原文并请用户核实。
+4. 用户原文与语料或不同语料之间出现实质口径冲突时，不得静默改数或自行选口径，应设置 needs_clarification=true 并说明待确认项。"""
 
 
 def run(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
@@ -30,20 +60,21 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
         )
 
     request = user_request or "请在不新增事实的前提下，优化原文表达，让语句更顺、更规范。"
+    source_material = _source_material(source_text)
+    bank_references = _bank_reference_materials(
+        source_text=source_text,
+        user_request=request,
+        materials=[source_material],
+        tools=tools,
+    )
+    instruction = _with_bank_reference_rules(request, has_references=bool(bank_references))
     draft = tools.call(
         "llm_writer",
         {
             "skill_id": "rewrite",
             "task": "rewrite",
-            "instruction": request,
-            "materials": [
-                {
-                    "title": "用户原文",
-                    "text": source_text,
-                    "url": "",
-                    "source": "user_text",
-                }
-            ],
+            "instruction": instruction,
+            "materials": [source_material, *bank_references],
             "output_type": RewriteResult,
         },
     )
@@ -52,9 +83,75 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
 
 def _revise_previous_text(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
     payload = build_revision_payload(inputs, skill_id="rewrite")
+    previous_body = str(inputs.get("previous_body", "") or "").strip()
+    revision_request = str(inputs.get("revision_request", "") or inputs.get("text", "")).strip()
+    materials = [item for item in list(payload.get("materials") or []) if isinstance(item, dict)]
+    bank_references = _bank_reference_materials(
+        source_text=previous_body,
+        user_request=revision_request,
+        materials=materials,
+        tools=tools,
+    )
+    if bank_references:
+        payload["materials"] = [*materials, *bank_references]
+        payload["instruction"] = _with_bank_reference_rules(
+            str(payload.get("instruction", "") or ""),
+            has_references=True,
+        )
     payload["output_type"] = RewriteResult
     draft = tools.call("llm_writer", payload)
     return _normalize_result(draft)
+
+
+def _source_material(source_text: str) -> dict[str, object]:
+    return {
+        "title": "用户原文",
+        "text": source_text,
+        "url": "",
+        "source": "user_text",
+    }
+
+
+def _bank_reference_materials(
+    *,
+    source_text: str,
+    user_request: str,
+    materials: list[dict[str, object]],
+    tools: ToolGateway,
+) -> list[dict[str, object]]:
+    if not _looks_like_webank_material(source_text=source_text, user_request=user_request):
+        return []
+    try:
+        packaged = tools.call(
+            "bank_materials",
+            user_instruction=f"核对微众银行相关专有名称和既有口径。用户润色要求：{user_request}",
+            materials=materials,
+            limit=3,
+        )
+    except (ToolNotAllowedError, KeyError, OSError, sqlite3.Error):
+        return []
+    if not isinstance(packaged, list):
+        return []
+    return [
+        {**item, "material_role": "verification_reference"}
+        for item in packaged
+        if isinstance(item, dict) and item.get("source") == "bank_knowledge"
+    ]
+
+
+def _looks_like_webank_material(*, source_text: str, user_request: str) -> bool:
+    combined = f"{user_request}\n{source_text}"
+    if "webank" in combined.lower() or any(marker in combined for marker in WEBANK_STRONG_MARKERS):
+        return True
+    return any(marker in source_text for marker in WEBANK_CONTEXT_MARKERS) and any(
+        term in combined for term in WEBANK_CONTEXT_TERMS
+    )
+
+
+def _with_bank_reference_rules(instruction: str, *, has_references: bool) -> str:
+    if not has_references:
+        return instruction
+    return f"{instruction.rstrip()}\n\n{WEBANK_REFERENCE_RULES}"
 
 
 def _normalize_result(draft: object) -> RewriteResult:
