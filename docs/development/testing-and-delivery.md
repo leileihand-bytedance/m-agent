@@ -104,7 +104,7 @@ uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform
 单项审核已接入持久任务后，还要运行：
 
 ```bash
-uv run --locked pytest tests/test_review_task_execution.py tests/test_review_intake.py tests/test_review_bot.py -v
+uv run --locked pytest tests/test_review_html.py tests/test_review_task_execution.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_intake.py tests/test_review_bot.py -v
 ```
 
 直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
@@ -113,17 +113,17 @@ uv run --locked pytest tests/test_review_task_execution.py tests/test_review_int
 uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖五类单项任务分派、处理与发送检查点、已完成任务不重复审核、队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、单文件后追加格式审核，以及损坏检查点的安全失败。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
+重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖六类单项任务分派、处理与发送检查点、已完成任务不重复审核、队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、短文数据一致性、正文不进 SQLite 和不生成标记文件。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
 
 ### 持久任务生产接入验收
 
-持久化执行器按任务类型分批接入。当前已接入纯文字、单个通用 Word、内参、半月报、公文格式五类单项审核，以及直报、`writer1`、`writer2`；审核和写作使用独立 SQLite。`research_synthesis` 和多文件联合审核仍走旧路径，不能因为共用入口就视为已切流。
+持久化执行器按任务类型分批接入。当前已接入纯文字、单个通用 Word、内参、半月报、公文格式、单个静态 HTML 六类单项审核，以及直报、`writer1`、`writer2`；审核和写作使用独立 SQLite。`research_synthesis` 和多文件联合审核仍走旧路径，不能因为共用入口就视为已切流。
 
 每个任务类型接入时都必须完成：
 
 1. 自动化验证同一企业微信消息重复投递只创建和执行一次任务。
 2. 自动化验证全局、单用户和成本并发限制，排队期间 Bot 仍可受理其他消息。
-3. 人工在真实企业微信中确认审核文件到达后只收到一次即时收件提示，单文件入队后不再追加队列或审核类型；分别用“格式审核”“帮我查一下格式”验证文件前置格式意图，再用“也做一下文字审核”“再做一下内容审核”验证文件后操作指令，确认这些指令本身都不建立纯文字审核任务。纯文字审核完成后必须通过主动 Markdown 消息收到结果。正常提示不包含后台任务编号；模拟需要人工介入的异常时，用户提示包含“处理编号”。
+3. 人工在真实企业微信中确认审核文件到达后只收到一次即时收件提示，单文件入队后不再追加队列或审核类型；分别用“格式审核”“帮我查一下格式”验证文件前置格式意图，再用“也做一下文字审核”“再做一下内容审核”验证文件后操作指令，确认这些指令本身都不建立纯文字审核任务。纯文字和 HTML 审核完成后必须通过主动 Markdown 消息收到结果；HTML 结果只发消息、不回传标记文件。正常提示不包含后台任务编号；模拟需要人工介入的异常时，用户提示包含“处理编号”。
 4. 在生成过程中重启对应 Bot，确认任务恢复或安全失败，不会永久停在“处理中”。
 5. 分别验证用户取消、模型或网络失败、正文已生成但附件发送失败，以及运维 Bot 告警。
 6. 核对外部发送幂等：已经成功发送的结果不会因重试或重启再次发送，失败交付也不会触发重新生成两份稿件。

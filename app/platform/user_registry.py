@@ -151,7 +151,8 @@ class RegistrationFlow:
         self.registry.register(userid, cleaned)
         return True, (
             f"你好，{cleaned}：\n"
-            "我可以帮你审内参、半月报，或者其他文字材料，直接发文字或docx给我就可以。"
+            "我可以帮你审内参、半月报，或者其他文字材料，"
+            "直接发文字、docx或html给我就可以。"
             "另外请注意，涉及行内数据请务必脱敏哦。"
         )
 

@@ -1190,7 +1190,8 @@ def test_resolve_text_registration_reply_registers_valid_name(tmp_path: Path):
     assert handled is True
     assert reply == (
         "你好，Tom：\n"
-        "我可以帮你审内参、半月报，或者其他文字材料，直接发文字或docx给我就可以。"
+        "我可以帮你审内参、半月报，或者其他文字材料，"
+        "直接发文字、docx或html给我就可以。"
         "另外请注意，涉及行内数据请务必脱敏哦。"
     )
     assert registry.get_name("new_user") == "Tom"
@@ -1248,7 +1249,10 @@ def test_build_enter_welcome_text_keeps_regular_welcome_for_registered_user(tmp_
 
     reply = _build_enter_welcome_text(flow, "old_user")
 
-    assert reply == "你好，需要我帮你审核什么呢？请直接发送 .docx 文档或直接发送文字,我会认真审核。"
+    assert reply == (
+        "你好，需要我帮你审核什么呢？请直接发送 .docx、.html/.htm 文件"
+        "或直接发送文字，我会认真审核。"
+    )
 
 
 def test_is_followup_review_request_text_matches_short_prompt():
@@ -1291,7 +1295,7 @@ def test_resolve_instruction_only_text_reply_prompts_user_to_send_material_first
 
     reply = _resolve_instruction_only_text_reply(tracker, "u1", "帮我审一下这个材料", now=100.0)
 
-    assert reply == "收到，请把需要审核的文字或.docx发给我，我来帮你看。"
+    assert reply == "收到，请把需要审核的文字、.docx或.html/.htm文件发给我，我来帮你看。"
 
 
 def test_resolve_instruction_only_text_reply_treats_followup_as_continue_when_recent_submission_exists():

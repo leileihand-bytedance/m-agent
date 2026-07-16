@@ -2,8 +2,8 @@
 
 功能:
   - 接入企业微信长连接(独立 Bot,只做审核)
-  - 接收文件消息 → 检查后缀(.docx 接受,其他拒)
-  - 解析 .docx → 加载 rules.md → 跑审核引擎 → 输出意见
+  - 接收文件消息 → 检查后缀(.docx/.html/.htm)
+  - 解析 Word 或 HTML 静态可见文字 → 加载规则 → 跑审核引擎 → 输出意见
   - 存档到 M-Agent-Files/tasks/review/YYYY/MM/<日期-序号>/
 """
 
@@ -54,6 +54,7 @@ from app.platform.task_execution import (  # noqa: E402
     TaskRepository,
 )
 from app.review.task_execution import (  # noqa: E402
+    GENERAL_HTML_REVIEW_TASK_TYPE,
     GENERAL_TEXT_REVIEW_TASK_TYPE,
     GENERAL_REVIEW_COST_CLASS,
     GENERAL_REVIEW_TASK_TYPE,
@@ -245,7 +246,9 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
 # 拒接非审核消息
 # ============================================================
 
-REJECT_MESSAGE = "本入口接收 .docx 文件或直接发送文字，请发送需要审核的内容"
+REJECT_MESSAGE = (
+    "本入口接收 .docx、.html/.htm 文件或直接发送文字，请发送需要审核的内容"
+)
 
 
 def is_docx_filename(filename: str | None) -> bool:
@@ -253,6 +256,18 @@ def is_docx_filename(filename: str | None) -> bool:
     if not filename:
         return False
     return filename.lower().endswith(".docx")
+
+
+def is_html_filename(filename: str | None) -> bool:
+    """判断文件名是否为支持的 HTML 文件。"""
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in {".html", ".htm"}
+
+
+def is_supported_review_filename(filename: str | None) -> bool:
+    """判断文件名是否属于审核入口支持的上传格式。"""
+    return is_docx_filename(filename) or is_html_filename(filename)
 
 
 def _build_file_ack(pending_mode: str | None) -> str:
@@ -708,7 +723,7 @@ def _resolve_instruction_only_text_reply(
         return None
     if recent_submission_tracker.has_recent_submission(userid, now=now):
         return "收到，我会按你刚发的内容继续审核，请稍等……"
-    return "收到，请把需要审核的文字或.docx发给我，我来帮你看。"
+    return "收到，请把需要审核的文字、.docx或.html/.htm文件发给我，我来帮你看。"
 
 
 def _resolve_text_registration_reply(
@@ -732,7 +747,10 @@ def _build_enter_welcome_text(
     """构造用户进入会话时的欢迎语."""
     if registration_flow.should_ask_name(userid):
         return registration_flow.ask_name_message()
-    return "你好，需要我帮你审核什么呢？请直接发送 .docx 文档或直接发送文字,我会认真审核。"
+    return (
+        "你好，需要我帮你审核什么呢？请直接发送 .docx、.html/.htm 文件"
+        "或直接发送文字，我会认真审核。"
+    )
 
 
 def _split_text_into_paragraphs(text: str) -> list[str]:
@@ -775,6 +793,7 @@ _DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE = {
     for doc_type, task_type in _REVIEW_TASK_TYPE_BY_DOCUMENT_TYPE.items()
 }
 _DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE[GENERAL_TEXT_REVIEW_TASK_TYPE] = DocumentType.GENERAL
+_DOCUMENT_TYPE_BY_REVIEW_TASK_TYPE[GENERAL_HTML_REVIEW_TASK_TYPE] = DocumentType.GENERAL
 
 
 def _review_task_type_for_document_type(doc_type: DocumentType) -> str:
@@ -1006,6 +1025,54 @@ async def _process_queued_single_review(
             return PreparedReviewDelivery.text("发送的内容为空，无法审核。")
         return PreparedReviewDelivery.text(
             format_review_result(result, "文字消息", doc_type=DocumentType.GENERAL)
+        )
+
+    if workspace.task_type == GENERAL_HTML_REVIEW_TASK_TYPE:
+        from app.review.general_reviewer import review_general  # noqa: E402
+        from app.review.html_parser import parse_html  # noqa: E402
+
+        try:
+            parsed_html = await asyncio.to_thread(parse_html, workspace.input_file)
+        except ValueError as exc:
+            message = str(exc)
+            if "没有可审核的可见文字" in message:
+                return PreparedReviewDelivery.text(
+                    "HTML文件中没有可审核的可见文字，请提供包含静态正文的HTML文件。"
+                )
+            if "编码无法识别" in message:
+                return PreparedReviewDelivery.text(
+                    "HTML文件编码无法识别，请转换为UTF-8后重新发送。"
+                )
+            raise
+
+        result = await review_general(
+            parsed_html.paragraphs,
+            load_rules("app/review/rules_general.md"),
+            workspace.filename,
+            whole_document_logic_min_chars=(
+                0 if len(parsed_html.paragraphs) >= 2 else 200
+            ),
+        )
+        file_bytes = await asyncio.to_thread(workspace.input_file.read_bytes)
+        await asyncio.to_thread(
+            save_review_to_directory,
+            review_dir=workspace.task_dir,
+            file_bytes=file_bytes,
+            original_filename=workspace.filename,
+            sender=workspace.sender_userid,
+            msgid="",
+            task_id=workspace.task_id,
+            result=result,
+            parsed_paragraphs=parsed_html.paragraphs,
+            doc_type=DocumentType.GENERAL,
+            mark_processing_completed=False,
+        )
+        return PreparedReviewDelivery.text(
+            format_review_result(
+                result,
+                workspace.filename,
+                doc_type=DocumentType.GENERAL,
+            )
         )
 
     parsed = await asyncio.to_thread(_parse_docx, workspace.input_file)
@@ -1921,16 +1988,16 @@ async def run_review_bot(config: ReviewConfig) -> None:
             return
 
         buffer = result.get("buffer", b"")
-        filename = result.get("filename") or "unknown.docx"
+        filename = result.get("filename") or "unknown"
         logger.info("下载完成: filename=%s, size=%d 字节 from %s", filename, len(buffer), sender, extra=extra)
 
         # 3. 检查后缀(用下载回来的真实文件名)
-        if not is_docx_filename(filename):
+        if not is_supported_review_filename(filename):
             recent_submission_tracker.forget(sender)
-            logger.info("拒接非 .docx 文件 from %s: %s", sender, filename, extra=extra)
+            logger.info("拒接非审核格式文件 from %s: %s", sender, filename, extra=extra)
             await ws_client.reply_stream(
                 frame, generate_req_id("review-reject"),
-                f"❌ 本入口仅接收 .docx 文件,你发的是: {filename}", True,
+                f"❌ 本入口仅接收 .docx、.html/.htm 文件，你发的是: {filename}", True,
             )
             return
 
@@ -1944,6 +2011,70 @@ async def run_review_bot(config: ReviewConfig) -> None:
             await ws_client.reply_stream(
                 frame, generate_req_id("review-err"),
                 f"文件过大({size_mb:.1f}MB,上限 {config.max_file_size_mb}MB),暂不支持。", True,
+            )
+            return
+
+        if is_html_filename(filename):
+            if pending_mode == "format":
+                recent_submission_tracker.forget(sender)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-reject"),
+                    "公文格式审核只支持 .docx 文件；HTML仅支持可见文字和数据一致性审核。",
+                    True,
+                )
+                return
+            if pending_mode == "multi":
+                recent_submission_tracker.forget(sender)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-reject"),
+                    "HTML暂不支持多文件联合审核，请取消当前联合审核后单独发送。",
+                    True,
+                )
+                return
+            try:
+                message_id = extract_message_id(frame)
+                if not message_id:
+                    raise ValueError("企业微信消息缺少稳定消息标识")
+                submission = review_tasks.submit_file(
+                    channel="wecom",
+                    sender_userid=sender,
+                    sender_name=english_name,
+                    message_id=message_id,
+                    task_type=GENERAL_HTML_REVIEW_TASK_TYPE,
+                    filename=filename,
+                    file_bytes=buffer,
+                )
+            except Exception as exc:
+                recent_submission_tracker.forget(sender)
+                logger.exception(
+                    "HTML文字审核任务入队失败 from %s",
+                    sender,
+                    exc_info=exc,
+                    extra=extra,
+                )
+                await notifier.notify_file_review_error(
+                    sender,
+                    filename,
+                    "HTML文字审核任务入队",
+                    exc,
+                )
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("HTML文字审核任务受理", exc),
+                    True,
+                )
+                return
+            await _reply_queued_review_acceptance(
+                ws_client,
+                frame,
+                generate_req_id("review-html-queued"),
+                review_label="HTML文字审核",
+                created=submission.created,
+                input_label="这份HTML文件",
+                acknowledgment_already_sent=True,
             )
             return
 

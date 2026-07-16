@@ -21,6 +21,7 @@ from app.platform.task_status import update_task_status, write_task_status
 
 
 GENERAL_REVIEW_TASK_TYPE = "review_general_docx"
+GENERAL_HTML_REVIEW_TASK_TYPE = "review_general_html"
 NEICAN_REVIEW_TASK_TYPE = "review_neican_docx"
 HALF_MONTHLY_REVIEW_TASK_TYPE = "review_halfmonthly_docx"
 OFFICIAL_FORMAT_REVIEW_TASK_TYPE = "review_official_format_docx"
@@ -29,6 +30,7 @@ GENERAL_REVIEW_COST_CLASS = "review_llm"
 REVIEW_FILE_TASK_TYPES = frozenset(
     {
         GENERAL_REVIEW_TASK_TYPE,
+        GENERAL_HTML_REVIEW_TASK_TYPE,
         NEICAN_REVIEW_TASK_TYPE,
         HALF_MONTHLY_REVIEW_TASK_TYPE,
         OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
@@ -36,6 +38,7 @@ REVIEW_FILE_TASK_TYPES = frozenset(
 )
 REVIEW_TASK_TYPES = (
     GENERAL_REVIEW_TASK_TYPE,
+    GENERAL_HTML_REVIEW_TASK_TYPE,
     NEICAN_REVIEW_TASK_TYPE,
     HALF_MONTHLY_REVIEW_TASK_TYPE,
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE,
@@ -43,10 +46,19 @@ REVIEW_TASK_TYPES = (
 )
 _DOCUMENT_TYPE_BY_TASK_TYPE = {
     GENERAL_REVIEW_TASK_TYPE: "general",
+    GENERAL_HTML_REVIEW_TASK_TYPE: "general_html",
     NEICAN_REVIEW_TASK_TYPE: "neican",
     HALF_MONTHLY_REVIEW_TASK_TYPE: "half_monthly",
     OFFICIAL_FORMAT_REVIEW_TASK_TYPE: "official_format",
     GENERAL_TEXT_REVIEW_TASK_TYPE: "general_text",
+}
+ReviewInputKind = Literal["docx", "text", "html"]
+_FILE_INPUT_SPEC: dict[str, tuple[ReviewInputKind, frozenset[str]]] = {
+    GENERAL_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
+    NEICAN_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
+    HALF_MONTHLY_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
+    OFFICIAL_FORMAT_REVIEW_TASK_TYPE: ("docx", frozenset({".docx"})),
+    GENERAL_HTML_REVIEW_TASK_TYPE: ("html", frozenset({".html", ".htm"})),
 }
 
 
@@ -59,7 +71,7 @@ class GeneralReviewWorkspace:
     sender_userid: str
     sender_name: str
     task_type: str = GENERAL_REVIEW_TASK_TYPE
-    input_kind: Literal["docx", "text"] = "docx"
+    input_kind: ReviewInputKind = "docx"
 
 
 @dataclass(frozen=True)
@@ -145,8 +157,10 @@ class GeneralReviewTaskService:
     ) -> ReviewTaskSubmission:
         if task_type not in REVIEW_FILE_TASK_TYPES:
             raise ValueError(f"不支持的单项审核任务类型：{task_type}")
-        if Path(filename).suffix.lower() != ".docx":
-            raise ValueError("单项文件审核只支持 .docx")
+        input_kind, allowed_suffixes = _FILE_INPUT_SPEC[task_type]
+        if Path(filename).suffix.lower() not in allowed_suffixes:
+            allowed = "/".join(sorted(allowed_suffixes))
+            raise ValueError(f"{task_type} 文件后缀必须是 {allowed}")
         return self._submit_input(
             channel=channel,
             sender_userid=sender_userid,
@@ -154,7 +168,7 @@ class GeneralReviewTaskService:
             message_id=message_id,
             task_type=task_type,
             filename=filename,
-            input_kind="docx",
+            input_kind=input_kind,
             input_bytes=file_bytes,
         )
 
@@ -190,7 +204,7 @@ class GeneralReviewTaskService:
         message_id: str,
         task_type: str,
         filename: str,
-        input_kind: Literal["docx", "text"],
+        input_kind: ReviewInputKind,
         input_bytes: bytes,
     ) -> ReviewTaskSubmission:
         if not message_id.strip():
@@ -408,13 +422,19 @@ class GeneralReviewTaskService:
             raise ValueError("审核文件名不能为空")
         default_kind = "docx" if task.task_type == GENERAL_REVIEW_TASK_TYPE else ""
         input_kind = str(task.payload.get("input_kind", "") or default_kind)
-        expected_kind = "text" if task.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE else "docx"
+        expected_kind = (
+            "text"
+            if task.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE
+            else _FILE_INPUT_SPEC[task.task_type][0]
+        )
         if input_kind != expected_kind:
             raise ValueError("审核任务输入类型与任务类型不一致")
-        if input_kind == "docx" and input_file.suffix.lower() != ".docx":
-            raise ValueError("审核任务文件类型无效")
         if input_kind == "text" and input_file.suffix.lower() != ".txt":
             raise ValueError("审核文字快照类型无效")
+        if input_kind != "text" and input_file.suffix.lower() not in _FILE_INPUT_SPEC[
+            task.task_type
+        ][1]:
+            raise ValueError("审核任务文件类型无效")
         return GeneralReviewWorkspace(
             task_id=task.task_id,
             task_dir=task_dir,
@@ -431,7 +451,7 @@ class GeneralReviewTaskService:
         *,
         filename: str,
         input_bytes: bytes,
-        input_kind: Literal["docx", "text"],
+        input_kind: ReviewInputKind,
     ) -> Path:
         now = datetime.now().astimezone()
         month_dir = self._reviews_root / f"{now:%Y}" / f"{now:%m}"
@@ -541,16 +561,28 @@ class GeneralReviewTaskService:
             return
 
 
-def _safe_input_name(filename: str, *, input_kind: Literal["docx", "text"]) -> str:
-    fallback = "文字消息.txt" if input_kind == "text" else "uploaded.docx"
+def _safe_input_name(filename: str, *, input_kind: ReviewInputKind) -> str:
+    fallback = {
+        "text": "文字消息.txt",
+        "docx": "uploaded.docx",
+        "html": "uploaded.html",
+    }[input_kind]
     path = Path(filename or fallback)
     stem = path.stem or "uploaded"
     safe_stem = re.sub(r"[^\w一-鿿\-_]", "_", stem)
-    suffix = ".txt" if input_kind == "text" else ".docx"
+    if input_kind == "text":
+        suffix = ".txt"
+    elif input_kind == "docx":
+        suffix = ".docx"
+    else:
+        suffix = path.suffix.lower()
+        if suffix not in {".html", ".htm"}:
+            suffix = ".html"
     return f"{safe_stem}{suffix}"
 
 
 __all__ = [
+    "GENERAL_HTML_REVIEW_TASK_TYPE",
     "GENERAL_TEXT_REVIEW_TASK_TYPE",
     "GENERAL_REVIEW_COST_CLASS",
     "GENERAL_REVIEW_TASK_TYPE",
