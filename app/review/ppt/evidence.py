@@ -30,7 +30,7 @@ _PERIOD_RE = re.compile(
     re.IGNORECASE,
 )
 _UNIT_RE = re.compile(
-    r"(?<=\d)(?:个百分点|％|%|万户|户|万人|人|万元|亿元|元|万吨|吨|"
+    r"(?<=\d)[ \t]*(个百分点|％|%|万户|户|万人|人|万元|亿元|元|万吨|吨|"
     r"万公里|公里|万件|件|万台|台)"
 )
 _TARGET_SCOPE_RE = re.compile(r"目标|计划|预计|预测|预算|拟|力争")
@@ -86,7 +86,10 @@ def validate_cross_candidate(
         and candidate.target_text == candidate.related_text
     ):
         return None
-    if _has_explicit_scope_conflict(candidate.target_text, candidate.related_text):
+    if _has_explicit_scope_conflict(
+        candidate.target_text,
+        candidate.related_text,
+    ) or _has_explicit_scope_conflict(first.text, second.text):
         return None
 
     return PptFinding(

@@ -70,6 +70,7 @@ def _make_pptx_with_nested_paragraphs(path: Path) -> None:
     child = frame.add_paragraph()
     child.level = 1
     child.text = "1、二级"
+    frame.add_paragraph()
     parent_two = frame.add_paragraph()
     parent_two.text = "2、一级"
     presentation.save(path)
@@ -174,7 +175,7 @@ def test_document_service_preserves_pptx_paragraph_levels_as_indentation(tmp_pat
     )
 
     text_block = next(block for block in artifact.blocks if block.kind == "text")
-    assert text_block.text.splitlines() == ["1、一级", "  1、二级", "2、一级"]
+    assert text_block.text.splitlines() == ["1、一级", "  1、二级", "", "2、一级"]
 
 
 def test_pptx_chart_parser_reports_unreadable_series_values():

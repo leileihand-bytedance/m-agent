@@ -120,11 +120,9 @@ def _text_frame_text(frame: Any) -> str:
     lines: list[str] = []
     for paragraph in getattr(frame, "paragraphs", ()):
         text = str(getattr(paragraph, "text", "") or "").strip()
-        if not text:
-            continue
         level = max(0, int(getattr(paragraph, "level", 0) or 0))
-        lines.append(f"{'  ' * level}{text}")
-    return "\n".join(lines)
+        lines.append(f"{'  ' * level}{text}" if text else "")
+    return "\n".join(lines).strip("\n")
 
 
 def _chart_text(

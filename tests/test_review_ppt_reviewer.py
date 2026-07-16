@@ -170,11 +170,44 @@ def test_cross_candidate_rejects_explicit_different_years_even_if_model_flags_ma
     assert validate_cross_candidate(document, candidate) is None
 
 
+def test_cross_candidate_uses_element_context_when_candidate_omits_year():
+    document = PptReviewDocument(
+        filename="经营汇报.pptx",
+        page_count=2,
+        slides=(
+            PptSlide(
+                1,
+                (PptElement("slide:1/shape:1", 1, "text", "2023年\n客户100万户"),),
+            ),
+            PptSlide(
+                2,
+                (PptElement("slide:2/shape:1", 2, "text", "2024年\n客户120万户"),),
+            ),
+        ),
+    )
+    candidate = PptCrossCandidate(
+        category="data_inconsistency",
+        slide_number=1,
+        element_id="slide:1/shape:1",
+        target_text="客户100万户",
+        related_slide_number=2,
+        related_element_id="slide:2/shape:1",
+        related_text="客户120万户",
+        description="客户数前后不一致",
+        same_subject=True,
+        same_time_scope=True,
+        same_metric_scope=True,
+    )
+
+    assert validate_cross_candidate(document, candidate) is None
+
+
 @pytest.mark.parametrize(
     ("first_text", "second_text"),
     [
         ("上半年客户100万户", "下半年客户120万户"),
         ("客户100万户", "客户120户"),
+        ("客户100 万户", "客户120 户"),
         ("目标客户100万户", "实际客户120万户"),
     ],
 )

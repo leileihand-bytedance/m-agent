@@ -90,7 +90,7 @@ def _check_element_sequence(element: PptElement) -> list[PptFinding]:
                 )
             )
             break
-        if not matched_line and line.strip():
+        if not matched_line:
             previous_by_family_level.clear()
     return findings
 
