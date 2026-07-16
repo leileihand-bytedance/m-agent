@@ -130,7 +130,7 @@ uv run --locked pytest tests/test_rewrite_bot.py tests/test_rewrite_workflow.py 
 uv run --locked python -m app.rewrite_bot --check-config
 ```
 
-重点验证入口注册表中只有 `rewrite`，直报、简报等请求不能被执行；文件和网页链接被明确拒绝；任务和会话目录与原写作 Bot 隔离；配置检查只显示遮罩后的 Bot ID，不输出 Secret。
+重点验证入口注册表中只有 `rewrite`，直报、简报等请求不能被执行；文件和网页链接被明确拒绝；只有原文时不调用模型并追问修改方向，用户补充要求后按“原文 + 要求”执行，Bot 重启后可恢复待确认原文，成功或取消后清理；同条消息含原文和要求、上一版续改仍可直接处理；任务、待确认原文和会话目录与原写作 Bot 隔离；配置检查只显示遮罩后的 Bot ID，不输出 Secret。
 
 ### 持久任务生产接入验收
 

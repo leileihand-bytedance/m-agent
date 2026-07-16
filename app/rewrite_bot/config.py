@@ -18,6 +18,7 @@ class RewriteBotConfig:
     bot_id: str
     bot_secret: str
     platform_config: PlatformConfig
+    intake_dir: Path
     ops_events_dir: Path
     heartbeat_dir: Path
 
@@ -59,6 +60,7 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> RewriteBotConfig:
             conversation_dir=conversation_dir,
             skill_allowlist=("rewrite",),
         ),
+        intake_dir=data_paths.intake / "rewrite-bot",
         ops_events_dir=ops_events_dir,
         heartbeat_dir=heartbeat_dir,
     )

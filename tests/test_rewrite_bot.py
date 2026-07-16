@@ -8,6 +8,7 @@ from app.platform.app import PlatformApp
 from app.platform.models import PlatformResult, RoutedRequest
 from app.rewrite_bot.bot import handle_file_with_platform, handle_text_with_platform
 from app.rewrite_bot.config import load_config
+from app.rewrite_bot.intake import RewriteIntakeStore
 
 
 class FakeWsClient:
@@ -19,9 +20,10 @@ class FakeWsClient:
 
 
 class FakePlatformApp:
-    def __init__(self):
+    def __init__(self, *, active_revision: bool = False):
         self.calls: list[dict[str, str]] = []
         self.structured_calls: list[dict[str, str]] = []
+        self.active_revision = active_revision
 
     def resolve_sender_name(self, sender_userid: str) -> str:
         return sender_userid
@@ -33,12 +35,13 @@ class FakePlatformApp:
         sender_userid: str,
         text: str,
     ) -> RoutedRequest:
+        is_rewrite = "润色" in text or self.active_revision
         return RoutedRequest(
-            skill_id="rewrite" if "润色" in text else None,
-            confidence=1.0 if "润色" in text else 0.0,
-            needs_clarification="润色" not in text,
+            skill_id="rewrite" if is_rewrite else None,
+            confidence=1.0 if is_rewrite else 0.0,
+            needs_clarification=not is_rewrite,
             message="",
-            inputs={"text": text},
+            inputs={"text": text, "revision": self.active_revision},
         )
 
     def handle_text_message(
@@ -126,6 +129,7 @@ def test_rewrite_bot_loads_dedicated_credentials_and_runtime_paths(tmp_path):
     assert config.platform_config.skill_allowlist == ("rewrite",)
     assert config.platform_config.jobs_dir == data_root / "tasks" / "writing" / "rewrite"
     assert config.platform_config.conversation_dir == data_root / "runtime" / "conversations" / "rewrite-bot"
+    assert config.intake_dir == data_root / "runtime" / "intake" / "rewrite-bot"
 
 
 def test_rewrite_bot_platform_only_routes_rewrite(tmp_path):
@@ -159,7 +163,7 @@ def test_rewrite_bot_platform_only_routes_rewrite(tmp_path):
     assert direct_report_route.needs_clarification is True
 
 
-def test_rewrite_bot_handles_text_with_rewrite_platform():
+def test_rewrite_bot_handles_text_with_rewrite_platform(tmp_path):
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp()
 
@@ -169,6 +173,7 @@ def test_rewrite_bot_handles_text_with_rewrite_platform():
             ws_client=ws_client,
             platform_app=platform_app,
             req_id_factory=lambda prefix: prefix,
+            intake_store=RewriteIntakeStore(storage_dir=tmp_path / "intake"),
         )
     )
 
@@ -184,9 +189,31 @@ def test_rewrite_bot_handles_text_with_rewrite_platform():
     assert ws_client.stream_replies[-1][2] == "润色后的正文\n\n修改说明：调整了表达。"
 
 
-def test_rewrite_bot_treats_directly_pasted_text_as_new_rewrite_task():
+def test_rewrite_bot_waits_for_direction_when_only_source_is_pasted(tmp_path):
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp()
+    source_text = "县域经济是国民经济的重要组成部分，相关服务仍需持续完善。"
+    intake_store = RewriteIntakeStore(storage_dir=tmp_path / "intake")
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame(source_text),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+
+    assert platform_app.calls == []
+    assert platform_app.structured_calls == []
+    assert "你希望重点怎么调整" in ws_client.stream_replies[-1][2]
+
+
+def test_rewrite_bot_runs_pending_source_after_user_provides_direction(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp()
+    intake_store = RewriteIntakeStore(storage_dir=tmp_path / "intake")
     source_text = "县域经济是国民经济的重要组成部分，相关服务仍需持续完善。"
 
     asyncio.run(
@@ -195,6 +222,16 @@ def test_rewrite_bot_treats_directly_pasted_text_as_new_rewrite_task():
             ws_client=ws_client,
             platform_app=platform_app,
             req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("更正式一些，并梳理逻辑"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
         )
     )
 
@@ -204,10 +241,142 @@ def test_rewrite_bot_treats_directly_pasted_text_as_new_rewrite_task():
             "channel": "wecom-rewrite",
             "sender_userid": "user-001",
             "skill_id": "rewrite",
-            "text": source_text,
-            "material_text": "",
+            "text": "更正式一些，并梳理逻辑",
+            "material_text": source_text,
         }
     ]
+    assert ws_client.stream_replies[-1][2] == "润色后的正文\n\n修改说明：调整了表达。"
+
+
+def test_rewrite_bot_uses_default_direction_for_pending_source(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp()
+    intake_store = RewriteIntakeStore(storage_dir=tmp_path / "intake")
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("需要持续完善工作机制，进一步提升服务质效。"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("按默认方式润色"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+
+    assert platform_app.structured_calls[-1]["text"] == "按默认方式润色"
+
+
+def test_rewrite_bot_keeps_style_words_inside_source_as_source_text(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp()
+    intake_store = RewriteIntakeStore(storage_dir=tmp_path / "intake")
+    source_text = "现有工作机制仍需进一步优化，以持续提升服务质效。"
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame(source_text),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("更正式一些"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+
+    assert platform_app.structured_calls[-1]["material_text"] == source_text
+
+
+def test_rewrite_bot_restores_pending_source_after_restart(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp()
+    storage_dir = tmp_path / "intake"
+    source_text = "需要持续完善工作机制，进一步提升服务质效。"
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame(source_text),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=RewriteIntakeStore(storage_dir=storage_dir),
+        )
+    )
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("精简一些"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=RewriteIntakeStore(storage_dir=storage_dir),
+        )
+    )
+
+    assert platform_app.structured_calls[-1]["material_text"] == source_text
+    assert platform_app.structured_calls[-1]["text"] == "精简一些"
+
+
+def test_rewrite_bot_keeps_active_revision_as_direct_conversation(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(active_revision=True)
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("再正式一点"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=RewriteIntakeStore(storage_dir=tmp_path / "intake"),
+        )
+    )
+
+    assert platform_app.calls[-1]["text"] == "再正式一点"
+    assert platform_app.structured_calls == []
+
+
+def test_rewrite_bot_cancels_pending_source(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp()
+    intake_store = RewriteIntakeStore(storage_dir=tmp_path / "intake")
+
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("需要持续完善工作机制，进一步提升服务质效。"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+    asyncio.run(
+        handle_text_with_platform(
+            frame=_frame("取消"),
+            ws_client=ws_client,
+            platform_app=platform_app,
+            req_id_factory=lambda prefix: prefix,
+            intake_store=intake_store,
+        )
+    )
+
+    assert platform_app.calls == []
+    assert platform_app.structured_calls == []
+    assert "已取消" in ws_client.stream_replies[-1][2]
 
 
 def test_rewrite_bot_rejects_explicit_other_skill_request():

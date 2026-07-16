@@ -6,9 +6,11 @@ import re
 
 from app.platform.app import PlatformApp
 from app.platform.gateway.wecom import extract_text_message, format_text_reply
+from app.platform.intake import IntakeAction
 from app.platform.ops.events import OpsEventLogger
 from app.platform.ops.heartbeat import write_heartbeat
 from app.rewrite_bot.config import RewriteBotConfig, load_config, mask_value
+from app.rewrite_bot.intake import RewriteIntakeStore
 
 
 REWRITE_ACK = "收到，正在按材料润色流程处理，请稍后……"
@@ -36,6 +38,7 @@ async def handle_text_with_platform(
     platform_app,
     req_id_factory,
     ops_event_logger: OpsEventLogger | None = None,
+    intake_store: RewriteIntakeStore | None = None,
 ) -> None:
     message = extract_text_message(frame)
     content = message.content.strip()
@@ -50,14 +53,45 @@ async def handle_text_with_platform(
         await ws_client.reply_stream(frame, stream_id, REWRITE_ONLY_MESSAGE, True)
         return
 
-    await ws_client.reply_stream(frame, stream_id, REWRITE_ACK, True)
     try:
         route = platform_app.preview_text_route(
             channel="wecom-rewrite",
             sender_userid=message.sender_userid,
             text=content,
         )
-        if route.skill_id == "rewrite":
+        intake_outcome = None
+        if intake_store is not None:
+            intake_outcome = intake_store.handle_text(
+                channel="wecom-rewrite",
+                sender_userid=message.sender_userid,
+                text=content,
+                is_revision=bool(route.inputs.get("revision")),
+            )
+            if intake_outcome.action in (IntakeAction.WAIT, IntakeAction.CANCEL):
+                await ws_client.reply_stream(frame, stream_id, intake_outcome.reply, True)
+                return
+
+        await ws_client.reply_stream(frame, stream_id, REWRITE_ACK, True)
+        if intake_outcome is not None and intake_outcome.action is IntakeAction.SUBMIT:
+            submission = intake_outcome.submission
+            if submission is None:
+                raise RuntimeError("润色接收状态缺少任务提交内容")
+            source_text = submission.materials[0].text_value
+            instruction = "\n".join(submission.instructions)
+            result = await asyncio.to_thread(
+                platform_app.handle_structured_request,
+                channel="wecom-rewrite",
+                sender_userid=message.sender_userid,
+                skill_id="rewrite",
+                text=instruction,
+                material_text=source_text,
+            )
+            if not result.needs_clarification:
+                intake_store.clear(
+                    channel="wecom-rewrite",
+                    sender_userid=message.sender_userid,
+                )
+        elif route.skill_id == "rewrite":
             result = await asyncio.to_thread(
                 platform_app.handle_text_message,
                 channel="wecom-rewrite",
@@ -122,6 +156,7 @@ async def run_bot(config: RewriteBotConfig) -> None:
         ) from exc
 
     platform_app = PlatformApp.from_config(config.platform_config)
+    intake_store = RewriteIntakeStore(storage_dir=config.intake_dir)
     ops_event_logger = OpsEventLogger(config.ops_events_dir)
     ws_client = WSClient(bot_id=config.bot_id, secret=config.bot_secret)
 
@@ -151,6 +186,7 @@ async def run_bot(config: RewriteBotConfig) -> None:
             platform_app=platform_app,
             req_id_factory=generate_req_id,
             ops_event_logger=ops_event_logger,
+            intake_store=intake_store,
         )
 
     async def on_file(frame):
@@ -230,6 +266,7 @@ def main(argv: list[str] | None = None) -> None:
         print("允许的 Skill: rewrite")
         print(f"任务目录: {config.platform_config.jobs_dir}")
         print(f"会话目录: {config.platform_config.conversation_dir}")
+        print(f"待处理原文目录: {config.intake_dir}")
         return
 
     print("正在连接企业微信材料润色 Bot...", flush=True)
