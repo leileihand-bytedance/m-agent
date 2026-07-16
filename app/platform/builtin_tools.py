@@ -2,6 +2,7 @@ import re
 import json
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import date, datetime
 import ipaddress
 from pathlib import Path
 import socket
@@ -87,7 +88,7 @@ def search_web(
     requester: Callable[[str, dict[str, object], dict[str, str], int], str] | None = None,
 ) -> list[dict[str, str]]:
     if not api_key:
-        raise RuntimeError("缺少 ANTHROPIC_API_KEY，无法调用搜索工具。")
+        raise RuntimeError("缺少搜索 API 配置，无法调用搜索工具。")
 
     api_host = _search_api_host(base_url)
     search_url = f"{api_host}/v1/coding_plan/search"
@@ -461,11 +462,133 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         if main:
             text_parts = [main.get_text("\n", strip=True)]
 
+    canonical_url = _extract_canonical_url(soup, url)
+    site = _extract_site(canonical_url or url)
+    publish_date, date_source = _extract_publish_date(soup)
+
     return {
         "url": url,
         "title": title,
         "text": "\n".join(text_parts)[:4000],
+        "publish_date": publish_date.isoformat() if publish_date else "",
+        "site": site,
+        "canonical_url": canonical_url,
+        "date_extracted_from": date_source,
     }
+
+
+def _extract_canonical_url(soup: Any, fallback_url: str) -> str:
+    canonical = soup.find("link", rel="canonical")
+    if canonical and canonical.get("href"):
+        href = str(canonical["href"]).strip()
+        if href:
+            return urljoin(fallback_url, href)
+    return fallback_url
+
+
+def _extract_site(url: str) -> str:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").strip().lower().lstrip("www.")
+    return hostname
+
+
+def _extract_publish_date(soup: Any) -> tuple[date | None, str]:
+    """从 HTML 中提取发布日期，返回 (date, source_description)。"""
+    # 1. OpenGraph / article meta
+    meta_selectors = [
+        ('meta', 'property', 'article:published_time', 'article:published_time'),
+        ('meta', 'property', 'og:published_time', 'og:published_time'),
+        ('meta', 'name', 'publishdate', 'meta:publishdate'),
+        ('meta', 'name', 'pubdate', 'meta:pubdate'),
+        ('meta', 'name', 'published_time', 'meta:published_time'),
+        ('meta', 'name', 'release_date', 'meta:release_date'),
+    ]
+    for tag, attr, value, source in meta_selectors:
+        node = soup.find(tag, {attr: value})
+        if node and node.get("content"):
+            parsed = _parse_date(str(node["content"]))
+            if parsed:
+                return parsed, source
+
+    # 2. JSON-LD datePublished
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, dict):
+            for key in ("datePublished", "dateModified"):
+                parsed = _parse_date(str(data.get(key, "")))
+                if parsed:
+                    return parsed, f"json-ld:{key}"
+            graph = data.get("@graph", [])
+            if isinstance(graph, list):
+                for item in graph:
+                    if isinstance(item, dict):
+                        for key in ("datePublished", "dateModified"):
+                            parsed = _parse_date(str(item.get(key, "")))
+                            if parsed:
+                                return parsed, f"json-ld:{key}"
+
+    # 3. <time datetime="...">
+    for time_node in soup.find_all("time"):
+        datetime_attr = time_node.get("datetime")
+        if datetime_attr:
+            parsed = _parse_date(str(datetime_attr))
+            if parsed:
+                return parsed, "time:datetime"
+
+    # 4. 中文/常见日期文本（仅出现在 body 区域）
+    body = soup.find("article") or soup.find("main") or soup.body
+    if body:
+        body_text = body.get_text(" ", strip=True)
+        parsed, pattern = _extract_date_from_text(body_text)
+        if parsed:
+            return parsed, f"text:{pattern}"
+
+    return None, ""
+
+
+_DATE_PATTERNS = [
+    (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", "%Y-%m-%d"),
+    (r"(\d{4})年(\d{1,2})月(\d{1,2})日", "%Y-%m-%d"),
+    (r"(\d{4})年(\d{1,2})月(\d{1,2})号", "%Y-%m-%d"),
+]
+
+
+_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y%m%d",
+]
+
+
+def _parse_date(value: str) -> date | None:
+    value = value.strip()[:30]
+    if not value or value.lower() in {"none", "null"}:
+        return None
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_date_from_text(text: str) -> tuple[date | None, str]:
+    for pattern, _ in _DATE_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            year, month, day = match.groups()
+            try:
+                return date(int(year), int(month), int(day)), pattern
+            except ValueError:
+                continue
+    return None, ""
 
 
 def _extract_article_paragraphs(soup: Any) -> list[str]:

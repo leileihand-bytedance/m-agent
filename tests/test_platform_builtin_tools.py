@@ -207,6 +207,102 @@ def test_search_web_requires_http_api_host():
         raise AssertionError("ValueError was not raised")
 
 
+def test_search_web_reports_missing_search_config():
+    try:
+        search_web(
+            "小微企业融资",
+            api_key="",
+            base_url="https://api.minimaxi.com/anthropic",
+            requester=lambda url, payload, headers, timeout: "{}",
+        )
+    except RuntimeError as exc:
+        assert "搜索 API 配置" in str(exc)
+    else:
+        raise AssertionError("RuntimeError was not raised")
+
+
+def test_read_web_page_extracts_publish_date_and_metadata():
+    html = """
+    <html>
+      <head>
+        <title>微众银行推出新服务</title>
+        <link rel="canonical" href="https://news.example.com/article/123">
+        <meta property="article:published_time" content="2026-07-15T08:30:00+08:00">
+      </head>
+      <body>
+        <article>
+          <p>2026年7月15日，微众银行宣布推出全新服务。</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/article/123", fetcher=lambda url: html)
+
+    assert result["url"] == "https://www.example.com/article/123"
+    assert result["canonical_url"] == "https://news.example.com/article/123"
+    assert result["site"] == "news.example.com"
+    assert result["publish_date"] == "2026-07-15"
+    assert "article:published_time" in result["date_extracted_from"]
+
+
+def test_read_web_page_falls_back_to_time_element_for_date():
+    html = """
+    <html>
+      <head><title>另一篇报道</title></head>
+      <body>
+        <article>
+          <time datetime="2026-07-14">昨日</time>
+          <p>微众银行相关内容。</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/b", fetcher=lambda url: html)
+
+    assert result["publish_date"] == "2026-07-14"
+    assert result["date_extracted_from"] == "time:datetime"
+
+
+def test_read_web_page_extracts_date_from_text_when_no_meta():
+    html = """
+    <html>
+      <head><title>第三篇报道</title></head>
+      <body>
+        <article>
+          <p>本报2026年7月13日讯，微众银行……</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/c", fetcher=lambda url: html)
+
+    assert result["publish_date"] == "2026-07-13"
+    assert "text:" in result["date_extracted_from"]
+
+
+def test_read_web_page_returns_empty_date_when_not_found():
+    html = """
+    <html>
+      <head><title>无日期报道</title></head>
+      <body>
+        <article>
+          <p>微众银行相关内容，但没有日期。</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/d", fetcher=lambda url: html)
+
+    assert result["publish_date"] == ""
+    assert result["date_extracted_from"] == ""
+    assert result["canonical_url"] == "https://www.example.com/d"
+    assert result["site"] == "example.com"
+
+
 def test_policy_search_reads_local_policy_knowledge_base(tmp_path):
     db_path = tmp_path / "policies.sqlite3"
     store = PolicyKnowledgeStore(db_path)

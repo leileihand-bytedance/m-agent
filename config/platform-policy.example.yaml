@@ -9,9 +9,11 @@ users:
       - writer2
       - rewrite
       - research_synthesis
+      - shenyinxie_news
   local-preview-user:
     allowed_skills:
       - direct_report
       - writer1
       - writer2
       - research_synthesis
+      - shenyinxie_news

@@ -28,6 +28,8 @@ class PlatformConfig:
     document_ocr_enabled: bool = True
     task_queue_db_path: Path | None = None
     skill_allowlist: tuple[str, ...] | None = None
+    search_api_key: str = ""
+    search_api_base_url: str = ""
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -116,6 +118,18 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
 
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
+    search_api_key = (
+        values.get("SEARCH_API_KEY")
+        or values.get("MODEL_API_KEY")
+        or values.get("ANTHROPIC_API_KEY", "")
+    )
+    search_api_base_url = (
+        values.get("SEARCH_API_BASE_URL")
+        or values.get("MODEL_BASE_URL")
+        or values.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
+        or "https://api.minimaxi.com/anthropic"
+    )
+
     return PlatformConfig(
         model_name=values.get("MODEL_NAME", "MiniMax-M2.7") or "MiniMax-M2.7",
         anthropic_api_key=values.get("MODEL_API_KEY") or values.get("ANTHROPIC_API_KEY", ""),
@@ -146,4 +160,6 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
             default=True,
         ),
         task_queue_db_path=task_queue_db_path,
+        search_api_key=search_api_key,
+        search_api_base_url=search_api_base_url,
     )

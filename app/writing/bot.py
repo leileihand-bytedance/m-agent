@@ -67,6 +67,8 @@ def build_platform_config(config) -> PlatformConfig:
         document_max_bytes=config.document_max_bytes,
         document_ocr_enabled=config.document_ocr_enabled,
         task_queue_db_path=config.task_queue_db_path,
+        search_api_key=config.search_api_key,
+        search_api_base_url=config.search_api_base_url,
     )
 
 
@@ -601,7 +603,7 @@ async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, f
 
 
 def _result_output_file(result: PlatformResult) -> Path | None:
-    if result.needs_clarification or result.skill_id != "research_synthesis":
+    if result.needs_clarification or result.skill_id not in {"research_synthesis", "shenyinxie_news"}:
         return None
     raw_path = str(result.output.get("output_file", "") or "").strip()
     if not raw_path:
@@ -819,6 +821,7 @@ def _ack_label_for_skill(skill_id: str | None) -> str:
         "review": "审核",
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",
+        "shenyinxie_news": "深银协动态",
     }
     return labels.get(str(skill_id or ""), "写作")
 

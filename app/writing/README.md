@@ -14,7 +14,7 @@
   -> app/writing/task_execution.py # 直报/简报持久任务适配
   -> app/writing/portal.py      # 结构化素材页与本地预览入口
   -> app/platform/app.py
-  -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/ 或 skills/rewrite/
+  -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/、skills/shenyinxie_news/ 或 skills/rewrite/
 ```
 
 当前入口形态：
@@ -102,6 +102,6 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

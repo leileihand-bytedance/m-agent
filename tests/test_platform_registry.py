@@ -56,6 +56,20 @@ def test_registry_loads_enabled_research_synthesis_skill():
     assert skill.supports_revision is False
 
 
+def test_registry_loads_enabled_shenyinxie_news_skill():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    skill = registry.get("shenyinxie_news")
+
+    assert skill.name == "深银协动态"
+    assert skill.enabled is True
+    assert "search" in skill.allowed_tools
+    assert "web_reader" in skill.allowed_tools
+    assert "llm_writer" in skill.allowed_tools
+    assert skill.workflow == "skills.shenyinxie_news.workflow:run"
+    assert skill.supports_revision is False
+
+
 def test_registry_lists_only_enabled_skills(tmp_path):
     skills_dir = tmp_path / "skills"
     enabled = skills_dir / "enabled_skill"

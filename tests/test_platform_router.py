@@ -109,3 +109,12 @@ def test_router_matches_rewrite_when_material_comes_before_request():
 
     assert route.skill_id == "rewrite"
     assert route.needs_clarification is False
+
+
+def test_router_matches_shenyinxie_news_from_trigger_words():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("生成深银协动态", registry)
+
+    assert route.skill_id == "shenyinxie_news"
+    assert route.needs_clarification is False

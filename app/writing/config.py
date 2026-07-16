@@ -47,6 +47,8 @@ class WritingBotConfig:
     task_poll_seconds: float = 0.25
     task_recovery_seconds: float = 5.0
     task_lease_seconds: int = 120
+    search_api_key: str = ""
+    search_api_base_url: str = ""
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -180,6 +182,18 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     if not portal_base_url:
         portal_base_url = _default_portal_base_url(host=portal_host, port=portal_port)
 
+    search_api_key = (
+        values.get("SEARCH_API_KEY")
+        or values.get("MODEL_API_KEY")
+        or values.get("ANTHROPIC_API_KEY", "")
+    )
+    search_api_base_url = (
+        values.get("SEARCH_API_BASE_URL")
+        or values.get("MODEL_BASE_URL")
+        or values.get("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
+        or "https://api.minimaxi.com/anthropic"
+    )
+
     return WritingBotConfig(
         wecom_bot_id=values.get("WRITING_BOT_ID", ""),
         wecom_bot_secret=values.get("WRITING_BOT_SECRET", ""),
@@ -236,4 +250,6 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
             30,
             int(values.get("M_AGENT_WRITING_TASK_LEASE_SECONDS", "120") or "120"),
         ),
+        search_api_key=search_api_key,
+        search_api_base_url=search_api_base_url,
     )

@@ -1,0 +1,26 @@
+id: shenyinxie_news
+name: 深银协动态
+enabled: true
+description: 根据指定半月时间范围，检索权威媒体发布的微众银行相关新闻，筛选 2 至 3 篇后按固定案例格式生成 Word 文档，并附原文链接供用户核对。
+triggers:
+  - 深银协动态
+  - 生成深银协动态
+  - 整理深银协动态
+  - 深圳银行业协会动态
+allowed_tools:
+  - search
+  - web_reader
+  - llm_writer
+workflow: skills.shenyinxie_news.workflow:run
+supports_revision: false
+inputs:
+  - text
+outputs:
+  - title
+  - body
+  - sources
+  - output_file
+  - period_start
+  - period_end
+  - needs_clarification
+  - message

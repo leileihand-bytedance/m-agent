@@ -577,6 +577,20 @@ def test_writing_intake_recognizes_natural_research_summary_wording():
     assert "调研提纲" in decision.reply
 
 
+def test_writing_intake_runs_shenyinxie_news_without_materials():
+    intake_store = WritingIntakeStore()
+
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="生成深银协动态",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "shenyinxie_news"
+    assert "深银协动态" in decision.ack_message
+
+
 def test_writing_intake_ignores_duplicate_file_message_ids():
     intake_store = WritingIntakeStore()
     uploaded = UploadedFile(filename="素材.docx", content=b"material")
@@ -1110,6 +1124,21 @@ def test_result_output_file_uses_delivery_limit_separate_from_input_limit(tmp_pa
     monkeypatch.setattr(writing_bot, "MAX_WRITING_OUTPUT_FILE_BYTES", 8)
     result = PlatformResult(
         skill_id="research_synthesis",
+        output={"output_file": str(output_path)},
+        needs_clarification=False,
+        message="完成",
+    )
+
+    assert writing_bot._result_output_file(result) == output_path.resolve()
+
+
+def test_result_output_file_recognizes_shenyinxie_news_docx(tmp_path):
+    output_dir = tmp_path / "task" / "output"
+    output_dir.mkdir(parents=True)
+    output_path = output_dir / "深银协动态.docx"
+    output_path.write_bytes(b"fake-docx")
+    result = PlatformResult(
+        skill_id="shenyinxie_news",
         output={"output_file": str(output_path)},
         needs_clarification=False,
         message="完成",

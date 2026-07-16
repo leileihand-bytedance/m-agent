@@ -1,0 +1,205 @@
+sources:
+  # 中央级媒体
+  - name: 人民网
+    category: 中央级媒体
+    domains:
+      - people.com.cn
+    tier: 1
+
+  - name: 新华网
+    category: 中央级媒体
+    domains:
+      - xinhuanet.com
+      - news.cn
+    tier: 1
+
+  - name: 央视网
+    category: 中央级媒体
+    domains:
+      - cctv.com
+      - cntv.cn
+    tier: 1
+
+  - name: 经济日报
+    category: 中央级媒体
+    domains:
+      - economicdaily.com.cn
+      - paper.ce.cn
+    tier: 1
+
+  - name: 人民日报
+    category: 中央级媒体
+    domains:
+      - paper.people.com.cn
+    tier: 1
+
+  - name: 光明日报
+    category: 中央级媒体
+    domains:
+      - gmw.cn
+    tier: 1
+
+  - name: 中国日报
+    category: 中央级媒体
+    domains:
+      - chinadaily.com.cn
+    tier: 1
+
+  - name: 工人日报
+    category: 中央级媒体
+    domains:
+      - workercn.cn
+    tier: 1
+
+  # 政府 / 监管 / 公开信息平台
+  - name: 中国人民银行
+    category: 政府/监管
+    domains:
+      - pbc.gov.cn
+      - pboc.gov.cn
+    tier: 1
+
+  - name: 国家金融监督管理总局
+    category: 政府/监管
+    domains:
+      - nfra.gov.cn
+      - cbirc.gov.cn
+    tier: 1
+
+  - name: 中国证券监督管理委员会
+    category: 政府/监管
+    domains:
+      - csrc.gov.cn
+    tier: 1
+
+  - name: 国家外汇管理局
+    category: 政府/监管
+    domains:
+      - safe.gov.cn
+    tier: 1
+
+  - name: 深圳市政府
+    category: 政府/监管
+    domains:
+      - sz.gov.cn
+    tier: 1
+
+  - name: 深圳市地方金融管理局
+    category: 政府/监管
+    domains:
+      - jr.sz.gov.cn
+    tier: 1
+
+  - name: 国务院
+    category: 政府/监管
+    domains:
+      - gov.cn
+    tier: 1
+
+  # 全国主流财经媒体
+  - name: 中国证券报
+    category: 全国主流财经媒体
+    domains:
+      - cs.com.cn
+    tier: 2
+
+  - name: 上海证券报
+    category: 全国主流财经媒体
+    domains:
+      - cnstock.com
+      - shzq.com
+    tier: 2
+
+  - name: 证券时报
+    category: 全国主流财经媒体
+    domains:
+      - stcn.com
+      - p5w.net
+    tier: 2
+
+  - name: 经济观察报
+    category: 全国主流财经媒体
+    domains:
+      - eeo.com.cn
+    tier: 2
+
+  - name: 财新
+    category: 全国主流财经媒体
+    domains:
+      - caixin.com
+    tier: 2
+
+  - name: 21世纪经济报道
+    category: 全国主流财经媒体
+    domains:
+      - 21jingji.com
+    tier: 2
+
+  - name: 每日经济新闻
+    category: 全国主流财经媒体
+    domains:
+      - nbd.com.cn
+    tier: 2
+
+  - name: 第一财经
+    category: 全国主流财经媒体
+    domains:
+      - yicai.com
+      - cbnweek.com
+    tier: 2
+
+  - name: 新浪财经
+    category: 全国主流财经媒体
+    domains:
+      - finance.sina.com.cn
+    tier: 2
+
+  - name: 腾讯财经
+    category: 全国主流财经媒体
+    domains:
+      - finance.qq.com
+    tier: 2
+
+  - name: 网易财经
+    category: 全国主流财经媒体
+    domains:
+      - money.163.com
+    tier: 2
+
+  # 深圳主流党媒
+  - name: 深圳特区报
+    category: 深圳主流党媒
+    domains:
+      - sztqb.sznews.com
+    tier: 2
+
+  - name: 深圳商报
+    category: 深圳主流党媒
+    domains:
+      - szsb.sznews.com
+    tier: 2
+
+  - name: 深圳晚报
+    category: 深圳主流党媒
+    domains:
+      - szwb.sznews.com
+    tier: 2
+
+  - name: 读特
+    category: 深圳主流党媒
+    domains:
+      - sznews.com
+      - dt.sznews.com
+    tier: 2
+
+  - name: 晶报
+    category: 深圳主流党媒
+    domains:
+      - jb.sznews.com
+    tier: 2
+
+  - name: 深圳新闻网
+    category: 深圳主流党媒
+    domains:
+      - sznews.com
+    tier: 2

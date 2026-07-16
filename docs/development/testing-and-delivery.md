@@ -152,7 +152,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 验证具体业务能力：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
 ```
 
 后续新增 skill 后，新增对应测试。
