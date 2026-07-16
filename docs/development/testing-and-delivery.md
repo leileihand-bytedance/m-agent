@@ -157,6 +157,14 @@ uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_re
 
 后续新增 skill 后，新增对应测试。
 
+DeepSeek 原生联网搜索适配还需运行：
+
+```bash
+uv run --locked pytest tests/test_platform_builtin_tools.py tests/test_platform_app.py -k "search or build_platform_tools" -v
+```
+
+该组测试使用模拟响应固定 `/anthropic/v1/messages`、`web_search_20250305`、模型名透传和搜索结果结构，不消耗真实 API；真实联调单独执行，日志不得输出密钥或全文。
+
 ### 3. 旧功能保护测试
 
 验证旧审核 Bot 没被影响：

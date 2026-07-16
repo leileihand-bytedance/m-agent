@@ -84,11 +84,46 @@ def search_web(
     *,
     api_key: str,
     base_url: str,
+    model_name: str = "",
     max_results: int = 5,
     requester: Callable[[str, dict[str, object], dict[str, str], int], str] | None = None,
 ) -> list[dict[str, str]]:
     if not api_key:
         raise RuntimeError("缺少搜索 API 配置，无法调用搜索工具。")
+
+    provider = _search_provider(base_url)
+    if provider == "deepseek":
+        if not model_name:
+            raise RuntimeError("缺少 DeepSeek 搜索模型配置，无法调用联网搜索。")
+        search_url = _deepseek_messages_url(base_url)
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, object] = {
+            "model": model_name,
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"请使用 web_search 工具联网搜索以下查询，并返回相关搜索结果：{query}",
+                }
+            ],
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 1,
+                }
+            ],
+        }
+        request = requester or _default_search_request
+        raw_text = request(search_url, payload, headers, 30)
+        return _extract_deepseek_search_results(raw_text, max_results=max_results)
+
+    if provider != "minimax":
+        raise RuntimeError("当前搜索 API 供应商不支持联网搜索。")
 
     api_host = _search_api_host(base_url)
     search_url = f"{api_host}/v1/coding_plan/search"
@@ -121,6 +156,39 @@ def search_web(
         )
         if len(results) >= max_results:
             break
+
+    results.sort(key=lambda item: 0 if item["source"] == "official" else 1)
+    return results[:max_results]
+
+
+def _extract_deepseek_search_results(raw_text: str, *, max_results: int) -> list[dict[str, str]]:
+    payload = json.loads(raw_text or "{}")
+    content = payload.get("content", [])
+    if not isinstance(content, list):
+        return []
+
+    results: list[dict[str, str]] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "web_search_tool_result":
+            continue
+        search_items = block.get("content", [])
+        if not isinstance(search_items, list):
+            continue
+        for item in search_items:
+            if not isinstance(item, dict) or item.get("type") != "web_search_result":
+                continue
+            url = str(item.get("url", "")).strip()
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                continue
+            results.append(
+                {
+                    "url": url,
+                    "title": str(item.get("title", "")),
+                    "snippet": "",
+                    "source": _classify_search_source(url),
+                }
+            )
 
     results.sort(key=lambda item: 0 if item["source"] == "official" else 1)
     return results[:max_results]
@@ -276,6 +344,25 @@ def _search_api_host(base_url: str) -> str:
     if normalized.endswith("/anthropic"):
         normalized = normalized[: -len("/anthropic")]
     return normalized
+
+
+def _search_provider(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only http and https search API URLs are allowed")
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname == "deepseek.com" or hostname.endswith(".deepseek.com"):
+        return "deepseek"
+    if hostname == "minimaxi.com" or hostname.endswith(".minimaxi.com"):
+        return "minimax"
+    if hostname == "minimax.io" or hostname.endswith(".minimax.io"):
+        return "minimax"
+    return "unsupported"
+
+
+def _deepseek_messages_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}/anthropic/v1/messages"
 
 
 def _default_search_request(url: str, payload: dict[str, object], headers: dict[str, str], timeout: int) -> str:

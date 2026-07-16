@@ -193,6 +193,103 @@ def test_search_web_calls_configured_search_api_and_normalizes_results():
     assert results[1]["url"] == "https://example.com/a"
 
 
+def test_search_web_calls_deepseek_native_web_search_and_normalizes_results():
+    calls = []
+
+    def requester(url, payload, headers, timeout):
+        calls.append((url, payload, headers, timeout))
+        return json.dumps(
+            {
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_001",
+                        "name": "web_search",
+                        "input": {"query": "微众银行 2026年7月"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_001",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com/webank",
+                                "title": "微众银行相关新闻",
+                                "page_age": "2026-07-15",
+                                "encrypted_content": "encrypted",
+                            },
+                            {
+                                "type": "web_search_result",
+                                "url": "https://www.gov.cn/policy",
+                                "title": "官方报道",
+                                "page_age": "2026-07-14",
+                                "encrypted_content": "encrypted",
+                            },
+                            {
+                                "type": "web_search_result",
+                                "url": "javascript:alert(1)",
+                                "title": "不安全链接",
+                            },
+                        ],
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    results = search_web(
+        "微众银行 2026年7月",
+        api_key="deepseek-key",
+        base_url="https://api.deepseek.com/anthropic",
+        model_name="deepseek-v4-flash",
+        requester=requester,
+        max_results=5,
+    )
+
+    assert calls[0][0] == "https://api.deepseek.com/anthropic/v1/messages"
+    assert calls[0][1]["model"] == "deepseek-v4-flash"
+    assert calls[0][1]["messages"] == [
+        {
+            "role": "user",
+            "content": "请使用 web_search 工具联网搜索以下查询，并返回相关搜索结果：微众银行 2026年7月",
+        }
+    ]
+    assert calls[0][1]["tools"] == [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 1}
+    ]
+    assert calls[0][2]["x-api-key"] == "deepseek-key"
+    assert calls[0][2]["anthropic-version"] == "2023-06-01"
+    assert results == [
+        {
+            "url": "https://www.gov.cn/policy",
+            "title": "官方报道",
+            "snippet": "",
+            "source": "official",
+        },
+        {
+            "url": "https://example.com/webank",
+            "title": "微众银行相关新闻",
+            "snippet": "",
+            "source": "media",
+        },
+    ]
+
+
+def test_search_web_rejects_unsupported_search_provider():
+    try:
+        search_web(
+            "微众银行",
+            api_key="test-key",
+            base_url="https://search.example.com/anthropic",
+            model_name="example-model",
+            requester=lambda url, payload, headers, timeout: "{}",
+        )
+    except RuntimeError as exc:
+        assert "不支持联网搜索" in str(exc)
+    else:
+        raise AssertionError("RuntimeError was not raised")
+
+
 def test_search_web_requires_http_api_host():
     try:
         search_web(

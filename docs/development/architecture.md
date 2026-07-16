@@ -216,7 +216,7 @@ app/platform/builtin_tools.py
 当前已有：
 
 - `read_web_page`：只读取公网 http/https 网页；拒绝 `file://`、localhost、内网 IP、云元数据地址和 DNS 解析到私网。请求关闭自动跳转，每一跳先校验目标再访问；已校验的公网 DNS 结果会固定到本次请求，并限制跳转次数和响应体大小。
-- `search_web`：调用搜索 API，返回标题、摘要、链接和来源类型。
+- `search_web`：按供应商调用联网搜索并统一返回标题、摘要、链接和来源类型。DeepSeek 使用 Anthropic Messages `/anthropic/v1/messages` 的服务器工具 `web_search_20250305`，MiniMax 旧通道保留 `/v1/coding_plan/search` 兼容；未知供应商明确拒绝，不能把任意模型地址拼成 MiniMax 搜索路径。
 - `policy_research` / `policy_materials` / `policy_search`：共享政策挂靠判断、政策知识库材料包和底层检索。
 - `bank_materials` / `bank_search`：微众银行信息库材料包和底层检索。
 - `read_word_file`：读取当前任务目录内的 `.docx` 文件。
@@ -285,7 +285,7 @@ MODEL_NAME=deepseek-v4-flash
 M_AGENT_MODEL_MAX_TOKENS=4096
 ```
 
-`app/platform/pydantic_runtime.py` 只要识别到 `deepseek.com`，就会使用 `OpenAIChatModel`，并把实际请求地址固定为 `https://api.deepseek.com/v1`。审核 Bot 使用独立模型配置，仍可走 DeepSeek Anthropic 兼容通道；两条链路不要混写。
+`app/platform/pydantic_runtime.py` 只要识别到 `deepseek.com`，就会使用 `OpenAIChatModel`，并把写作生成请求地址固定为 `https://api.deepseek.com/v1`。公共 `search_web` 是另一条协议链：同一 DeepSeek Key 和模型通过 `https://api.deepseek.com/anthropic/v1/messages` 声明 `web_search_20250305`，解析服务器返回的搜索结果，再交给 `web_reader` 读取原文。审核 Bot 使用独立模型配置；写作生成、公共搜索和审核三条链路不要混写。
 
 `M_AGENT_MODEL_MAX_TOKENS` 控制单次模型输出上限。默认值为 `4096`。此前写作底座硬编码为 `2048`，DeepSeek 在直报长 prompt、结构化输出和质量校验场景下可能在生成任何可用结果前触顶，导致企业微信侧返回“处理失败”。
 
@@ -524,7 +524,7 @@ skills/shenyinxie_news/
 
 `research_synthesis` 与 `writer2` 分开：`writer2` 从多素材中自行提炼简报主题和结构；`research_synthesis` 使用用户现成提纲约束综合调研，但不会把所有提纲机械视为固定骨架。问卷和报告骨架按必答主题逐项覆盖，政策目录按本次任务相关性和可用证据选择主题。当前只做忠实整合、去重、必要衔接以及来源/数字/缺口/冲突标记，不联网补事实，不包含宣传化润色；输出为采用现有公文基本格式的 Word。源 DOCX 图片不进入成稿，解析器在原位置生成部门图片提醒；开头和结尾暂由用户补充，系统只在 Word 中保留备注。超长材料逐条穷尽、更多案例质量基线和第二阶段润色仍由 `TODO-026` 后续推进。
 
-`shenyinxie_news` 同样不依赖用户提前提供素材：用户通过写作 Bot 入口发送触发词后，Skill 自动计算本期半月时间范围，检索 `media_sources.yaml` 登记的权威媒体，读取网页并执行日期、域名、正文可读性、核心主体等硬性准入，去重并规则评分后择优选取 1 至 3 篇；v1 已接入 Word 生成，优先使用 `skills/shenyinxie_news/assets/shenyinxie-template.docx` 占位模板，模板缺失时按现有公文格式规则生成兜底文档，结果通过 `output_file` 返回供附件回传。0 篇合格报道时返回明确提示，不生成空白 Word。
+`shenyinxie_news` 同样不依赖用户提前提供素材：用户通过写作 Bot 入口发送触发词后，Skill 自动计算本期半月时间范围，通过 ToolGateway 调用 DeepSeek 原生 Web Search，检索 `media_sources.yaml` 登记的权威媒体；搜索结果只形成候选池，随后逐篇读取原文并执行日期、域名、正文可读性、核心主体等硬性准入，去重并规则评分后择优选取 1 至 3 篇。v1 已接入 Word 生成，优先使用 `skills/shenyinxie_news/assets/shenyinxie-template.docx` 占位模板，模板缺失时按现有公文格式规则生成兜底文档，结果通过 `output_file` 返回供附件回传。0 篇合格报道时返回明确提示，不生成空白 Word。
 
 每个 skill 自己负责业务流程、prompt 和结构化 schema，但不能绕过底座权限。
 

@@ -622,6 +622,7 @@ def build_platform_tools(config: PlatformConfig) -> dict[str, Callable[..., obje
             query,
             api_key=config.search_api_key or config.anthropic_api_key,
             base_url=config.search_api_base_url or config.anthropic_base_url,
+            model_name=config.model_name,
             max_results=max_results,
         ),
         "policy_search": lambda query, limit=5, category=None: policy_search(

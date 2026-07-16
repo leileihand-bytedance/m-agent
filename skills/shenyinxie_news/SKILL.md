@@ -65,6 +65,8 @@
 
 ## 搜索策略
 
+默认通过 `ToolGateway` 的 `search` 工具调用 DeepSeek Anthropic Messages API 原生 `web_search_20250305`。搜索结果只提供候选标题和 URL；不得把模型摘要直接当作报道正文。每个候选 URL 仍必须通过 `web_reader` 读取原文页面，并以页面域名、发布日期和完整正文完成硬性核验。
+
 单次任务使用多组关键词搜索，至少覆盖：
 
 - `微众银行`

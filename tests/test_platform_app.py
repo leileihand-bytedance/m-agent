@@ -731,6 +731,42 @@ def test_build_platform_tools_exposes_common_material_readers(tmp_path):
     assert "llm_writer" in tools
 
 
+def test_build_platform_tools_passes_model_name_to_search(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_search_web(query, **kwargs):
+        calls.append((query, kwargs))
+        return []
+
+    monkeypatch.setattr("app.platform.app.search_web", fake_search_web)
+    tools = build_platform_tools(
+        PlatformConfig(
+            model_name="deepseek-v4-flash",
+            anthropic_api_key="deepseek-key",
+            anthropic_base_url="https://api.deepseek.com/anthropic",
+            skills_dir=Path("skills"),
+            jobs_dir=tmp_path,
+            policy_db_path=tmp_path / "policies.sqlite3",
+            bank_db_path=tmp_path / "bank.sqlite3",
+            access_policy_path=None,
+        )
+    )
+
+    tools["search"]("微众银行", max_results=3)
+
+    assert calls == [
+        (
+            "微众银行",
+            {
+                "api_key": "deepseek-key",
+                "base_url": "https://api.deepseek.com/anthropic",
+                "model_name": "deepseek-v4-flash",
+                "max_results": 3,
+            },
+        )
+    ]
+
+
 def test_platform_app_runs_writer1_end_to_end_with_policy_materials(tmp_path):
     seen_payloads = []
     app = PlatformApp(

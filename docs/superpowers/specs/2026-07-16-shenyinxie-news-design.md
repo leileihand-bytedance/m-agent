@@ -1,6 +1,6 @@
 # 深银协动态自动生成 Skill 设计
 
-> 状态：待用户复核
+> 状态：已确认并实施
 
 ## 背景
 
@@ -99,7 +99,7 @@
 写作 Bot 用户指令
   -> 路由到 shenyinxie_news
   -> 计算本期日期范围
-  -> 通过 ToolGateway 调用 search
+  -> 通过 ToolGateway 调用 search（当前使用 DeepSeek 原生 Web Search）
   -> 形成候选池
   -> 通过 ToolGateway 调用 web_reader 逐篇读取
   -> 日期、媒体、相关性、原创性、完整度硬核验
@@ -110,6 +110,8 @@
   -> 保存到当前任务 output/
   -> 写作 Bot 回传 Word 附件
 ```
+
+公共 `search` 工具保持供应商无关接口。当前 DeepSeek 配置通过 Anthropic Messages `/anthropic/v1/messages` 声明 `web_search_20250305`，解析服务器返回的标题和 URL；Skill 不采用模型摘要作为正文，仍逐篇调用 `web_reader` 核验原文。MiniMax 旧端点仅在显式配置时兼容，未知供应商不自动拼接搜索路径。
 
 ## 组件设计
 
