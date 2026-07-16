@@ -457,8 +457,25 @@ def _repository_text(path: str, *, staged: bool) -> str:
 
 def _staged_content_errors(changes: Iterable[tuple[str, str]]) -> list[str]:
     errors: list[str] = []
+    binary_suffixes = {
+        ".docx",
+        ".pdf",
+        ".pptx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".mp4",
+        ".mp3",
+        ".zip",
+        ".tar",
+        ".gz",
+    }
     for status, path in changes:
         if status == "D" or path.startswith("archive/"):
+            continue
+        if any(path.lower().endswith(suffix) for suffix in binary_suffixes):
             continue
         result = _run_git("show", f":{path}", check=False)
         if result.returncode != 0 or "\x00" in result.stdout:

@@ -10,7 +10,7 @@
 uv run --locked python scripts/project_docs.py check
 ```
 
-首次克隆运行 `uv run --locked python scripts/project_docs.py install-hooks`。提交前 hook 会读取暂存区版本，按模块检查代码、依赖、hooks、配置与对应核心文档；无关计划文档不能代替模块文档。`STATUS-REPORT.md` 由提交后 hook 写入本机，权限文件 `config/platform-policy.yaml` 同样只保留在本机，两者都不进入 Git。
+首次克隆运行 `uv run --locked python scripts/project_docs.py install-hooks`。提交前 hook 会读取暂存区版本，按模块检查代码、依赖、hooks、配置与对应核心文档；对 `.docx`、`.pdf`、`.pptx`、图片等二进制资产文件仅校验是否暂存，不检查文本内容。无关计划文档不能代替模块文档。`STATUS-REPORT.md` 由提交后 hook 写入本机，权限文件 `config/platform-policy.yaml` 同样只保留在本机，两者都不进入 Git。
 
 ## 统一 Python 环境
 
