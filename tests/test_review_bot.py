@@ -51,6 +51,7 @@ from app.review.main import (  # noqa: E402
     _deliver_review_attachment,
     _build_queued_attachment_delivery,
     _run_review_task_worker_supervised,
+    _reply_queued_review_acceptance,
     _send_queued_review_text,
     _process_queued_single_review,
     _queued_review_acceptance_message,
@@ -102,9 +103,11 @@ def test_official_format_review_request_requires_explicit_format_wording():
     assert _is_official_format_review_request_text("帮我做一下格式审核") is True
     assert _is_official_format_review_request_text("按公文格式检查") is True
     assert _is_official_format_review_request_text("看看这个文件格式有没有问题") is True
+    assert _is_official_format_review_request_text("帮我查一下格式") is True
     assert _is_official_format_review_request_text("帮我审一下这个材料") is False
     assert _is_official_format_review_request_text("请审核文字内容") is False
     assert _is_official_format_review_request_text("只审核内容，格式不用看") is False
+    assert _is_official_format_review_request_text("内容要审，格式不用查") is False
 
 
 # ============================================================
@@ -377,10 +380,33 @@ def test_queued_review_acceptance_message_names_actual_review_type():
         input_label="这段文字",
     )
 
-    assert created_message == "已进入半月报审核队列，完成后会自动发送结果。"
+    assert created_message == "收到，正在进行半月报审核，完成后会自动发送结果。"
     assert duplicate_message == "这段文字已经在处理中，无需重复提交。完成后会自动发送结果。"
-    assert "task-123" not in created_message
-    assert "task-123" not in duplicate_message
+
+
+@pytest.mark.anyio
+async def test_file_ack_suppresses_redundant_queue_acceptance():
+    class FakeWsClient:
+        def __init__(self) -> None:
+            self.replies = []
+
+        async def reply_stream(self, frame, stream_id, message, finish):
+            self.replies.append((frame, stream_id, message, finish))
+
+    ws_client = FakeWsClient()
+
+    sent = await _reply_queued_review_acceptance(
+        ws_client,
+        {"msgid": "message-1"},
+        "review-queued-1",
+        review_label="通用审核",
+        created=True,
+        input_label="这份文件",
+        acknowledgment_already_sent=True,
+    )
+
+    assert sent is False
+    assert ws_client.replies == []
 
 
 @pytest.mark.parametrize(
@@ -991,6 +1017,29 @@ def test_queued_review_text_timeout_is_not_retried():
         )
 
     assert ws_client.calls == 1
+
+
+def test_queued_review_text_uses_sdk_supported_markdown_message():
+    import asyncio
+
+    class FakeWsClient:
+        def __init__(self) -> None:
+            self.messages = []
+
+        async def send_message(self, chat_id, body):
+            self.messages.append((chat_id, body))
+
+    ws_client = FakeWsClient()
+
+    sent = asyncio.run(_send_queued_review_text(ws_client, "user-1", "审核完成"))
+
+    assert sent is True
+    assert ws_client.messages == [
+        (
+            "user-1",
+            {"msgtype": "markdown", "markdown": {"content": "审核完成"}},
+        )
+    ]
 
 
 def test_queued_review_attachment_reply_timeout_is_not_retried(tmp_path: Path):

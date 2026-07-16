@@ -798,8 +798,34 @@ def _queued_review_acceptance_message(
     input_label: str,
 ) -> str:
     if created:
-        return f"已进入{review_label}队列，完成后会自动发送结果。"
+        return f"收到，正在进行{review_label}，完成后会自动发送结果。"
     return f"{input_label}已经在处理中，无需重复提交。完成后会自动发送结果。"
+
+
+async def _reply_queued_review_acceptance(
+    ws_client: object,
+    frame: object,
+    stream_id: str,
+    *,
+    review_label: str,
+    created: bool,
+    input_label: str,
+    acknowledgment_already_sent: bool = False,
+) -> bool:
+    """即时收件回执已经覆盖用户预期时，不再重复发送入队提示。"""
+    if acknowledgment_already_sent:
+        return False
+    await ws_client.reply_stream(
+        frame,
+        stream_id,
+        _queued_review_acceptance_message(
+            review_label=review_label,
+            created=created,
+            input_label=input_label,
+        ),
+        True,
+    )
+    return True
 
 
 def _review_label(doc_type: DocumentType) -> str:
@@ -1227,7 +1253,7 @@ async def _deliver_review_attachment(
             await asyncio.wait_for(
                 ws_client.send_message(
                     chat_id,
-                    {"msgtype": "text", "text": {"content": result.user_message}},
+                    {"msgtype": "markdown", "markdown": {"content": result.user_message}},
                 ),
                 timeout=30.0,
             )
@@ -1273,7 +1299,7 @@ async def _send_queued_review_text(
     await asyncio.wait_for(
         sender(
             recipient,
-            {"msgtype": "text", "text": {"content": text}},
+            {"msgtype": "markdown", "markdown": {"content": text}},
         ),
         timeout=timeout_seconds,
     )
@@ -1509,7 +1535,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 await asyncio.wait_for(
                     sender(
                         recipient,
-                        {"msgtype": "text", "text": {"content": text}},
+                        {"msgtype": "markdown", "markdown": {"content": text}},
                     ),
                     timeout=30.0,
                 )
@@ -1528,7 +1554,13 @@ async def run_review_bot(config: ReviewConfig) -> None:
         await notifier.notify_send_failure(recipient, label, Exception("发送失败（已重试3次）"))
         return False
 
-    async def run_official_format_decision(frame, sender: str, decision) -> None:
+    async def run_official_format_decision(
+        frame,
+        sender: str,
+        decision,
+        *,
+        acknowledgment_already_sent: bool = False,
+    ) -> None:
         file = decision.files[0]
         filename = file.filename
         buffer = file.read_bytes()
@@ -1561,15 +1593,14 @@ async def run_review_bot(config: ReviewConfig) -> None:
                     True,
                 )
                 return
-            await ws_client.reply_stream(
+            await _reply_queued_review_acceptance(
+                ws_client,
                 frame,
                 generate_req_id("review-format-queued"),
-                _queued_review_acceptance_message(
-                    review_label="公文格式审核",
-                    created=submission.created,
-                    input_label="这份文件",
-                ),
-                True,
+                review_label="公文格式审核",
+                created=submission.created,
+                input_label="这份文件",
+                acknowledgment_already_sent=acknowledgment_already_sent,
             )
         finally:
             review_intake_store.cleanup_files(decision.files)
@@ -1827,15 +1858,13 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 _build_processing_failure_user_reply("文字审核任务受理", exc), True,
             )
             return
-        await ws_client.reply_stream(
+        await _reply_queued_review_acceptance(
+            ws_client,
             frame,
             generate_req_id("review-text-queued"),
-            _queued_review_acceptance_message(
-                review_label="文字审核",
-                created=submission.created,
-                input_label="这段文字",
-            ),
-            True,
+            review_label="文字审核",
+            created=submission.created,
+            input_label="这段文字",
         )
 
     async def on_file(frame):
@@ -1994,7 +2023,12 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 sender_userid=sender,
             )
         if intake_decision.action == "run_format":
-            await run_official_format_decision(frame, sender, intake_decision)
+            await run_official_format_decision(
+                frame,
+                sender,
+                intake_decision,
+                acknowledgment_already_sent=True,
+            )
             return
 
         # 5. 仅在入口解析一次，用于识别单文件审核类型。
@@ -2058,15 +2092,14 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 True,
             )
             return
-        await ws_client.reply_stream(
+        await _reply_queued_review_acceptance(
+            ws_client,
             frame,
             generate_req_id("review-queued"),
-            _queued_review_acceptance_message(
-                review_label=review_label,
-                created=submission.created,
-                input_label="这份文件",
-            ),
-            True,
+            review_label=review_label,
+            created=submission.created,
+            input_label="这份文件",
+            acknowledgment_already_sent=True,
         )
         return
 

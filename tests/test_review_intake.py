@@ -142,6 +142,25 @@ def test_format_review_still_supports_instruction_before_file(tmp_path: Path):
     assert decision.action == "run_format"
 
 
+def test_format_review_recognizes_colloquial_check_request_before_file(tmp_path: Path):
+    store = ReviewIntakeStore(storage_dir=tmp_path)
+
+    waiting = store.handle_text(
+        channel="wecom",
+        sender_userid="user-1",
+        text="帮我查一下格式",
+    )
+    decision = store.add_file(
+        channel="wecom",
+        sender_userid="user-1",
+        file=_file("公文.docx", b"docx-content"),
+    )
+
+    assert waiting.action == "wait"
+    assert "只检查公文格式" in waiting.reply
+    assert decision.action == "run_format"
+
+
 def test_multi_file_review_can_start_after_first_file(tmp_path: Path):
     store = ReviewIntakeStore(storage_dir=tmp_path)
     store.add_file(
