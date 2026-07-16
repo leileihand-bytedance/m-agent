@@ -38,6 +38,7 @@ PPT 低级错误审核已经作为独立业务包接入企业微信审核 Bot。
        -> 半月报: app/review/parser.py + format_checker.py + halfmonthly_reviewer.py
        -> 通用 Word/文字: general_reviewer.py
        -> 用户明确要求格式审核: official_format_checker.py
+       -> 单份 PPTX 低级错误: ppt/（独立提取、规则、模型证据校验和文字格式）
   -> 连续多文件自动联合审核: intake.py + multi_file_reviewer.py
   -> ../M-Agent-Files/tasks/review/
 
@@ -58,6 +59,7 @@ app/review/
 ├── reviewer.py             # 内参周报：LLM 调用 + 语义类规则审核
 ├── halfmonthly_reviewer.py # 半月报：LLM 调用 + 半月报专属规则 + 标红定位
 ├── general_reviewer.py     # 通用审核：文字质量审核
+├── ppt/                    # 独立 PPTX 低级错误审核，不导入其他业务审核引擎
 ├── task_execution.py       # 单项审核：持久任务、检查点和安全交付
 ├── quality_evaluation.py   # 通用审核真实文件评测：去重选样、运行和评分数据
 ├── review_metrics.py       # 评测用模型请求、失败和降级阶段统计
@@ -133,11 +135,14 @@ uv run --locked pytest tests/test_review_intake.py tests/test_review_multi_file.
 
 # 单项审核持久任务测试
 uv run --locked pytest tests/test_review_task_execution.py tests/test_review_intake.py tests/test_review_bot.py -v
+
+# PPTX 低级错误审核
+uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_ppt_formatter.py tests/test_review_ppt_bot.py tests/test_review_task_execution.py tests/test_platform_document_service.py tests/test_review_bot.py -v
 ```
 
 ## 单项审核持久任务
 
-纯文字、单个通用 Word、内参、半月报和公文格式共用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个单项审核任务。独立数据库用于防止写作 worker 误领审核任务。队列生成的纯文字结果和异常提示使用企业微信主动 Markdown 消息发送；主动发送接口不支持普通 `text` 类型。较长的纯文字结果可以在同一个持久检查点中保存为多段并按顺序发送，全部发送成功后才标记为已交付。
+纯文字、单个通用 Word、内参、半月报、公文格式和单份 PPTX 共用独立数据库 `M-Agent-Files/runtime/task-execution/review.sqlite3`，默认只启动 1 个 worker，同一用户同一时间只运行 1 个单项审核任务。独立数据库用于防止写作 worker 误领审核任务。队列生成的纯文字结果和异常提示使用企业微信主动 Markdown 消息发送；主动发送接口不支持普通 `text` 类型。较长的纯文字结果可以在同一个持久检查点中保存为多段并按顺序发送，全部发送成功后才标记为已交付。
 
 执行分为两个检查点：
 
@@ -173,6 +178,52 @@ Bot 根据文件名和文档头前 5 段自动识别：
 识别后分别走不同审核引擎和规则库。
 
 公文格式审核是例外：它不靠文件名或文档内容自动识别。用户可以先说格式审核再发文件，也可以在发出文件后 30 分钟内补说格式审核，系统会对对应 `.docx` 额外执行一次独立格式检查。
+
+## PPT 低级错误审核
+
+### 用户流程
+
+用户直接向审核 Bot 发送单份 `.pptx` 即可，不需要先说“PPT审核”。旧版 `.ppt` 不进入任务，Bot 会提示另存为 `.pptx`。PPTX 到达后直接建立独立持久任务，不进入 Word 的 8 秒单/多文件归集，也不参与公文格式审核或多文件联合审核。
+
+第一阶段检查范围：
+
+- 可编辑文本框、表格文字，以及底座能够读取的图表文字和数据。
+- 错别字、明显语法语病、标点、名称写法、未清理占位符、同一对象内序号跳号/重复/倒序。
+- 同一份 PPT 内主体、时间范围和指标口径相同情况下的明确数据或内容矛盾。
+
+每条模型候选必须能在指定页、指定对象中逐字找到原文；跨页问题还必须同时命中两处原文，并明确主体、时间和指标口径相同。模型伪造的页码、对象或原文会被丢弃。一致性阶段单独失败时，已经完成的文字检查仍保留，结果会明确说明全篇一致性检查未完成。
+
+结果只通过企业微信返回文字，不生成 Word 报告，不修改或回传 PPT。示例：
+
+```text
+PPT审核完成：共发现2项问题。
+
+1.【第3页｜语病】
+原文：持续不断提升
+问题：“持续”与“不断”语义重复
+
+2.【第4页 ↔ 第12页｜数据不一致】
+原文一：客户100万户
+原文二：客户120万户
+问题：同一统计口径的客户数前后不一致
+
+本次未审核图片文字和演讲者备注。
+```
+
+结果不提供修改建议，也不判断矛盾两处中的哪一处正确。较长结果按问题编号连续分段发送。
+
+### 独立性和边界
+
+`app/review/ppt/` 可以复用底座的安全文档解析、任务目录、模型配置和企业微信发送能力，但不导入通用审核、内参、半月报、公文格式或多文件审核引擎；即使规则名称相同，PPT 也维护自己的运行规则和提示词。
+
+第一阶段明确不做：
+
+- 图片文字 OCR、扫描图片审核和演讲者备注审核。
+- 外部事实核查或联网判断数据真伪。
+- 字体、颜色、对齐、留白、元素溢出、遮挡等视觉版式审核。
+- 多份 PPT 之间的一致性审核。
+
+真实 PPT 的误报、漏报、页码和企业微信结果效果仍需用户验收；跨 PPT 审核属于第二阶段，尚未开始。
 
 ## 独立公文格式审核
 
