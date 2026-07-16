@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import zipfile
+import xml.etree.ElementTree as ET
 
 from .models import DocumentFormat
 
@@ -99,10 +100,28 @@ class DocumentSecurityValidator:
                 content_types = archive.read("[Content_Types].xml").decode("utf-8", errors="replace")
             except Exception as exc:
                 raise DocumentSecurityError("Office 文件类型信息无法读取") from exc
-            lowered = content_types.lower()
-            if "macroenabled" in lowered or "vbaproject" in lowered:
+            try:
+                content_type_root = ET.fromstring(content_types)
+            except ET.ParseError as exc:
+                raise DocumentSecurityError("Office 文件类型信息无法读取") from exc
+            part_content_types = {
+                str(item.attrib.get("PartName", "")).lstrip("/"): str(
+                    item.attrib.get("ContentType", "")
+                )
+                for item in content_type_root
+                if item.attrib.get("PartName")
+            }
+            main_content_type = part_content_types.get(expected_part, "")
+            has_vba_project = any(
+                "vbaproject" in name.lower() for name in names
+            ) or any(
+                "vbaproject" in str(item.attrib.get("PartName", "")).lower()
+                or "vbaproject" in str(item.attrib.get("ContentType", "")).lower()
+                for item in content_type_root
+            )
+            if "macroenabled" in main_content_type.lower() or has_vba_project:
                 raise DocumentSecurityError("暂不支持包含宏的 Office 文件")
-            if expected_content_type.lower() not in lowered:
+            if main_content_type.lower() != expected_content_type.lower():
                 raise DocumentSecurityError("Office 文件内容与扩展名不一致")
 
 

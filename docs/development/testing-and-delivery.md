@@ -322,7 +322,7 @@ uv run --locked pytest tests/test_platform_tools.py tests/test_platform_builtin_
 uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_file_readers.py tests/test_platform_data_paths.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点确认：格式伪造、路径越界、异常压缩包和超限文件被拦截；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 只 OCR 标记页，失败仍保留待 OCR 位置；PPT 转换不复用旧 PDF；页面输出不无限累积；总时间、页数、像素和容量限制生效；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
+重点确认：格式伪造、路径越界、异常压缩包、真实 VBA 项目和超限文件被拦截；PPT 图表内嵌 `.xlsb` 数据不会仅因内容类型含 `macroEnabled` 被误判为主文档宏，也不会被执行或进入审核正文；DOCX/PDF/PPTX 完整解析结果写入任务 `work/`；长材料不会只取开头；扫描 PDF 只 OCR 标记页，失败仍保留待 OCR 位置；PPT 转换不复用旧 PDF；页面输出不无限累积；总时间、页数、像素和容量限制生效；待组装文件在 Bot 重启后可恢复且提交后会清理。真实文件和中间产物必须留在 `M-Agent-Files/`，不能进入仓库。
 
 审核 Bot 的格式指令衔接或多文件联合审核另需跑：
 

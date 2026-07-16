@@ -76,6 +76,32 @@ def _make_pptx_with_nested_paragraphs(path: Path) -> None:
     presentation.save(path)
 
 
+def _inject_ooxml_parts(
+    path: Path,
+    *,
+    content_type_entries: str,
+    parts: dict[str, bytes],
+) -> None:
+    rebuilt = path.with_suffix(".rebuilt")
+    with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
+        rebuilt,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                text = payload.decode("utf-8")
+                payload = text.replace(
+                    "</Types>",
+                    f"{content_type_entries}</Types>",
+                ).encode("utf-8")
+            target.writestr(info, payload)
+        for name, payload in parts.items():
+            target.writestr(name, payload)
+    rebuilt.replace(path)
+
+
 def test_document_service_parses_docx_and_persists_complete_artifact(tmp_path):
     input_dir = tmp_path / "input"
     work_dir = tmp_path / "work"
@@ -176,6 +202,51 @@ def test_document_service_preserves_pptx_paragraph_levels_as_indentation(tmp_pat
 
     text_block = next(block for block in artifact.blocks if block.kind == "text")
     assert text_block.text.splitlines() == ["1、一级", "  1、二级", "", "2、一级"]
+
+
+def test_document_service_allows_inert_embedded_xlsb_chart_data(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "含图表数据.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Default Extension="xlsb" '
+            'ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.12"/>'
+        ),
+        parts={"ppt/embeddings/chart-data.xlsb": b"inert chart cache"},
+    )
+
+    artifact = DocumentService().parse(
+        path,
+        allowed_root=input_dir,
+        work_dir=tmp_path / "work",
+    )
+
+    assert artifact.format == DocumentFormat.PPTX
+
+
+def test_document_service_still_rejects_actual_vba_project_in_pptx(tmp_path):
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    path = input_dir / "含宏项目.pptx"
+    _make_pptx(path)
+    _inject_ooxml_parts(
+        path,
+        content_type_entries=(
+            '<Override PartName="/ppt/vbaProject.bin" '
+            'ContentType="application/vnd.ms-office.vbaProject"/>'
+        ),
+        parts={"ppt/vbaProject.bin": b"macro project"},
+    )
+
+    with pytest.raises(DocumentSecurityError, match="包含宏"):
+        DocumentService().parse(
+            path,
+            allowed_root=input_dir,
+            work_dir=tmp_path / "work",
+        )
 
 
 def test_pptx_chart_parser_reports_unreadable_series_values():
