@@ -366,18 +366,21 @@ def test_review_task_type_mapping_covers_every_single_file_review(
 
 
 def test_queued_review_acceptance_message_names_actual_review_type():
-    assert _queued_review_acceptance_message(
+    created_message = _queued_review_acceptance_message(
         review_label="半月报审核",
-        task_id="task-123",
         created=True,
         input_label="这份文件",
-    ) == "已进入半月报审核队列，任务编号：task-123。完成后会自动发送结果。"
-    assert "无需重复提交" in _queued_review_acceptance_message(
+    )
+    duplicate_message = _queued_review_acceptance_message(
         review_label="文字审核",
-        task_id="task-123",
         created=False,
         input_label="这段文字",
     )
+
+    assert created_message == "已进入半月报审核队列，完成后会自动发送结果。"
+    assert duplicate_message == "这段文字已经在处理中，无需重复提交。完成后会自动发送结果。"
+    assert "task-123" not in created_message
+    assert "task-123" not in duplicate_message
 
 
 @pytest.mark.parametrize(

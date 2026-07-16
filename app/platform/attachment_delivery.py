@@ -673,7 +673,7 @@ class AttachmentDelivery:
             message = prefix + ("已提醒管理员处理。" if alert_recorded else "请联系管理员处理。")
         safe_job_id = job_id.strip()
         if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", safe_job_id):
-            message += f"任务编号：{safe_job_id}。"
+            message += f"处理编号：{safe_job_id}。"
         return message
 
     @staticmethod

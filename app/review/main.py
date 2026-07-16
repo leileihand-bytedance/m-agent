@@ -794,13 +794,12 @@ def _document_type_for_review_task_type(task_type: str) -> DocumentType:
 def _queued_review_acceptance_message(
     *,
     review_label: str,
-    task_id: str,
     created: bool,
     input_label: str,
 ) -> str:
     if created:
-        return f"已进入{review_label}队列，任务编号：{task_id}。完成后会自动发送结果。"
-    return f"{input_label}已经在处理中，无需重复提交。任务编号：{task_id}。"
+        return f"已进入{review_label}队列，完成后会自动发送结果。"
+    return f"{input_label}已经在处理中，无需重复提交。完成后会自动发送结果。"
 
 
 def _review_label(doc_type: DocumentType) -> str:
@@ -1567,7 +1566,6 @@ async def run_review_bot(config: ReviewConfig) -> None:
                 generate_req_id("review-format-queued"),
                 _queued_review_acceptance_message(
                     review_label="公文格式审核",
-                    task_id=submission.task.task_id,
                     created=submission.created,
                     input_label="这份文件",
                 ),
@@ -1677,23 +1675,23 @@ async def run_review_bot(config: ReviewConfig) -> None:
         messages = {
             "delivery_status_uncertain": (
                 "审核已经完成，但结果发送状态暂时无法确认。"
-                f"为避免重复发送，我已暂停自动重试并提醒管理员核对。任务编号：{task_id}"
+                f"为避免重复发送，我已暂停自动重试并提醒管理员核对。处理编号：{task_id}"
             ),
             "delivery_failed": (
                 "审核已经完成，但结果发送失败，已经提醒管理员处理。"
-                f"任务编号：{task_id}"
+                f"处理编号：{task_id}"
             ),
             "review_processing_failed": (
                 "审核处理失败，已经提醒管理员排查。"
-                f"请稍后重试，任务编号：{task_id}"
+                f"请稍后重试，处理编号：{task_id}"
             ),
             "invalid_task_payload": (
                 "审核任务状态异常，已经提醒管理员排查。"
-                f"任务编号：{task_id}"
+                f"处理编号：{task_id}"
             ),
             "invalid_task_checkpoint": (
                 "审核任务状态异常，已经提醒管理员排查。"
-                f"任务编号：{task_id}"
+                f"处理编号：{task_id}"
             ),
         }
         message = messages.get(error_code)
@@ -1834,7 +1832,6 @@ async def run_review_bot(config: ReviewConfig) -> None:
             generate_req_id("review-text-queued"),
             _queued_review_acceptance_message(
                 review_label="文字审核",
-                task_id=submission.task.task_id,
                 created=submission.created,
                 input_label="这段文字",
             ),
@@ -2066,7 +2063,6 @@ async def run_review_bot(config: ReviewConfig) -> None:
             generate_req_id("review-queued"),
             _queued_review_acceptance_message(
                 review_label=review_label,
-                task_id=submission.task.task_id,
                 created=submission.created,
                 input_label="这份文件",
             ),

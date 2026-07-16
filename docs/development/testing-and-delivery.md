@@ -113,7 +113,7 @@ uv run --locked pytest tests/test_review_task_execution.py tests/test_review_int
 uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、任务编号兜底和运维事件脱敏；审核专项还要覆盖五类单项任务分派、处理与发送检查点、已完成任务不重复审核、队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、单文件后追加格式审核，以及损坏检查点的安全失败。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
+重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖五类单项任务分派、处理与发送检查点、已完成任务不重复审核、队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、单文件后追加格式审核，以及损坏检查点的安全失败。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
 
 ### 持久任务生产接入验收
 
@@ -123,7 +123,7 @@ uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_p
 
 1. 自动化验证同一企业微信消息重复投递只创建和执行一次任务。
 2. 自动化验证全局、单用户和成本并发限制，排队期间 Bot 仍可受理其他消息。
-3. 人工在真实企业微信中确认提交后立即收到受理提示和任务编号。
+3. 人工在真实企业微信中确认提交后立即收到与实际业务类型一致的受理提示，正常提示不包含后台任务编号；模拟需要人工介入的异常时，用户提示包含“处理编号”。
 4. 在生成过程中重启对应 Bot，确认任务恢复或安全失败，不会永久停在“处理中”。
 5. 分别验证用户取消、模型或网络失败、正文已生成但附件发送失败，以及运维 Bot 告警。
 6. 核对外部发送幂等：已经成功发送的结果不会因重试或重启再次发送，失败交付也不会触发重新生成两份稿件。

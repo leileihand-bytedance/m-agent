@@ -498,7 +498,7 @@ async def test_new_direct_report_is_accepted_into_persistent_queue():
         (
             _frame("写直报：https://example.com", msgid="message-001"),
             "writing-queued-001",
-            "已进入直报写作队列，任务编号：task-writing-001。完成后会自动发送初稿。",
+            "已进入直报写作队列，完成后会自动发送初稿。",
             True,
         )
     ]
@@ -773,7 +773,7 @@ async def test_collected_brief_material_is_snapshotted_into_persistent_queue():
     assert submission["skill_id"] == "writer1"
     assert "普惠金融" in submission["material_text"]
     assert ws_client.stream_replies[-1][2] == (
-        "已进入简报写作队列，任务编号：task-writing-002。完成后会自动发送初稿。"
+        "已进入简报写作队列，完成后会自动发送初稿。"
     )
 
 
@@ -808,6 +808,10 @@ async def test_duplicate_completed_queue_submission_does_not_leave_stale_intake(
     )
 
     assert len(task_service.structured_submissions) == 1
+    assert ws_client.stream_replies[-1][2] == (
+        "这项简报写作任务已经在处理中，无需重复提交。完成后会自动发送初稿。"
+    )
+    assert "task-writing-002" not in ws_client.stream_replies[-1][2]
     assert later.action == "bypass"
 
 
@@ -1319,7 +1323,7 @@ async def test_structured_output_file_failure_uses_public_delivery_and_safe_ops_
     )
 
     assert ws_client.stream_replies[-1][2] == (
-        "文件上传失败，已提醒管理员处理。任务编号：job-002。"
+        "文件上传失败，已提醒管理员处理。处理编号：job-002。"
     )
     status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
     assert status["processing_status"] == "completed"

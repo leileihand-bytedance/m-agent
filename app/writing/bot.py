@@ -202,7 +202,6 @@ async def handle_text_with_platform(
             req_id_factory("writing-queued"),
             _queued_acceptance_message(
                 skill_id=str(queued_route.skill_id),
-                task_id=submission.task.task_id,
                 created=submission.created,
             ),
             True,
@@ -582,7 +581,6 @@ async def _queue_structured_decision(
         req_id_factory("writing-queued"),
         _queued_acceptance_message(
             skill_id=decision.skill_id or "",
-            task_id=submission.task.task_id,
             created=submission.created,
         ),
         True,
@@ -779,11 +777,11 @@ def _queueable_text_route(platform_app, *, sender_userid: str, content: str):
     return route
 
 
-def _queued_acceptance_message(*, skill_id: str, task_id: str, created: bool) -> str:
+def _queued_acceptance_message(*, skill_id: str, created: bool) -> str:
     label = _ack_label_for_skill(skill_id)
     if created:
-        return f"已进入{label}队列，任务编号：{task_id}。完成后会自动发送初稿。"
-    return f"这项{label}任务已经在处理中，无需重复提交。任务编号：{task_id}。"
+        return f"已进入{label}队列，完成后会自动发送初稿。"
+    return f"这项{label}任务已经在处理中，无需重复提交。完成后会自动发送初稿。"
 
 
 def _ack_message_for_text(*, platform_app, sender_userid: str, content: str) -> str:
@@ -992,7 +990,7 @@ async def run_bot(config) -> None:
             await _send_active_writing_text(
                 ws_client,
                 recipient,
-                f"{message}任务编号：{task_id}",
+                f"{message}处理编号：{task_id}",
             )
 
     task_repository = TaskRepository(

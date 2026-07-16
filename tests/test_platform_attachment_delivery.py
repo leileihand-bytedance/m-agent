@@ -354,7 +354,8 @@ async def test_oversized_delivery_records_ops_and_returns_manual_retrieval_id(tm
     )
 
     assert result.error_code == "file_too_large"
-    assert "任务编号：job-001" in result.user_message
+    assert "处理编号：job-001" in result.user_message
+    assert "任务编号" not in result.user_message
     assert "已提醒管理员" in result.user_message
     events = read_ops_events(ops_dir, date.today())
     assert len(events) == 1
@@ -601,7 +602,8 @@ async def test_attachment_delivery_records_safe_ops_event_and_failed_status(tmp_
     assert result.attempts == 2
     assert result.error_code == "upload_failed"
     assert "文件上传失败，已提醒管理员处理" in result.user_message
-    assert "任务编号：job-001" in result.user_message
+    assert "处理编号：job-001" in result.user_message
+    assert "任务编号" not in result.user_message
     assert "req-123" not in result.user_message
     assert str(file_path) not in result.user_message
 
