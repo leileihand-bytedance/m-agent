@@ -413,6 +413,53 @@ def test_restart_does_not_resend_when_delivery_status_is_uncertain(tmp_path: Pat
     ]
 
 
+def test_text_parts_are_sent_in_order_and_not_reprocessed_after_completion(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    calls = {"process": 0}
+    sent: list[str] = []
+
+    async def processor(_workspace):
+        calls["process"] += 1
+        return PreparedReviewDelivery.multipart_text(("第一段", "第二段"))
+
+    async def sender(_recipient: str, value: str) -> bool:
+        sent.append(value)
+        return True
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=sender,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-multipart",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+
+    first = asyncio.run(service.handle(submission.task))
+    repeated = asyncio.run(
+        service.handle(repository.get_task(submission.task.task_id))
+    )
+
+    assert first.status == repeated.status == "completed"
+    assert calls == {"process": 1}
+    assert sent == ["第一段", "第二段"]
+    checkpoint = json.loads(
+        (
+            Path(str(submission.task.payload["task_dir"])) / "execution.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert checkpoint["result_kind"] == "text_parts"
+    assert checkpoint["result_text_parts"] == ["第一段", "第二段"]
+
+
 @pytest.mark.parametrize("checkpoint_content", ["not-json", "{}"])
 def test_damaged_execution_checkpoint_fails_safely_and_notifies_user(
     tmp_path: Path,

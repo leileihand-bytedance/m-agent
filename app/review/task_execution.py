@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -64,8 +65,9 @@ class GeneralReviewWorkspace:
 
 @dataclass(frozen=True)
 class PreparedReviewDelivery:
-    kind: Literal["text", "attachment"]
+    kind: Literal["text", "text_parts", "attachment"]
     text: str = ""
+    text_parts: tuple[str, ...] = ()
     file_path: Path | None = None
 
     @classmethod
@@ -77,6 +79,13 @@ class PreparedReviewDelivery:
     @classmethod
     def attachment(cls, path: str | Path) -> "PreparedReviewDelivery":
         return cls(kind="attachment", file_path=Path(path))
+
+    @classmethod
+    def multipart_text(cls, values: Iterable[str]) -> "PreparedReviewDelivery":
+        parts = tuple(value.strip() for value in values if value.strip())
+        if not parts:
+            raise ValueError("多段文字交付内容不能为空")
+        return cls(kind="text_parts", text_parts=parts)
 
 
 @dataclass(frozen=True)
@@ -340,6 +349,14 @@ class GeneralReviewTaskService:
                 workspace.sender_userid,
                 str(checkpoint["result_text"]),
             )
+        if checkpoint["result_kind"] == "text_parts":
+            parts = checkpoint["result_text_parts"]
+            if not isinstance(parts, list):
+                raise ValueError("审核任务多段文字结果无效")
+            for part in parts:
+                if not await self._text_sender(workspace.sender_userid, str(part)):
+                    return False
+            return True
         relative_path = Path(str(checkpoint["result_file"]))
         result_path = (workspace.task_dir / relative_path).resolve(strict=True)
         if not result_path.is_relative_to(workspace.task_dir):
@@ -364,6 +381,20 @@ class GeneralReviewTaskService:
                 "delivery_status": "pending",
                 "result_kind": "text",
                 "result_text": prepared.text.strip(),
+                "result_text_parts": [],
+                "result_file": "",
+            }
+        if prepared.kind == "text_parts":
+            parts = tuple(value.strip() for value in prepared.text_parts if value.strip())
+            if not parts:
+                raise ValueError("多段文字审核结果不能为空")
+            return {
+                "schema_version": 1,
+                "processing_status": "completed",
+                "delivery_status": "pending",
+                "result_kind": "text_parts",
+                "result_text": "",
+                "result_text_parts": list(parts),
                 "result_file": "",
             }
         if prepared.file_path is None:
@@ -377,6 +408,7 @@ class GeneralReviewTaskService:
             "delivery_status": "pending",
             "result_kind": "attachment",
             "result_text": "",
+            "result_text_parts": [],
             "result_file": str(result_path.relative_to(workspace.task_dir)),
         }
 
@@ -460,6 +492,7 @@ class GeneralReviewTaskService:
                 "delivery_status": "pending",
                 "result_kind": "",
                 "result_text": "",
+                "result_text_parts": [],
                 "result_file": "",
             }
         try:
@@ -483,6 +516,14 @@ class GeneralReviewTaskService:
         if result_kind == "text":
             if not str(payload.get("result_text", "")).strip():
                 raise ValueError("审核任务文字结果为空")
+        elif result_kind == "text_parts":
+            parts = payload.get("result_text_parts")
+            if (
+                not isinstance(parts, list)
+                or not parts
+                or any(not isinstance(part, str) or not part.strip() for part in parts)
+            ):
+                raise ValueError("审核任务多段文字结果为空")
         elif result_kind == "attachment":
             relative_path = Path(str(payload.get("result_file", "")))
             if (
