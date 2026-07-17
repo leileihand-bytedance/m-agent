@@ -4,6 +4,7 @@ import hashlib
 import re
 from datetime import date, datetime, timedelta
 
+from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.schema import (
     FrontierSelection,
     MarketEvidenceBundle,
@@ -239,8 +240,14 @@ def build_market_item(
     for item in bundle.series:
         grouped.setdefault(item.scope, {})[item.index_code.upper()] = item
         try:
-            start_date = date.fromisoformat(item.start_date)
-            end_date = date.fromisoformat(item.end_date)
+            start_date = parse_flexible_date(
+                item.start_date,
+                default_year=publication_date.year,
+            )
+            end_date = parse_flexible_date(
+                item.end_date,
+                default_year=publication_date.year,
+            )
         except ValueError as exc:
             raise ValueError(f"行情日期格式无效：{item.scope}/{item.index_code}") from exc
         if start_date >= end_date:

@@ -10,7 +10,7 @@ from skills.internal_weekly.schema import (
     MarketEvidenceBundle,
     MarketSeriesEvidence,
 )
-from skills.internal_weekly.workflow import run
+from skills.internal_weekly.workflow import _collect_pages, run
 
 
 def _market_series() -> list[MarketSeriesEvidence]:
@@ -212,6 +212,9 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert any(section["name"] == "市场观察" for section in manifest["sections"])
     assert all(record["url"] for record in manifest["source_records"])
     assert all(record["content_sha256"] for record in manifest["source_records"])
+    assert any("site:gov.cn" in query for query in fake.search_calls)
+    assert any("site:pbc.gov.cn" in query for query in fake.search_calls)
+    assert any("site:bis.org" in query for query in fake.search_calls)
 
 
 def test_workflow_waits_until_monday_market_close_without_search(tmp_path):
@@ -233,3 +236,98 @@ def test_workflow_waits_until_monday_market_close_without_search(tmp_path):
     assert result.needs_clarification is True
     assert "15:30" in result.message
     assert fake.search_calls == []
+
+
+def test_collect_pages_filters_unlisted_search_results_before_web_reader():
+    read_urls: list[str] = []
+
+    def search(query: str, max_results: int = 5):
+        return [
+            {"url": "https://notice.example/tender.htm", "title": "无关招标页"},
+            {"url": "https://www.gov.cn/meeting.htm", "title": "国务院常务会议"},
+        ]
+
+    def web_reader(url: str):
+        read_urls.append(url)
+        if "example" in url:
+            raise RuntimeError("raw curl timeout details must stay internal")
+        return FakeTools().pages[url]
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader"),
+        tools={"search": search, "web_reader": web_reader},
+    )
+
+    pages, warnings = _collect_pages(
+        ["测试"],
+        gateway,
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+    )
+
+    assert read_urls == ["https://www.gov.cn/meeting.htm"]
+    assert [page.canonical_url for page in pages] == ["https://www.gov.cn/meeting.htm"]
+    assert warnings == []
+
+
+def test_collect_pages_does_not_expose_raw_reader_exception():
+    def search(query: str, max_results: int = 5):
+        return [{"url": "https://www.gov.cn/unreachable.htm", "title": "国务院页面"}]
+
+    def web_reader(url: str):
+        raise RuntimeError("curl (28) connection timed out after 20001 milliseconds")
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader"),
+        tools={"search": search, "web_reader": web_reader},
+    )
+
+    _, warnings = _collect_pages(["测试"], gateway)
+
+    assert warnings == ["网页读取失败：gov.cn"]
+    assert "curl" not in warnings[0]
+
+
+class FrontierFallbackTools(FakeTools):
+    def __init__(self):
+        super().__init__()
+        self.pages["https://www.bis.org/publ/work999.htm"]["publish_date"] = "2026-06-25"
+
+    def search(self, query: str, max_results: int = 5):
+        if "研究报告" in query:
+            self.search_calls.append(query)
+            if "近30日补充" in query:
+                return [
+                    {
+                        "url": "https://www.bis.org/publ/work999.htm",
+                        "title": "利率传导与银行净息差",
+                    }
+                ]
+            return []
+        return super().search(query, max_results=max_results)
+
+
+def test_workflow_frontier_falls_back_to_recent_30_days(tmp_path):
+    fake = FrontierFallbackTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    frontier = next(section for section in result.sections if section.name == "前沿观点")
+    assert frontier.items[0].title == "利率传导与银行净息差"
+    assert result.ready_for_approval is True
+    assert any("近30日补充" in query for query in fake.search_calls)

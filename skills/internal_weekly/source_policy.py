@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from urllib.parse import urlparse
 
+from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.schema import WebCandidate
 
 
@@ -61,7 +62,7 @@ def is_research_source(url: str) -> bool:
 
 def date_in_period(value: str, period_start: date, period_end: date) -> bool:
     try:
-        parsed = date.fromisoformat(value[:10])
+        parsed = parse_flexible_date(value, default_year=period_end.year)
     except (TypeError, ValueError):
         return False
     return period_start <= parsed <= period_end

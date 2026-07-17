@@ -132,6 +132,21 @@ def test_market_summary_uses_code_owned_index_names_and_rejects_wrong_monday_dat
         build_market_item(bundle, publication_date=date(2026, 7, 13))
 
 
+def test_market_summary_accepts_common_chinese_and_slash_date_formats():
+    bundle = _complete_market_bundle()
+    for item in bundle.series:
+        if item.scope == "monday_a":
+            item.start_date = "2026年7月10日"
+            item.end_date = "7月13日"
+        else:
+            item.start_date = "2026/7/3"
+            item.end_date = "2026年7月10日"
+
+    item, _ = build_market_item(bundle, publication_date=date(2026, 7, 13))
+
+    assert "截至7月13日收盘" in item.body
+
+
 def test_frontier_selection_must_be_extract_from_report_body():
     report_body = "第一段说明利率传导机制。\n第二段分析银行净息差变化。\n第三段提示风险边界。"
     selection = FrontierSelection(
@@ -193,3 +208,24 @@ def test_source_policy_rejects_unlisted_domain_and_out_of_period_report():
     )
     assert allowed is False
     assert "统计期" in reason
+
+
+def test_source_policy_accepts_common_chinese_publication_date():
+    candidate = WebCandidate(
+        url="https://www.bis.org/publ/work999.htm",
+        canonical_url="https://www.bis.org/publ/work999.htm",
+        title="研究报告",
+        site="bis.org",
+        publish_date="2026年7月9日",
+        body="这是一段长度足够并且来源符合白名单要求的研究报告正文。",
+    )
+
+    allowed, reason = candidate_allowed(
+        candidate,
+        period_start=date(2026, 7, 6),
+        period_end=date(2026, 7, 12),
+        require_research=True,
+    )
+
+    assert allowed is True
+    assert reason == ""

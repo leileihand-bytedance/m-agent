@@ -25,7 +25,12 @@ from skills.internal_weekly.selection import (
     extract_requested_publication_date,
     validate_frontier_selection,
 )
-from skills.internal_weekly.source_policy import candidate_allowed
+from skills.internal_weekly.source_policy import (
+    candidate_allowed,
+    domain_allowed,
+    hostname,
+    is_research_source,
+)
 
 
 MAX_PAGES_PER_GROUP = 30
@@ -72,8 +77,8 @@ def _collect_pages(
     for query in queries:
         try:
             results = tools.call("search", query, max_results=5)
-        except Exception as exc:
-            warnings.append(f"检索失败：{query}（{exc}）")
+        except Exception:
+            warnings.append(f"检索失败：{query}")
             continue
         if isinstance(results, list):
             search_results.extend(item for item in results if isinstance(item, dict))
@@ -85,10 +90,14 @@ def _collect_pages(
         if not url or url in seen:
             continue
         seen.add(url)
+        if not domain_allowed(url):
+            continue
+        if require_research and not is_research_source(url):
+            continue
         try:
             page = tools.call("web_reader", url)
-        except Exception as exc:
-            warnings.append(f"网页读取失败：{url}（{exc}）")
+        except Exception:
+            warnings.append(f"网页读取失败：{hostname(url) or '未知来源'}")
             continue
         if not isinstance(page, dict):
             warnings.append(f"网页读取结果格式无效：{url}")
@@ -105,6 +114,72 @@ def _collect_pages(
         if len(pages) >= MAX_PAGES_PER_GROUP:
             break
     return pages, warnings
+
+
+def _format_date_range(period_start: date, period_end: date) -> str:
+    return (
+        f"{period_start.year}年{period_start.month}月{period_start.day}日"
+        f"至{period_end.year}年{period_end.month}月{period_end.day}日"
+    )
+
+
+def _ordinary_queries(period_start: date, period_end: date) -> list[str]:
+    date_range = _format_date_range(period_start, period_end)
+    return [
+        f"site:gov.cn {date_range} 国务院 金融 重要会议 政策 原文",
+        (
+            f"site:pbc.gov.cn OR site:nfra.gov.cn {date_range} "
+            "中国人民银行 金融监管总局 金融政策 监管动态 原文"
+        ),
+        (
+            f"site:csrc.gov.cn OR site:safe.gov.cn {date_range} "
+            "证监会 外汇局 金融政策 监管动态 原文"
+        ),
+        (
+            f"site:cs.com.cn OR site:stcn.com {date_range} "
+            "银行业 民营银行 数字银行 同业动向 市场动态"
+        ),
+    ]
+
+
+def _market_queries(
+    publication_date: date,
+    period_start: date,
+    period_end: date,
+) -> list[str]:
+    weekly_range = _format_date_range(period_start, period_end)
+    monday = f"{publication_date.year}年{publication_date.month}月{publication_date.day}日"
+    return [
+        (
+            "site:sse.com.cn OR site:szse.cn A股 上证指数 深证成指 创业板指 "
+            f"收盘 历史行情 上周{weekly_range}及周一{monday}"
+        ),
+        (
+            "site:hsi.com.hk OR site:hkex.com.hk 港股 恒生指数 恒生科技指数 "
+            f"恒生中国企业指数 收盘 历史行情 {weekly_range}"
+        ),
+        (
+            "site:spglobal.com OR site:nasdaq.com 美股 道琼斯指数 纳斯达克指数 "
+            f"标普500指数 收盘 历史行情 {weekly_range}"
+        ),
+    ]
+
+
+def _frontier_queries(
+    period_start: date,
+    period_end: date,
+    *,
+    fallback: bool = False,
+) -> list[str]:
+    marker = "近30日补充" if fallback else "统计期优先"
+    return [
+        (
+            "site:bis.org OR site:imf.org OR site:worldbank.org OR "
+            "site:federalreserve.gov OR site:ecb.europa.eu "
+            f"银行 金融科技 金融市场 研究报告 {marker} "
+            f"{_format_date_range(period_start, period_end)}"
+        )
+    ]
 
 
 def _materials(pages: list[WebCandidate]) -> list[dict[str, str]]:
@@ -214,6 +289,8 @@ def _market_item(
     tools: ToolGateway,
     *,
     publication_date: date,
+    period_start: date,
+    period_end: date,
     retrieved_at: str,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
     if not pages:
@@ -225,8 +302,13 @@ def _market_item(
             "skill_id": "internal_weekly",
             "output_type": MarketEvidenceBundle,
             "prompt_path": "prompts/market.md",
-            "instruction": "只提取页面明确列示的指数起止收盘值和背景原句，不计算涨跌幅。",
-            "publication_date": publication_date.isoformat(),
+            "instruction": (
+                "只提取页面明确列示的指数起止收盘值和背景原句，不计算涨跌幅。"
+                f"weekly_a、weekly_hk、weekly_us 使用 {period_start.isoformat()} "
+                f"至 {period_end.isoformat()} 内实际交易日起止收盘；"
+                f"monday_a 的 end_date 必须是 {publication_date.isoformat()}。"
+                "所有 start_date、end_date 必须输出 YYYY-MM-DD。"
+            ),
             "materials": _materials(pages),
         },
     )
@@ -262,7 +344,7 @@ def _frontier_item(
     retrieved_at: str,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
     if not pages:
-        return None, [], ["前沿观点未找到统计期内可核验的研究报告"]
+        return None, [], ["前沿观点未找到统计期内或近30日可核验的研究报告"]
     result = tools.call(
         "llm_writer",
         {
@@ -363,32 +445,34 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             period_end,
         )
 
-    date_range = f"{period_start.isoformat()}..{period_end.isoformat()}"
     retrieved_at = current.astimezone().isoformat()
     ordinary_pages, warnings = _collect_pages(
-        [
-            f"国务院 金融 重要会议 {date_range}",
-            f"中国人民银行 金融监管总局 政策 {date_range}",
-            f"银行业 市场动态 民营银行 {date_range}",
-        ],
+        _ordinary_queries(period_start, period_end),
         tools,
         period_start=period_start,
         period_end=period_end,
     )
     market_pages, market_search_warnings = _collect_pages(
-        [
-            f"A股 指数 收盘 {period_start.isoformat()} {period_end.isoformat()} {publication_date.isoformat()}",
-            f"港股 美股 指数 收盘 {period_start.isoformat()} {period_end.isoformat()}",
-        ],
+        _market_queries(publication_date, period_start, period_end),
         tools,
     )
     frontier_pages, frontier_search_warnings = _collect_pages(
-        [f"银行 金融 科技 研究报告 {date_range}"],
+        _frontier_queries(period_start, period_end),
         tools,
         period_start=period_start,
         period_end=period_end,
         require_research=True,
     )
+    if not frontier_pages:
+        fallback_start = publication_date - timedelta(days=30)
+        frontier_pages, fallback_warnings = _collect_pages(
+            _frontier_queries(fallback_start, publication_date, fallback=True),
+            tools,
+            period_start=fallback_start,
+            period_end=publication_date,
+            require_research=True,
+        )
+        frontier_search_warnings.extend(fallback_warnings)
     warnings.extend(market_search_warnings)
     warnings.extend(frontier_search_warnings)
 
@@ -410,6 +494,8 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             market_pages,
             tools,
             publication_date=publication_date,
+            period_start=period_start,
+            period_end=period_end,
             retrieved_at=retrieved_at,
         )
         source_records.extend(records)
