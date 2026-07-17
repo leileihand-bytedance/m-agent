@@ -24,17 +24,6 @@ tmp/
 /STATUS-REPORT.md
 /config/platform-policy.yaml
 
-# Root-level temp scripts (do not commit)
-/test_*.py
-/debug_*.py
-/tmp_*.py
-/temp_*.py
-/audit_*.py
-/full_audit.py
-/parse_result.py
-/run_audit.py
-/run_audit.sh
-
 # Raw user materials (sensitive)
 /M-Agent-Files/
 data/leaders/

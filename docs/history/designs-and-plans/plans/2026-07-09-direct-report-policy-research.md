@@ -174,7 +174,7 @@ Expected: PASS
 ### Task 5: 更新文档并做回归验证
 
 **Files:**
-- Modify: `docs/development/policy-knowledge-base.md`
+- Modify: `docs/knowledge/policy.md`
 - Delete: `docs/development/policy-wiki-obsidian.md`
 - Modify: `docs/development/README.md`
 - Modify: `docs/development/architecture.md`

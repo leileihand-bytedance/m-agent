@@ -228,7 +228,7 @@ Run:
 
 ```bash
 git diff --check
-git add skills/shenyinxie_news tests/test_shenyinxie_news_selection.py tests/test_shenyinxie_news_workflow.py tests/test_shenyinxie_news_docx.py tests/test_shenyinxie_news_whitelist.py docs/superpowers/plans/2026-07-17-shenyinxie-news-selection.md docs/capabilities/README.md docs/development/architecture.md docs/development/README.md docs/development/TODO.md docs/development/testing-and-delivery.md app/writing/README.md
+git add skills/shenyinxie_news tests/test_shenyinxie_news_selection.py tests/test_shenyinxie_news_workflow.py tests/test_shenyinxie_news_docx.py tests/test_shenyinxie_news_whitelist.py docs/history/designs-and-plans/plans/2026-07-17-shenyinxie-news-selection.md docs/capabilities/README.md docs/development/architecture.md docs/development/README.md docs/development/TODO.md docs/development/testing-and-delivery.md app/writing/README.md
 uv run --locked python scripts/project_docs.py check --staged
 ```
 

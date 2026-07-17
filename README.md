@@ -1,117 +1,84 @@
 # M-Agent
 
-M-Agent 当前正在从多个独立企业微信 Bot，演进为：
+M-Agent 是运行在本机 Mac 上、通过企业微信提供服务的业务智能体系统。项目采用“公共底座 + 独立 Skills + 受限工具”的结构，当前覆盖写作、材料润色、综合调研、动态整理和多类材料审核。
+
+## 项目结构
 
 ```text
-统一企业微信入口
-  -> app/platform/ 新底座
-  -> skills/ 功能区
-  -> 受限工具层
-  -> 企业微信返回
+企业微信 / 本地入口
+  -> app/                 # 入口、底座、管理和知识服务
+  -> skills/              # 业务能力及其规则
+  -> 受限工具和模型
+  -> M-Agent-Files/       # 仓库外的任务、知识库和运行数据
 ```
 
-## 当前状态
-
-已经具备：
-
-- 新底座：`app/platform/`
-- 本机管理后台：`app/admin/`
-- 直报 Bot 入口适配层：`app/writing/`
-- 直报 skill：`skills/direct_report/`
-- 简报 skill：`skills/writer1/`、`skills/writer2/`
-- 旧审核 Bot：`app/review/`
-
-## 目录身份
+主要目录：
 
 ```text
-app/platform/  # 新底座区，当前主线
-app/admin/     # 本机管理后台
-app/writing/   # 当前直报 Bot 入口适配层
-app/review/    # 旧审核 Bot，后续包装为 review skill
-skills/        # 正式业务能力区
-docs/archive/  # 历史方案，不作为新开发依据
-archive/inactive-2026-07-04/ # 已归档停滞模块，不作为开发入口
+app/platform/       # 公共底座
+app/writing/        # 写作企业微信入口
+app/review/         # 独立审核入口和审核实现
+app/rewrite_bot/    # 独立材料润色入口
+app/admin/          # 本机项目控制台
+skills/             # 正式业务能力
+tests/              # 自动化测试
+docs/               # 项目文档
+scripts/            # 维护和交付脚本
+archive/            # 已退出运行的历史代码
 ```
 
-## Python 环境
+## 环境
 
-M-Agent 统一使用 uv 管理的 Python 3.13.14 和项目根目录 `.venv`。首次拉取项目或依赖发生变化后，在项目根目录运行：
+项目固定使用 uv 管理的 Python 3.13.14 和根目录 `.venv`：
 
 ```bash
 uv sync --locked
-```
-
-项目依赖以 `pyproject.toml` 为声明、以 `uv.lock` 为准确版本记录。不要使用系统 `python` 或全局 `pip` 给 M-Agent 安装依赖；开发、测试和 Bot 均通过 `uv run --locked ...` 启动。
-
-检查实际解释器：
-
-```bash
 uv run --locked python -c "import sys; print(sys.executable); print(sys.version)"
 ```
 
+不要使用系统 `python`、全局 `pip` 或其他项目的虚拟环境。
+
 ## 常用入口
 
-检查新底座配置：
-
 ```bash
+# 检查公共底座配置
 uv run --locked python -m app.platform.cli --check-config
-```
 
-本地测试一条消息：
-
-```bash
-uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://example.com"
-```
-
-检查直报 Bot 配置：
-
-```bash
+# 写作 Bot
 uv run --locked python -m app.writing.bot --check-config
-```
+uv run --locked python -m app.writing.bot
 
-启动本机管理后台：
+# 审核 Bot
+uv run --locked python -m app.review.main --check-config
+uv run --locked python -m app.review.main
 
-```bash
+# 材料润色 Bot
+uv run --locked python -m app.rewrite_bot --check-config
+uv run --locked python -m app.rewrite_bot
+
+# 本机项目控制台
 uv run --locked python -m app.admin.server --port 8787
 ```
 
-旧审核 Bot：
-
-```bash
-uv run --locked python -m app.review.main --check-config
-uv run --locked python -m app.review.main
-```
-
-## 开发前阅读
-
-1. `AGENTS.md` 或 `CLAUDE.md`
-2. `docs/development/README.md`
-3. `docs/development/architecture.md`
-4. `docs/development/directory-standard.md`
-5. `docs/capabilities/README.md`
+所有真实密钥只写入本机 `.env`。用户上传文件、系统输出、日志、会话、任务队列和知识库默认保存在项目同级的 `M-Agent-Files/`，不进入 Git。
 
 ## 测试
 
-平台和直报入口：
-
-```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
-```
-
-管理后台：
-
-```bash
-uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -v
-```
-
-旧审核入口保护：
-
-```bash
-uv run --locked python tests/test_review_bot.py
-```
-
-全仓回归：
-
 ```bash
 uv run --locked pytest tests -q
+uv run --locked python scripts/project_docs.py check
 ```
+
+真实模型、企业微信和大文件测试的分层要求见 [测试和交付规范](docs/development/testing-and-delivery.md)。
+
+## 文档入口
+
+开发前按顺序阅读：
+
+1. `AGENTS.md` 或 `CLAUDE.md`
+2. [文档地图与治理规则](docs/README.md)
+3. [开发入口](docs/development/README.md)
+4. [整体架构](docs/development/architecture.md)
+5. [当前待办](docs/development/TODO.md)
+
+业务规则以各 `skills/<skill_id>/SKILL.md` 为准。当前能力、底座、运维、知识库和历史文档的具体入口统一从 [docs/README.md](docs/README.md) 查找。

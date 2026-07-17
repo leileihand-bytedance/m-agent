@@ -227,14 +227,14 @@ _MODULE_SPECS = (
         ),
     ),
     ("review", "审核", ("审核",), ("app/review", "tests/test_review", "tests/test_official_format_review.py")),
-    ("knowledge", "知识库", ("政策知识库", "微众银行信息库", "知识库"), ("app/policy_knowledge", "app/bank_knowledge", "docs/development/policy-knowledge-base.md", "docs/development/bank-knowledge-base.md")),
+    ("knowledge", "知识库", ("政策知识库", "微众银行信息库", "知识库"), ("app/policy_knowledge", "app/bank_knowledge", "docs/knowledge/policy.md", "docs/knowledge/bank.md")),
     (
         "operations",
         "入口与运维",
         ("运维", "企业微信入口"),
         ("app/platform/ops", "app/writing/bot.py", "app/review/main.py", "app/rewrite_bot/bot.py"),
     ),
-    ("admin", "管理后台", ("管理后台",), ("app/admin", "docs/development/admin-console.md")),
+    ("admin", "管理后台", ("管理后台",), ("app/admin", "docs/operations/admin-console.md")),
 )
 _CAPABILITY_STATUS_LABELS = {
     "stable": "稳定运行",

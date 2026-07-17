@@ -3,7 +3,7 @@
 > 日期：2026-07-01
 > 目标：优化直报写作 skill，使其能生成真正达标的直报件，而非生硬的汇报材料
 
-> 历史说明：本文件是早期设计草稿，不作为当前直报开发依据。当前有效规则以 `skills/direct_report/SKILL.md`、`docs/development/direct-report-quality-phase1.md` 和 `docs/development/direct-report-quality-regression-v1.md` 为准。特别是主体称谓已经更新为：直报全篇只写“微众银行”，不再使用“我行”或“以下简称”。
+> 历史说明：本文件是早期设计草稿，不作为当前直报开发依据。当前有效规则以 `skills/direct_report/SKILL.md` 和 `docs/capabilities/direct-report/quality-regression.md` 为准。特别是主体称谓已经更新为：直报全篇只写“微众银行”，不再使用“我行”或“以下简称”。
 
 ---
 

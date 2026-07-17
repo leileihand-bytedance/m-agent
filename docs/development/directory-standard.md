@@ -1,310 +1,165 @@
 # M-Agent 目录和文件规范
 
+本文档规定代码、文档、配置、测试、静态资产和运行数据应该放在哪里。文档内容职责另见 `docs/README.md`。
+
 ## 顶层目录
 
 ```text
 M-Agent/
-├── AGENTS.md
-├── CLAUDE.md
-├── app/
-├── skills/
-├── tests/
-├── docs/
-└── scripts/
+├── README.md             # 项目入口
+├── AGENTS.md             # AI 工具共同规则
+├── CLAUDE.md             # Claude Code 入口
+├── pyproject.toml        # 直接依赖唯一声明
+├── uv.lock               # 依赖准确版本
+├── app/                  # 运行代码
+├── skills/               # 业务能力
+├── tests/                # 自动化测试
+├── docs/                 # 项目文档
+├── scripts/              # 长期维护工具
+├── config/               # 可提交配置示例和本机权限文件
+├── data/                 # 仅允许脱敏固定测试资料
+└── archive/              # 已退出运行的历史代码
 ```
 
-运行数据不再放在代码仓库内，默认位于项目同级的桌面目录：
+根目录禁止长期保留：
 
-```text
-M-Agent-Files/
-├── tasks/          # 用户上传和系统生成的任务文件
-├── knowledge/      # 政策库、政策 Wiki、微众银行信息库
-├── runtime/        # 会话、日志、用户名表、运维事件和心跳
-└── legacy/         # 历史运行数据迁移保留区
-```
+- `test_*.py`、`debug_*.py`、`tmp_*.py`、`audit_*.py` 等一次性脚本。
+- 用户文件、模型输出、日志、数据库、下载文件和截图。
+- 另一套虚拟环境或依赖清单。
+- 带有 `old`、`new`、`final`、`copy`、`backup` 的临时版本文件。
 
-该目录不建立 Git 仓库，也不允许复制进 `M-Agent/` 后提交。
+一次性验证完成后必须删除；有长期价值的逻辑改为 `tests/` 或 `scripts/` 中的正式资产。
 
-## `app/platform/`
+## 代码目录
 
-底座区。当前主线，只放公共运行能力。
+### `app/platform/`
 
-当前文件：
+公共底座，只放入口标准化、路由、身份权限、材料组装、会话、任务、工具、文档服务、交付和运维等跨 Skill 能力。
 
-```text
-app/platform/
-├── __init__.py
-├── app.py                 # 平台应用服务，串联路由、权限、任务、runtime
-├── builtin_tools.py       # 当前内置工具
-├── cli.py                 # 本地配置检查和消息测试入口
-├── config.py              # 平台配置
-├── conversation.py        # 平台级会话状态与活跃稿件版本链
-├── demo.py                # 本地 demo 入口
-├── gateway/               # 企业微信消息核心适配
-├── identity.py            # 用户和 skill 权限
-├── intent.py              # 改稿/新任务/追问意图分类
-├── models.py              # 底座通用模型
-├── pydantic_runtime.py    # Pydantic AI 执行层
-├── registry.py            # Skill 注册表
-├── router.py              # 意图路由
-├── runtime.py             # 平台运行时
-├── storage.py             # 任务目录和结果记录
-└── tools.py               # 工具授权网关
-```
+禁止写具体文种、审核类型或机构口径。
 
-未来可拆分：
+### `app/<module>/`
 
-```text
-app/platform/
-├── gateway/
-├── identity/
-├── storage/
-├── safety/
-└── tools/
-```
+入口、管理面和知识服务按模块划分。每个长期模块应有短 README，说明：
 
-拆分原则：只有当单文件职责变多、测试开始难维护时再拆。
+- 模块职责和边界。
+- 主要技术入口。
+- 配置组和启动方式。
+- 专项测试入口。
+- 指向业务能力、架构或运维权威文档的链接。
 
-## `app/admin/`
+模块 README 不复制跨项目路线、完整业务规则和开发历史。
 
-本机管理后台。属于底座管理面，不属于业务能力区。
+### `skills/`
 
-当前职责：
-
-- 查看 skill。
-- 开启或关闭 skill。
-- 配置用户可用 skill。
-- 查看最近任务摘要。
-
-禁止：
-
-- 在后台里写业务规则。
-- 直接展示 `.env` 或 API Key。
-- 提供任意文件浏览能力。
-- 对公网开放。
-
-## `app/writing/`
-
-当前直报企业微信 Bot 的入口适配层。
-
-它负责：
-
-- 读取 `WRITING_BOT_ID`、`WRITING_BOT_SECRET`。
-- 启动现有直报 Bot 长连接。
-- 把文本消息交给 `PlatformApp`。
-- 把平台结果回复给企业微信。
-
-它不再负责：
-
-- 直报写作规则。
-- 网页读取逻辑。
-- 直接调用模型写稿。
-
-直报业务规则唯一来源：
-
-```text
-skills/direct_report/
-```
-
-## `app/review/`
-
-旧审核 Bot。当前继续独立运行，避免影响已经可用的审核入口。
-
-后续迁移方向：
-
-```text
-skills/review/
-  -> workflow 调用 app/review 的解析和审核能力
-```
-
-迁移前不要大改 `app/review/`。
-
-## 已归档停滞模块
-
-以下早期内容已移出主线目录，统一归档到 `archive/inactive-2026-07-04/`：
-
-```text
-app/agent/
-app/main.py
-app/config.py
-app/prompts/
-app/data/leaders/
-data/leaders/
-data/leader-mapping.json
-scripts/diagnostic_review.py
-docs/superpowers/plans/2026-05-26-*.md
-docs/superpowers/specs/2026-05-26-*.md
-```
-
-这些内容不作为后续开发入口。如需复用，只提取思路，不直接恢复旧入口。
-
-## `skills/`
-
-功能区。每个 skill 一个目录。
-
-标准结构：
+每个正式 Skill 使用独立目录：
 
 ```text
 skills/<skill_id>/
+├── __init__.py
 ├── SKILL.md
 ├── config.yaml
 ├── schema.py
 ├── workflow.py
-└── prompts/
-    ├── draft.md
-    └── revise.md
+├── prompts/          # 可选
+└── assets/           # 可选，只保存经批准的静态模板
 ```
 
-### `SKILL.md`
+Skill 只能通过底座授权工具访问网页、模型、知识库和用户材料。共享业务组件放在 `skills/` 顶层，只有确实被多个 Skill 复用时才抽取。
 
-写业务规则，给模型和开发者看。
+## 测试目录
 
-必须包含：
-
-- 使用场景
-- 输入材料
-- 执行步骤
-- 输出要求
-- 禁止事项
-- 自检清单
-
-### `config.yaml`
-
-写底座可读配置。
-
-必须包含：
-
-```yaml
-id: direct_report
-name: 直报写作
-description: 根据网页链接或用户材料生成信息直报初稿。
-enabled: true
-triggers:
-  - 直报
-allowed_tools:
-  - web_reader
-  - llm_writer
-workflow: skills.direct_report.workflow:run
-inputs:
-  - url
-outputs:
-  - title
-  - body
-  - sources
-supports_revision: true
-```
-
-### `schema.py`
-
-写 Pydantic 输出模型。
-
-示例：
-
-```python
-from pydantic import BaseModel, Field
-
-
-class DirectReportResult(BaseModel):
-    title: str
-    body: str
-    sources: list[str] = Field(default_factory=list)
-    needs_clarification: bool = False
-    message: str = ""
-```
-
-### `workflow.py`
-
-写 skill 流程，只通过 `ToolGateway` 调工具。
-
-禁止：
-
-- 直接读取 `.env`
-- 直接读取任意本机文件
-- 直接绕过 `ToolGateway`
-- 在 workflow 中写大量业务 prompt
-
-## `tests/`
-
-测试文件按能力命名。
-
-当前平台测试：
+当前测试以 `tests/test_<domain>_<behavior>.py` 命名。新增测试继续使用稳定领域前缀：
 
 ```text
-tests/test_platform_registry.py
-tests/test_platform_router.py
-tests/test_platform_tools.py
-tests/test_platform_builtin_tools.py
-tests/test_platform_pydantic_runtime.py
-tests/test_platform_runtime.py
-tests/test_platform_demo.py
-tests/test_direct_report_workflow.py
+test_platform_*.py
+test_review_*.py
+test_writing_*.py
+test_ops_*.py
+test_admin_*.py
+test_<skill_id>_*.py
 ```
 
-新增 skill 时建议新增：
+固定脱敏样本放入 `tests/fixtures/`。测试不得依赖真实 `.env`、真实用户材料、固定本机绝对路径或外部服务，真实模型端到端用例必须显式标识并单独说明。
+
+测试文件继续增长后，可以按领域迁入子目录；迁移前必须先消除依赖 `Path(__file__)` 层级的脆弱路径计算，并保证全仓测试收集结果不变。
+
+## 文档目录
 
 ```text
-tests/test_<skill_id>_workflow.py
+docs/
+├── README.md             # 文档职责和导航
+├── development/         # 架构、开发、测试、交付和 TODO
+├── agent-platform/      # 公共底座说明
+├── capabilities/        # 当前业务能力
+├── knowledge/           # 知识库治理
+├── operations/          # Bot、控制台和运行维护
+├── plans/               # 当前设计和实施计划
+└── history/             # 已完成或失效文档
 ```
 
-新增底座模块时建议新增：
+当前文档使用描述性文件名；带日期的文件只用于计划、评审和历史资料。当前事实文档不得通过不断追加日期快照维护。
+
+## 配置
 
 ```text
-tests/test_platform_<module>.py
+app/config.example.env              # 公共和写作配置示例
+app/review/config.example.env       # 审核独立配置示例
+config/platform-policy.example.yaml # 权限示例
+config/platform-policy.yaml         # 本机真实权限，不进入 Git
+.env                                # 本机真实密钥，不进入 Git
 ```
 
-## `docs/`
+配置示例只保存变量名、安全默认值和说明，不保存真实密钥、Bot ID、用户 ID 或本机路径。新增变量必须进入对应配置读取、检查、示例和运维文档。
 
-文档分区：
+## 静态资产
+
+经批准的模板、前端依赖和许可证可以进入 Git，但必须：
+
+- 位于所属模块的 `assets/` 或 `static/vendor/`。
+- 能说明来源、用途和许可证。
+- 不包含真实用户材料或案例正文。
+- 有测试验证业务依赖的结构，而不是依赖某台电脑的桌面文件。
+
+## 运行数据
+
+所有非 Git 数据位于项目同级的 `M-Agent-Files/`：
 
 ```text
-docs/development/       # 开发规范
-docs/agent-platform/    # 底座规划
-docs/capabilities/      # 功能区规划
-docs/archive/           # 历史方案，不作为新开发依据
+M-Agent-Files/
+├── tasks/                  # 用户输入和系统输出
+├── knowledge/              # 政策库、银行信息库和 Wiki
+├── runtime/                # 会话、intake、队列、日志、用户表和运维状态
+│   └── development-logs/   # 按月开发日志
+└── legacy/                 # 历史运行数据迁移保留区
 ```
 
-修改架构时更新 `docs/development/architecture.md`。
+`M_AGENT_DATA_DIR` 是统一入口。细分路径只用于特殊部署，不允许各模块自行发明新的持久目录。
 
-修改开发流程时更新 `docs/development/codex-claude-workflow.md`。
+## 历史资料
 
-新增能力时更新 `docs/capabilities/README.md` 或新增能力文档。
+- `docs/history/`：历史设计、计划、方案和 TODO 快照。
+- `archive/`：已退出运行的代码快照。
+- Git：精确文件变化和版本历史。
+- 本机月度开发日志：完整记录完成功能、能力变化、关键验证和下一步。
 
-## `config/` 与运行数据的边界
+历史资料不得被当前入口自动加载，也不能作为当前行为的唯一依据。
 
-```text
-M-Agent/config/    # 静态配置，可随仓库提交
-    platform-policy.yaml          # 用户 skill 权限策略
-    platform-policy.example.yaml  # 权限策略示例
+## 命名规范
 
-M-Agent-Files/     # 真实运行数据，位于代码仓库之外
-    tasks/writing/YYYY/MM/        # 写作任务
-    tasks/review/YYYY/MM/         # 审核任务
-    runtime/conversations/        # 平台级会话状态
-    runtime/users/review_users.yaml
-    knowledge/                    # 本地知识库
+- Python 模块、测试、Skill ID：小写 `snake_case`。
+- Markdown 普通文档：小写 `kebab-case.md`；约定文件保留 `README.md`、`TODO.md`、`SKILL.md`。
+- 设计和计划：`YYYY-MM-DD-topic-design.md`、`YYYY-MM-DD-topic-plan.md`。
+- 不使用空格、中文括号、`副本`、`最终版` 或连续版本号表达当前文件。
+- 当前文件原位更新；历史版本依靠 Git，不创建 `xxx-v2-final.md`。
+
+## 自动检查
+
+提交前至少检查：
+
+```bash
+uv run --locked python scripts/project_docs.py check
+uv run --locked pytest tests/test_project_documentation.py -q
 ```
 
-说明：
-
-- `M_AGENT_DATA_DIR` 是唯一推荐配置入口，默认值为项目同级的 `../M-Agent-Files`。
-- 用户名表包含企业微信 userid，始终属于本机敏感运行数据，不允许随仓库分发。
-- `data/error-examples/` 只允许保留已经脱敏、具有长期测试价值的固定错例；真实用户原件必须进入 `M-Agent-Files/tasks/`。
-
-禁止把真实用户材料、日志、密钥、任务记录提交到仓库。
-
-```text
-app/review/
-app/writing/
-archive/inactive-2026-07-04/
-```
-
-这些是历史或过渡目录。不要一次性重写，也不要作为新能力开发入口。
-
-早期单数 `skill/` 目录已废弃并删除。直报能力以 `skills/direct_report/` 为唯一来源。
-
-迁移策略：
-
-1. 先包装成 skill。
-2. 跑通新入口。
-3. 保留旧入口一段时间。
-4. 确认可替代后再清理。
+文档闸门负责防止本机文件、绝对路径、错误 TODO 状态和缺少对应权威文档；它不能替代人工判断内容是否重复或放错位置。

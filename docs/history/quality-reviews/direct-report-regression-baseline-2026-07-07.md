@@ -94,7 +94,7 @@ uv run --locked pytest tests/test_direct_report_quality_regression.py -q
 人工评审稿已经整理到：
 
 ```text
-docs/development/direct-report-quality-review-20260707.md
+docs/history/quality-reviews/direct-report-review-2026-07-07.md
 ```
 
 本轮额外发现并修复：

@@ -1,96 +1,47 @@
-# app 目录身份说明
+# `app/` 运行代码
 
-`app/` 存放 M-Agent 的运行代码。当前项目已经从早期单一 Bot 原型，演进为“新底座 + skills 功能区 + 过渡入口”的结构。
+`app/` 保存 M-Agent 的公共底座、企业微信入口、管理面和知识服务。具体写作业务规则放在 `skills/`，用户材料和运行结果放在仓库外的 `M-Agent-Files/`。
 
-真实运行数据位于项目外部的桌面 `M-Agent-Files/`，`app/` 和仓库内其他代码目录不得保存用户上传原件或系统生成结果。
-
-## 当前主线
+## 目录
 
 ```text
-app/platform/  # 新底座区
-skills/        # 正式业务能力区
-app/writing/   # 当前直报 Bot 入口适配层
-app/admin/     # 本机管理后台
+app/
+├── platform/          # 公共底座、文档、任务、工具和运维
+├── writing/           # 写作企业微信入口和材料组装
+├── review/            # 独立审核入口和审核实现
+├── rewrite_bot/       # 独立材料润色入口
+├── admin/             # 本机项目控制台
+├── policy_knowledge/  # 政策采集、存储和材料包
+├── bank_knowledge/    # 微众银行信息库导入和检索
+├── policy_research/   # 写作侧政策匹配和研究层
+├── data/              # 当前审核静态规则，后续迁入审核模块
+└── config.example.env # 公共配置示例
 ```
 
-后续新增能力时，优先新增或修改 `skills/<skill_id>/`，不要把业务规则写进 `app/platform/` 或入口 Bot。
+## 边界
 
-## 目录说明
+- `app/platform/` 只实现公共运行能力，不写具体文种规则。
+- `app/writing/`、`app/rewrite_bot/` 和企业微信回调只做入口适配，不保存业务 prompt。
+- `app/review/` 当前同时承担独立入口和审核业务实现；共享审核核心按 TODO 渐进治理，不做一次性重写。
+- 知识服务只返回可追溯材料，不直接生成业务成稿。
+- 任何模块都不能在仓库中保存真实用户材料、任务结果、日志、队列或知识数据库。
 
-### `app/platform/`
+## 文档
 
-M-Agent 新底座。负责：
+- 公共底座：`docs/agent-platform/README.md`
+- 当前架构：`docs/development/architecture.md`
+- 业务能力：`docs/capabilities/`
+- Bot 运维：`docs/operations/bots.md`
+- 知识库：`docs/knowledge/`
+- 目录规范：`docs/development/directory-standard.md`
 
-- 路由用户意图。
-- 加载 skill。
-- 检查用户权限。
-- 创建任务目录。
-- 控制工具调用权限。
-- 调用 Pydantic AI 运行层。
-- 通过统一文档服务安全解析 DOCX、PDF 和 PPTX，并把完整结果保存在任务 `work/`。
+各模块 README 只说明该模块的技术入口、配置、运行和专项测试，不复制跨项目路线或开发历史。
 
-### `app/admin/`
+## 验证
 
-本机管理后台。负责：
-
-- 开关 skill。
-- 配置用户可用 skill。
-- 查看最近任务记录。
-- 汇总六个项目板块的最新 Git 更新、开放待办、任务数量和 Bot 心跳。
-- 用五层交互式关系图和状态清单展示入口、底座、业务功能、工具知识库、运维数据、能力关系及各能力建设状态。
-
-它不是业务能力区，不写写作、审核规则。
-
-### `app/writing/`
-
-当前直报企业微信 Bot 的入口适配层。它负责连接企业微信和调用新底座。
-
-直报写作规则不在这里，唯一来源是：
-
-```text
-skills/direct_report/
-```
-
-### `app/review/`
-
-旧审核 Bot。当前继续独立运行，后续包装为：
-
-```text
-skills/review/
-```
-
-迁移前不要大改。
-
-### 已归档停滞模块
-
-早期统一 agent、领导风格沉淀 Bot、旧 prompt、领导风格历史材料和一次性诊断脚本已移出 `app/` 主线目录，统一归档到：
-
-```text
-archive/inactive-2026-07-04/
-```
-
-这些内容不作为当前开发入口。
-
-新底座入口优先使用：
+测试选择统一查看 `docs/development/testing-and-delivery.md`。最小全仓回归：
 
 ```bash
-uv run --locked python -m app.platform.cli --check-config
-uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
-uv run --locked python -m app.writing.bot --check-config
-```
-
-以上入口统一使用项目根目录 `.venv`。首次运行先在仓库根目录执行 `uv sync --locked`；不要在 `app/` 下另建虚拟环境，也不要使用全局 `pip` 安装依赖。
-
-## 常用验证
-
-平台和直报入口：
-
-```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_brief_writer_workflows.py tests/test_installed_writer_skills.py -v
-```
-
-旧审核入口保护：
-
-```bash
-uv run --locked python tests/test_review_bot.py
+uv run --locked pytest tests -q
+uv run --locked python scripts/project_docs.py check
 ```

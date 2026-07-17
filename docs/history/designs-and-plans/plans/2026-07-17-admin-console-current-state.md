@@ -38,7 +38,7 @@
 
 **Files:**
 - Modify: `app/admin/README.md`
-- Modify: `docs/development/admin-console.md`
+- Modify: `docs/operations/admin-console.md`
 - Modify: `docs/development/README.md`
 - Modify: `docs/development/architecture.md`
 - Modify: `docs/development/testing-and-delivery.md`

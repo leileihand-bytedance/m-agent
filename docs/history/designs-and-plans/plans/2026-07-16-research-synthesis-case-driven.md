@@ -290,7 +290,7 @@ Expected: 全部通过。
 
 Run: `git diff --check`
 
-Run: `git diff -- skills/research_synthesis tests/test_research_synthesis_workflow.py docs/capabilities/README.md docs/development/TODO.md docs/development/architecture.md docs/development/testing-and-delivery.md docs/superpowers/plans/2026-07-16-research-synthesis-case-driven.md`
+Run: `git diff -- skills/research_synthesis tests/test_research_synthesis_workflow.py docs/capabilities/README.md docs/development/TODO.md docs/development/architecture.md docs/development/testing-and-delivery.md docs/history/designs-and-plans/plans/2026-07-16-research-synthesis-case-driven.md`
 
 Run: `uv run --locked python scripts/project_docs.py check --staged`
 

@@ -1,251 +1,145 @@
-# Codex / Claude Code 开发工作流
+# Codex 与 Claude Code 开发工作流
 
-## 基本协作模式
+本项目允许用户主要通过自然语言推动开发，但 AI 工具必须遵守相同的代码、测试、文档和交付流程。
 
-你负责用自然语言描述业务目标，Codex / Claude Code 负责改代码、补测试、更新文档。
+## 开始前
 
-推荐表达格式：
+1. 阅读 `AGENTS.md`。
+2. 阅读 `docs/README.md`，确认哪份文档是本次变更的权威来源。
+3. 阅读整体架构、当前 TODO 和相关模块/Skill 文档。
+4. 检查 Git 状态，识别其他工具或用户正在进行的改动。
+5. 在计划中同时列出实现、测试和文档影响。
+
+不要先修改代码再临时决定文档放在哪里。
+
+## 标准循环
 
 ```text
-我要新增/修改什么能力：
-输入是什么：
-输出是什么：
-允许使用哪些工具：
-不允许做什么：
-验收标准是什么：
+理解需求和边界
+  -> 读取当前实现和权威文档
+  -> 写失败测试或固定回归样本
+  -> 做最小实现
+  -> 运行相关回归
+  -> 更新真正受影响的当前文档
+  -> 清理临时文件
+  -> 文档闸门
+  -> 逻辑提交
+  -> 受管推送
+  -> 当月开发日志
 ```
 
-## 统一开发环境
+一次开发节点应当能说明“完成了什么能力”，不能只说明改了哪些文件。
 
-Codex 和 Claude Code 进入项目后先运行：
+## 修改类型
+
+### 新增或修改 Skill
+
+优先处理：
+
+```text
+skills/<skill_id>/SKILL.md
+skills/<skill_id>/config.yaml
+skills/<skill_id>/schema.py
+skills/<skill_id>/workflow.py
+skills/<skill_id>/prompts/
+tests/test_<skill_id>_*.py
+```
+
+业务规则以 `SKILL.md` 为唯一来源。只有用户可用范围、输入输出或入口边界变化时，才同步 `docs/capabilities/`。
+
+### 修改公共底座
+
+底座包括路由、权限、注册表、材料组装、文档服务、会话、任务、工具授权、模型运行、附件交付和运维。
+
+要求：
+
+- 不把具体写作或审核规则写入 `app/platform/`。
+- 不放宽任务目录、URL、文档和工具安全边界。
+- 补平台测试和跨入口保护测试。
+- 更新 `docs/development/architecture.md` 或 `docs/agent-platform/README.md`。
+
+### 修改企业微信入口
+
+入口只负责 SDK 消息标准化、材料接收、即时回复、任务提交和结果交付。具体业务判断留在 Skill 或审核模块。
+
+更新对应 `app/<module>/README.md`；启动、配置、心跳或故障处理变化时再更新 `docs/operations/`。
+
+### 修改审核
+
+先明确属于通用规则、类型专属规则、证据定位、任务执行还是入口交互，避免在多个审核器复制同一逻辑。
+
+更新：
+
+- 当前业务范围：`docs/capabilities/review.md`
+- 技术入口：`app/review/README.md`
+- 运行维护：`docs/operations/bots.md`
+- 具体测试：`tests/test_review_*.py`
+
+只更新真正发生变化的文档，不要求三份全部修改。
+
+### 修改知识库
+
+采集、数据结构、来源、更新和检索治理写入 `docs/knowledge/`。写作如何使用知识材料仍由对应 Skill 规定。
+
+## 文档判断
+
+| 变化 | 权威文档 |
+|---|---|
+| 当前架构和公共数据流 | `docs/development/architecture.md` |
+| 底座接口和边界 | `docs/agent-platform/README.md` |
+| Skill 业务规则 | `skills/<skill_id>/SKILL.md` |
+| 用户能力范围 | `docs/capabilities/` |
+| 模块运行入口 | `app/<module>/README.md` |
+| Bot 运维 | `docs/operations/` |
+| 知识库 | `docs/knowledge/` |
+| 未完成路线 | `docs/development/TODO.md` |
+| 测试和交付机制 | `docs/development/testing-and-delivery.md` |
+| 文档目录和职责 | `docs/README.md`、`directory-standard.md` |
+
+README 不追加日期进度、修复历史或测试数量。完成事项从 TODO 移出；完成过程由月度日志和 Git 保存。
+
+## 测试
+
+测试先行：
+
+1. 写出能暴露问题或固定行为的测试。
+2. 确认测试在实现前失败或确实覆盖缺口。
+3. 完成最小实现。
+4. 跑专项测试，再根据影响范围扩大回归。
+5. 真实模型或企业微信测试单独说明网络、凭据和人工观察。
+
+测试矩阵和命令统一查看 `docs/development/testing-and-delivery.md`，不在本文件复制长命令清单。
+
+## 临时文件
+
+- 一次性模型、网络、数据和接口脚本完成后删除。
+- 有长期价值的逻辑转成 `tests/` 或 `scripts/` 正式资产。
+- 不提交缓存、日志、用户材料、任务输出、真实权限、本机路径和临时截图。
+- 遇到其他工具正在修改的文件时，先理解并兼容，不覆盖或回退用户改动。
+
+## 交付
+
+提交前：
 
 ```bash
-uv sync --locked
+uv run --locked python scripts/project_docs.py check
+uv run --locked python scripts/project_docs.py check --staged
 ```
 
-之后所有代码、测试、脚本和 Bot 使用 `uv run --locked ...`。不要根据当前终端里的 `python`、`python3`、`pip` 或 `pytest` 猜测项目环境，也不要把依赖装进 pyenv、Homebrew 或 macOS Python。
-
-环境事实来源固定为：
-
-```text
-.python-version  # Python 3.13.14
-pyproject.toml   # 直接依赖声明
-uv.lock          # 全部依赖准确版本
-.venv/           # 本机独立环境，不进入 Git
-```
-
-依赖变更必须同时更新 `pyproject.toml` 和 `uv.lock`，并运行完整自动化回归；不要恢复已删除的 `app/requirements*.txt` 形成第二套依赖来源。
-
-## 新增 Skill 的标准流程
-
-示例需求：
-
-```text
-新增一个“简报写作”skill。
-输入是网页链接或 Word/PDF/PPTX 文件。
-输出包括标题、摘要、正文、来源。
-风格正式、简洁，适合领导阅读。
-请按 direct_report 的结构实现，并补测试。
-```
-
-AI 编程工具应执行：
-
-1. 读取 `docs/capabilities/README.md`。
-2. 读取 `skills/direct_report/` 作为模板。
-3. 按场景补齐或新增对应 skill，例如 `skills/writer1/` 或 `skills/writer2/`。
-4. 写 `SKILL.md`。
-5. 写 `config.yaml`。
-6. 写 `schema.py`，用 Pydantic 模型定义输出。
-7. 写 `workflow.py`，通过 `ToolGateway` 调工具。
-8. 写测试。
-9. 跑平台测试。
-10. 更新文档。
-
-## 修改 Skill 的标准流程
-
-示例需求：
-
-```text
-优化 direct_report，使它更像正式报送材料，不要像新闻稿。
-```
-
-优先修改：
-
-```text
-skills/direct_report/SKILL.md
-skills/direct_report/prompts/draft.md
-tests/test_direct_report_workflow.py
-tests/test_platform_pydantic_runtime.py
-```
-
-只有业务流程变了，才修改 `workflow.py`。
-
-只有输出结构变了，才修改 `schema.py`。
-
-## 新增工具的标准流程
-
-示例需求：
-
-```text
-新增 pdf_reader，只允许读取用户本次上传的 PDF。
-```
-
-AI 编程工具应执行：
-
-1. 在 `app/platform/builtin_tools.py` 或未来 `app/platform/tools/` 中新增工具。
-2. 写测试验证正常读取。
-3. 写测试验证不能读非任务目录。
-4. 在需要的 skill `config.yaml` 中声明工具。
-5. 通过 `ToolGateway` 调用，不允许 skill 直接导入工具绕过授权。
-
-当前已实现的基础工具：
-
-```text
-web_reader
-word_reader
-pdf_reader
-llm_writer
-```
-
-## 修改底座的标准流程
-
-底座修改包括：
-
-- 路由
-- 注册表
-- runtime
-- Pydantic AI 执行层
-- 工具授权
-- 配置
-- 企业微信入口
-
-底座修改必须：
-
-1. 先写测试。
-2. 不改变旧功能入口。
-3. 不把业务规则写进底座。
-4. 不放宽安全边界。
-5. 更新 `docs/development/architecture.md` 或 `docs/agent-platform/README.md`。
-
-## 接企业微信的标准流程
-
-接企业微信前，必须先保证本地 demo 可用：
+禁止直接推送。统一使用：
 
 ```bash
-uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
+uv run --locked python scripts/project_docs.py push \
+  --summary "完成了什么功能" \
+  --impact "实际改变了什么能力" \
+  --verification "做了哪些关键验证" \
+  --next-step "当前边界或下一步"
 ```
 
-企业微信统一入口应放在：
-
-```text
-app/platform/gateway/
-```
-
-它应该调用：
-
-```text
-route_message
-SkillRegistry
-PlatformRuntime
-build_builtin_tools
-```
-
-不要把业务规则写进企业微信入口。
-
-当前已存在可测试核心：
-
-```text
-app/platform/gateway/wecom.py
-tests/test_platform_wecom_gateway.py
-```
-
-当前直报 Bot 已经通过 `app/writing/bot.py` 接入真实 AiBotSDK 并调用 `PlatformApp`。后续接更多企业微信入口时，应只新增 SDK 适配代码，把 SDK 消息转成平台可处理的标准输入，不要在 SDK 回调里写路由、写作、审核等业务逻辑。
-
-新底座主入口是：
-
-```text
-app/platform/app.py
-PlatformApp.handle_text_message(...)
-```
-
-真实企业微信文本消息应走：
-
-```text
-app/platform/gateway/wecom.py
-handle_text_frame_with_app(frame, app)
-```
-
-## 常用命令
-
-平台测试：
+受管推送成功后，记录写入 `M-Agent-Files/runtime/development-logs/YYYY-MM.md`，根目录 `STATUS-REPORT.md` 只更新索引。推送后运行：
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_data_paths.py tests/test_platform_pydantic_runtime.py tests/test_direct_report_workflow.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_writing_platform_bot.py tests/test_writing_portal.py -v
+uv run --locked python scripts/project_docs.py check-sync
 ```
 
-底座配置检查：
-
-```bash
-uv run --locked python -m app.platform.cli --check-config
-```
-
-旧审核 Bot 存档测试：
-
-```bash
-uv run --locked python tests/test_review_bot.py
-```
-
-真实本地 demo：
-
-```bash
-uv run --locked python -m app.platform.demo "帮我根据这个链接写直报：https://..."
-```
-
-真实 demo 需要：
-
-- `.env` 中有 `MODEL_NAME`
-- `.env` 中有 `MODEL_BASE_URL`
-- `.env` 中有 `MODEL_API_KEY`
-- 网络可访问网页和模型服务
-
-旧的 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` 仍作为兼容兜底。新配置优先使用 `MODEL_*`。
-
-## 交付前检查
-
-每次完成前至少检查：
-
-1. 是否改了不该改的旧功能。
-2. 是否新增/修改了测试。
-3. 是否跑过相关测试。
-4. 是否更新了文档。
-5. 是否没有输出或提交密钥。
-6. 是否运行了 `uv run --locked python scripts/project_docs.py check`。
-7. 是否确认 `STATUS-REPORT.md`、`config/platform-policy.yaml`、真实用户材料和本机路径没有进入暂存区。
-8. 是否已按逻辑创建提交，并使用 `uv run --locked python scripts/project_docs.py push --summary "完成了什么功能" --impact "实际改变了什么能力" --next-step "当前边界或下一步"` 完成受管推送和开发日志记录。
-9. 是否已在本机 `STATUS-REPORT.md` 自动生成本次“Git 推送”记录，且 `uv run --locked python scripts/project_docs.py check-sync` 显示本地与远端同步。
-
-首次克隆后运行：
-
-```bash
-uv run --locked python scripts/project_docs.py install-hooks
-```
-
-pre-commit hook 会读取暂存区版本，检查 TODO 编号和状态、本机文件/路径，并按模块要求代码、依赖、hooks、配置同步对应核心文档；无关计划文档不能充当核心文档。post-commit hook 会把本地提交摘要写入 `STATUS-REPORT.md` 并提醒未推送提交；pre-push hook 会再次检查文档并拒绝直接 `git push`。受管推送成功后再追加独立的“Git 推送”记录。行为已变化但核心文档未同步，或本地提交尚未推送且没有说明时，不允许交付。
-
-## 推荐给 AI 的提示词
-
-新增能力：
-
-```text
-请按 M-Agent 新架构新增一个 skill。
-先阅读 AGENTS.md、docs/development/README.md、docs/development/TODO.md、docs/capabilities/README.md。
-遵守底座区/功能区边界，测试先行，不要改旧 app/review 和 app/writing。
-```
-
-修改底座：
-
-```text
-请修改 M-Agent 底座。
-先阅读 AGENTS.md、docs/development/architecture.md、docs/development/TODO.md、docs/agent-platform/README.md。
-测试先行，保留 ToolGateway 安全边界，改完跑平台测试。
-```
+只有远端同步、月度日志写入和关键验证都完成后，才能表述为已交付。

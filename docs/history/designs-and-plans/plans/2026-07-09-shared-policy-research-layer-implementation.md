@@ -738,7 +738,7 @@ git commit -m "feat: migrate brief skills to shared policy research"
 ### Task 8: 更新文档并完成回归
 
 **Files:**
-- Modify: `docs/development/policy-knowledge-base.md`
+- Modify: `docs/knowledge/policy.md`
 - Modify: `docs/development/architecture.md`
 - Modify: `docs/agent-platform/README.md`
 - Modify: `docs/capabilities/README.md`
@@ -779,6 +779,6 @@ Expected: PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/development/policy-knowledge-base.md docs/development/architecture.md docs/agent-platform/README.md docs/capabilities/README.md docs/development/README.md docs/development/TODO.md
+git add docs/knowledge/policy.md docs/development/architecture.md docs/agent-platform/README.md docs/capabilities/README.md docs/development/README.md docs/development/TODO.md
 git commit -m "docs: document shared policy research layer"
 ```
