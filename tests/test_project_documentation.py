@@ -5,6 +5,8 @@ from pathlib import Path
 import stat
 
 from scripts.project_docs import (
+    GitWorktree,
+    branch_commit_policy_errors,
     build_sync_status_message,
     classify_changed_areas,
     documentation_sync_errors,
@@ -13,11 +15,13 @@ from scripts.project_docs import (
     is_core_document,
     migrate_status_report,
     monthly_report_path,
+    parse_git_worktrees,
     parse_sync_counts,
     record_push_status,
     requires_core_document_change,
     root_layout_errors,
     status_report_directory,
+    task_start_errors,
     validate_todo_document,
     write_status_index,
 )
@@ -175,6 +179,63 @@ def test_git_hooks_remind_after_commit_and_validate_before_push():
     assert "uv run --locked python" in pre_push_text
     assert "project_docs.py check" in pre_push_text
     assert "M_AGENT_MANAGED_PUSH" in pre_push_text
+
+
+def test_direct_commits_on_main_are_rejected_but_task_branch_commits_are_allowed():
+    assert branch_commit_policy_errors("main", ("app/platform/runtime.py",)) == [
+        "main 只接受任务分支快进合并，不允许直接提交；请先运行 start-task"
+    ]
+    assert branch_commit_policy_errors(
+        "codex/runtime-guard", ("app/platform/runtime.py",)
+    ) == []
+    assert branch_commit_policy_errors("claude/review-fix", ("app/review/main.py",)) == []
+    assert branch_commit_policy_errors("feature/unmanaged", ("app/review/main.py",)) == [
+        "开发分支命名必须使用 codex/、claude/ 或 hotfix/ 前缀"
+    ]
+    assert branch_commit_policy_errors("main", ()) == []
+
+
+def test_task_start_limits_parallel_work_and_rejects_duplicate_branch():
+    active = (
+        GitWorktree(path=Path("/tmp/task-a"), branch="codex/task-a"),
+        GitWorktree(path=Path("/tmp/task-b"), branch="claude/task-b"),
+    )
+
+    assert task_start_errors("feature/task-c", ()) == [
+        "开发分支命名必须使用 codex/、claude/ 或 hotfix/ 前缀"
+    ]
+    assert task_start_errors("codex/task-a", active) == [
+        "任务分支已存在：codex/task-a",
+        "当前已有 2 个活跃任务工作区，达到上限 2；请先完成或清理旧任务",
+    ]
+    assert task_start_errors("codex/task-c", active) == [
+        "当前已有 2 个活跃任务工作区，达到上限 2；请先完成或清理旧任务"
+    ]
+
+
+def test_git_worktree_parser_keeps_main_and_task_branch_identity():
+    parsed = parse_git_worktrees(
+        "\n".join(
+            [
+                "worktree /repo/M-Agent",
+                "HEAD abc123",
+                "branch refs/heads/main",
+                "",
+                "worktree /repo/M-Agent/.worktrees/codex-runtime",
+                "HEAD def456",
+                "branch refs/heads/codex/runtime",
+                "",
+            ]
+        )
+    )
+
+    assert parsed == (
+        GitWorktree(path=Path("/repo/M-Agent"), branch="main"),
+        GitWorktree(
+            path=Path("/repo/M-Agent/.worktrees/codex-runtime"),
+            branch="codex/runtime",
+        ),
+    )
 
 
 def test_push_record_is_a_capability_focused_monthly_log(tmp_path: Path):

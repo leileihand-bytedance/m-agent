@@ -31,6 +31,17 @@ uv 管理的 CPython 3.13.14
 
 这套环境与终端默认的 pyenv、Homebrew Python 和 macOS Python 隔离。`.env` 仍只保存模型和 Bot 配置，与存放 Python 依赖的 `.venv` 无关。Pydantic AI 的 Anthropic 和 OpenAI 兼容通道都已作为正式依赖声明，避免依赖全局环境中碰巧存在的包。
 
+### 代码与运行环境隔离
+
+`main` 主工作区是唯一生产运行目录；开发使用 `.worktrees/` 下的短期任务分支，多个任务共用同一项目 `.venv`，但不共享 `.env` 和运行数据。`app/platform/runtime_environment.py` 在所有企业微信 Bot 连接前统一执行以下硬校验：
+
+- `production` 只允许从 `main` 启动，并使用生产 Bot 凭据和 `M_AGENT_DATA_DIR`。
+- `test` 只读取对应的 `M_AGENT_TEST_*_BOT_ID/SECRET`，不回退生产凭据。
+- 测试模式必须显式设置与生产目录不同的 `M_AGENT_TEST_DATA_DIR`。
+- 测试任务、会话、队列、日志、用户名表、知识库和运维状态的实际路径都必须位于测试数据根目录。
+
+这层校验位于入口启动和配置层，不依赖 prompt，也不会因为某个 Skill 写错而绕过。离线自动化测试仍使用临时目录和模拟对象，不需要真实 Bot。
+
 ## 架构总览
 
 ```text
@@ -70,6 +81,7 @@ Pydantic AI Agent
 - `app/platform/attachment_delivery.py`：公共附件交付，统一任务目录校验、串行上传、动态超时、完整重试、主动/被动媒体发送、交付状态、运维事件和“处理编号”兜底。
 - `app/platform/documents/enrichment.py`：扫描 PDF 按需 OCR 以及 PDF/PPTX 逐页渲染；外部文档工具使用绝对命令、隔离环境和资源限制，失败时保留文本解析结果并记录结构化告警。
 - `app/platform/cli.py`：新底座 CLI，可做配置检查和本地消息测试。
+- `app/platform/runtime_environment.py`：生产/测试运行模式、Bot 凭据选择、Git 分支和数据目录边界的公共启动守卫。
 - `app/platform/app.py`：平台应用服务，把路由、权限、任务记录、runtime 串起来。
 - `app/writing/bot.py`：当前写作 Bot 的真实企业微信入口适配层，已经调用 `PlatformApp`。
 - `app/rewrite_bot/bot.py`：独立材料润色 Bot 的轻量企业微信入口；从注册表层只加载 `rewrite`，只接收直接粘贴文字，并使用独立任务和会话目录，不复制润色业务规则。

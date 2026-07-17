@@ -80,6 +80,8 @@ SEARCH_API_KEY
 SEARCH_API_BASE_URL
 ```
 
+生产入口还使用 `M_AGENT_RUNTIME_ENV=production`，并且只能从 `main` 启动。任务分支需要真实企业微信联调时，必须改为 `M_AGENT_RUNTIME_ENV=test`，配置 `M_AGENT_TEST_WRITING_BOT_ID`、`M_AGENT_TEST_WRITING_BOT_SECRET` 和独立 `M_AGENT_TEST_DATA_DIR`；测试模式不会回退到 `WRITING_BOT_*`。
+
 `M_AGENT_DATA_DIR` 默认指向项目同级的桌面 `M-Agent-Files/`。用户上传、待组装文件、系统生成、知识库、会话和日志都保存在该目录，`app/writing/` 不得自行新增其他持久化目录。`M_AGENT_INTAKE_DIR` 仅用于明确覆盖待组装目录，正常部署不需要单独配置。
 
 如果后续需要重新启用跨设备素材入口：
@@ -106,5 +108,6 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 
 ```bash
 uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py -v
+uv run --locked pytest tests/test_platform_runtime_environment.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

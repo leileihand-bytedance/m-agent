@@ -9,6 +9,12 @@ from app.platform.gateway.wecom import extract_text_message, format_text_reply
 from app.platform.intake import IntakeAction
 from app.platform.ops.events import OpsEventLogger
 from app.platform.ops.heartbeat import write_heartbeat
+from app.platform.config import ROOT
+from app.platform.runtime_environment import (
+    RuntimeEnvironment,
+    RuntimeEnvironmentError,
+    validate_bot_startup,
+)
 from app.rewrite_bot.config import RewriteBotConfig, load_config, mask_value
 from app.rewrite_bot.intake import RewriteIntakeStore
 
@@ -245,7 +251,32 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="材料润色 Bot")
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
-    config = load_config()
+    try:
+        config = load_config()
+        platform = config.platform_config
+        validate_bot_startup(
+            RuntimeEnvironment(
+                mode=config.runtime_mode,
+                data_root=config.data_root or config.intake_dir.parent,
+                values={},
+            ),
+            data_paths=(
+                platform.jobs_dir,
+                platform.policy_db_path,
+                platform.bank_db_path,
+                platform.conversation_dir,
+                platform.chat_log_dir,
+                platform.user_registry_path,
+                platform.task_queue_db_path,
+                config.intake_dir,
+                config.ops_events_dir,
+                config.heartbeat_dir,
+            ),
+            project_root=ROOT,
+        )
+    except RuntimeEnvironmentError as exc:
+        print(f"错误：{exc}")
+        return
 
     if not config.bot_id or not config.bot_secret:
         print("错误：缺少 M_AGENT_REWRITE_BOT_ID 或 M_AGENT_REWRITE_BOT_SECRET 配置")
@@ -262,6 +293,8 @@ def main(argv: list[str] | None = None) -> None:
             print("错误：rewrite Skill 未启用或入口隔离配置无效")
             return
         print("配置检查通过。")
+        print(f"运行环境: {config.runtime_mode}")
+        print(f"数据根目录: {config.data_root}")
         print(f"Bot ID: {mask_value(config.bot_id)}")
         print("允许的 Skill: rewrite")
         print(f"任务目录: {config.platform_config.jobs_dir}")

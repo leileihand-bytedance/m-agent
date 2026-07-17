@@ -9,6 +9,7 @@ import subprocess
 
 from app.platform.config import normalize_direct_report_critic_mode, parse_bool
 from app.platform.data_paths import DataPaths, configured_path
+from app.platform.runtime_environment import bot_credentials, prepare_runtime_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_PATH = ROOT / ".env"
@@ -49,6 +50,8 @@ class WritingBotConfig:
     task_lease_seconds: int = 120
     search_api_key: str = ""
     search_api_base_url: str = ""
+    runtime_mode: str = "production"
+    data_root: Path | None = None
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -132,7 +135,13 @@ def _default_portal_base_url(*, host: str, port: int) -> str:
 
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
-    values = parse_env_file(env_path)
+    runtime = prepare_runtime_environment(parse_env_file(env_path), project_root=ROOT)
+    values = runtime.values
+    bot_id, bot_secret = bot_credentials(
+        runtime,
+        production_keys=("WRITING_BOT_ID", "WRITING_BOT_SECRET"),
+        test_keys=("M_AGENT_TEST_WRITING_BOT_ID", "M_AGENT_TEST_WRITING_BOT_SECRET"),
+    )
     data_paths = DataPaths.from_values(values, project_root=ROOT)
     skills_dir = Path(values.get("M_AGENT_SKILLS_DIR", str(ROOT / "skills")) or str(ROOT / "skills"))
     if not skills_dir.is_absolute():
@@ -195,8 +204,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
     )
 
     return WritingBotConfig(
-        wecom_bot_id=values.get("WRITING_BOT_ID", ""),
-        wecom_bot_secret=values.get("WRITING_BOT_SECRET", ""),
+        wecom_bot_id=bot_id,
+        wecom_bot_secret=bot_secret,
         model_name=values.get("MODEL_NAME", "MiniMax-M2.7") or "MiniMax-M2.7",
         anthropic_api_key=values.get("MODEL_API_KEY") or values.get("ANTHROPIC_API_KEY", ""),
         anthropic_base_url=values.get("MODEL_BASE_URL")
@@ -252,4 +261,6 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         ),
         search_api_key=search_api_key,
         search_api_base_url=search_api_base_url,
+        runtime_mode=runtime.mode,
+        data_root=runtime.data_root,
     )

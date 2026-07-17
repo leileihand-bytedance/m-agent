@@ -31,6 +31,8 @@ M_AGENT_REWRITE_JOBS_DIR             # 可选
 M_AGENT_REWRITE_CONVERSATION_DIR     # 可选
 ```
 
+生产运行只允许从 `main` 启动。任务分支联调必须使用 `M_AGENT_RUNTIME_ENV=test`、`M_AGENT_TEST_REWRITE_BOT_ID/SECRET` 和独立 `M_AGENT_TEST_DATA_DIR`；测试模式不会使用生产润色 Bot 或生产会话目录。
+
 配置检查：
 
 ```bash

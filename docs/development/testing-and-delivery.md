@@ -42,13 +42,34 @@ uv run --locked python -c "from pydantic_ai.models.openai import OpenAIChatModel
 
 活跃开发不能长期堆积在工作区，也不能在本地提交后就宣称交付完成：
 
-1. 每个可测试的逻辑节点及时提交。
-2. 禁止直接运行 `git push`，统一执行 `uv run --locked python scripts/project_docs.py push --summary "完成了什么功能" --impact "实际改变了什么能力" --verification "做了哪些关键验证" --next-step "当前边界或下一步"`。命令会先获取远端并阻止分叉。
-3. 受管推送成功后，自动向当月开发日志写入一条记录，并刷新根目录索引。记录主体是完成功能、能力变化、关键验证和下一步；Git 哈希只用于追溯。失败时不写成功记录。
-4. 推送后再次运行 `uv run --locked python scripts/project_docs.py check-sync`，输出必须为“本地分支与远端已同步”；禁止强推覆盖远端历史。
-5. 网络、凭据或分叉阻塞时，在交付说明中明确写出，不得省略。
+1. 从干净且已同步的 `main` 使用 `start-task` 创建短期任务工作区；`main` 不直接提交。
+2. 每个可测试的逻辑节点在 `codex/`、`claude/` 或 `hotfix/` 任务分支及时提交；同时最多 2 个活跃任务。
+3. 完成后从 `main` 使用 `finish-task`。命令只做快进合并，随后受管推送 `main`；任务分支不得推送到远端。
+4. 受管推送成功后，自动向当月开发日志写入一条记录，并刷新根目录索引。失败时不写成功记录，也不清理任务工作区。
+5. 推送后再次运行 `uv run --locked python scripts/project_docs.py check-sync`，输出必须为“本地分支与远端已同步”；禁止强推覆盖远端历史。
+6. 网络、凭据、冲突或分叉阻塞时，在交付说明中明确写出，不得省略。
 
 post-commit hook 只在存在未推送提交时告警，不再写开发日志；pre-push hook 会执行核心文档检查，并拒绝绕过受管命令直接推送。钩子不会自动强推或在后台静默访问网络。
+
+## 生产与测试 Bot 分离
+
+测试分三层，不得混用：
+
+| 层级 | 运行位置 | 企业微信和数据 |
+|---|---|---|
+| 离线自动化 | 任务分支 | 模拟对象和临时目录，不连接真实 Bot |
+| 测试联调 | 任务分支 | 专用测试 Bot + `M_AGENT_TEST_DATA_DIR` |
+| 生产验收 | `main` | 生产 Bot + `M_AGENT_DATA_DIR`，只在合并后执行 |
+
+任务分支禁止使用生产 Bot。测试联调配置必须包含 `M_AGENT_RUNTIME_ENV=test`、对应入口的 `M_AGENT_TEST_*_BOT_ID/SECRET` 和独立 `M_AGENT_TEST_DATA_DIR`。缺少任一项、测试目录与生产目录相同、或任何任务/会话/队列/日志路径越过测试根目录时，Bot 在连接企业微信前停止。测试模式绝不回退生产凭据。
+
+生产配置默认 `M_AGENT_RUNTIME_ENV=production`。生产 Bot 若从非 `main` 分支启动，同样在连接前停止。`--check-config` 也执行这套校验，用它确认当前分支、运行环境和数据根目录无误。
+
+修改运行环境守卫、Bot 配置或数据路径时，至少运行：
+
+```bash
+uv run --locked pytest tests/test_platform_runtime_environment.py tests/test_platform_data_paths.py tests/test_writing_platform_bot.py tests/test_review_bot.py tests/test_rewrite_bot.py tests/test_ops_config.py -v
+```
 
 ## 测试分层
 

@@ -4,3 +4,9 @@ if [ "${M_AGENT_MANAGED_PUSH:-}" != "1" ]; then
   echo "请使用 uv run --locked python scripts/project_docs.py push --summary \"本次改动说明\"，确保推送成功后同步记录 STATUS-REPORT.md。" >&2
   exit 1
 fi
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" != "refs/heads/main" ]; then
+    echo "任务分支不得推送到远端；只能通过 finish-task 合并并推送 main。" >&2
+    exit 1
+  fi
+done

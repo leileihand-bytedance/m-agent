@@ -11,6 +11,7 @@ from app.platform.config import (
     parse_env_file,
 )
 from app.platform.data_paths import DataPaths, configured_path
+from app.platform.runtime_environment import bot_credentials, prepare_runtime_environment
 
 
 @dataclass(frozen=True)
@@ -21,10 +22,18 @@ class RewriteBotConfig:
     intake_dir: Path
     ops_events_dir: Path
     heartbeat_dir: Path
+    runtime_mode: str = "production"
+    data_root: Path | None = None
 
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> RewriteBotConfig:
-    values = parse_env_file(env_path)
+    runtime = prepare_runtime_environment(parse_env_file(env_path), project_root=ROOT)
+    values = runtime.values
+    bot_id, bot_secret = bot_credentials(
+        runtime,
+        production_keys=("M_AGENT_REWRITE_BOT_ID", "M_AGENT_REWRITE_BOT_SECRET"),
+        test_keys=("M_AGENT_TEST_REWRITE_BOT_ID", "M_AGENT_TEST_REWRITE_BOT_SECRET"),
+    )
     data_paths = DataPaths.from_values(values, project_root=ROOT)
     platform_config = load_platform_config(env_path)
     jobs_dir = configured_path(
@@ -52,8 +61,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> RewriteBotConfig:
         project_root=ROOT,
     )
     return RewriteBotConfig(
-        bot_id=values.get("M_AGENT_REWRITE_BOT_ID", ""),
-        bot_secret=values.get("M_AGENT_REWRITE_BOT_SECRET", ""),
+        bot_id=bot_id,
+        bot_secret=bot_secret,
         platform_config=replace(
             platform_config,
             jobs_dir=jobs_dir,
@@ -63,6 +72,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> RewriteBotConfig:
         intake_dir=data_paths.intake / "rewrite-bot",
         ops_events_dir=ops_events_dir,
         heartbeat_dir=heartbeat_dir,
+        runtime_mode=runtime.mode,
+        data_root=runtime.data_root,
     )
 
 

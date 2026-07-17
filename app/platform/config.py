@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.platform.data_paths import DataPaths, configured_path
+from app.platform.runtime_environment import prepare_runtime_environment
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +31,8 @@ class PlatformConfig:
     skill_allowlist: tuple[str, ...] | None = None
     search_api_key: str = ""
     search_api_base_url: str = ""
+    runtime_mode: str = "production"
+    data_root: Path | None = None
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -64,7 +67,8 @@ def parse_bool(value: str | None, *, default: bool) -> bool:
 
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
-    values = parse_env_file(env_path)
+    runtime = prepare_runtime_environment(parse_env_file(env_path), project_root=ROOT)
+    values = runtime.values
     data_paths = DataPaths.from_values(values, project_root=ROOT)
     skills_dir = Path(values.get("M_AGENT_SKILLS_DIR", str(ROOT / "skills")) or str(ROOT / "skills"))
     if not skills_dir.is_absolute():
@@ -162,4 +166,6 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
         task_queue_db_path=task_queue_db_path,
         search_api_key=search_api_key,
         search_api_base_url=search_api_base_url,
+        runtime_mode=runtime.mode,
+        data_root=runtime.data_root,
     )

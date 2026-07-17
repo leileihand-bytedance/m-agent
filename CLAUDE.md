@@ -24,7 +24,9 @@ Claude Code 在本项目中必须先阅读并遵守根目录 `AGENTS.md`。`AGEN
 - 自动化测试长期保留，一次性调试脚本完成后删除。
 - 行为变化必须同步真正受影响的权威文档；README 不记录开发流水，TODO 不保留已完成事项。
 - 根目录 `STATUS-REPORT.md` 只做本机索引，完整开发过程按月写入 `M-Agent-Files/runtime/development-logs/`。
+- 不在 `main` 直接开发或提交；先运行 `scripts/project_docs.py start-task claude/<task-name>`，最多同时保留 2 个任务工作区。
+- 开发分支不得连接生产 Bot。真实企业微信联调只能使用 `M_AGENT_RUNTIME_ENV=test`、专用测试 Bot 和独立测试数据目录；生产验收必须先合并回 `main`。
 - 提交前运行 `uv run --locked python scripts/project_docs.py check --staged`。
-- 禁止直接 `git push`；使用 `scripts/project_docs.py push`，并填写功能、能力变化、关键验证和下一步。
+- 禁止推送任务分支；完成后从 `main` 使用 `scripts/project_docs.py finish-task` 快进合并和受管推送。
 
 文档职责、写法和归档规则统一见 `docs/README.md`；测试和交付命令统一见 `docs/development/testing-and-delivery.md`。

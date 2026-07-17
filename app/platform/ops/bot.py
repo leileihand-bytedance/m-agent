@@ -7,11 +7,17 @@ from datetime import date, datetime
 import json
 from pathlib import Path
 
+from app.platform.config import ROOT
 from app.platform.ops.config import OpsBotConfig, load_config, mask_value
 from app.platform.ops.events import OpsEvent, read_ops_events
 from app.platform.ops.heartbeat import find_stale_heartbeats, write_heartbeat
 from app.platform.ops.notifier import OpsNotifier
 from app.platform.ops.report import build_daily_report, previous_workday
+from app.platform.runtime_environment import (
+    RuntimeEnvironment,
+    RuntimeEnvironmentError,
+    validate_bot_startup,
+)
 
 
 @dataclass
@@ -234,10 +240,30 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="M-Agent 运维 Bot")
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
-    config = load_config()
+    try:
+        config = load_config()
+        validate_bot_startup(
+            RuntimeEnvironment(
+                mode=config.runtime_mode,
+                data_root=config.data_root or config.ops_events_dir.parent,
+                values={},
+            ),
+            data_paths=(
+                config.ops_events_dir,
+                config.chat_log_dir,
+                config.state_path,
+                config.heartbeat_dir,
+            ),
+            project_root=ROOT,
+        )
+    except RuntimeEnvironmentError as exc:
+        print(f"错误：{exc}")
+        return
 
     if args.check_config:
         print("运维 Bot 配置检查：")
+        print(f"运行环境: {config.runtime_mode}")
+        print(f"数据根目录: {config.data_root}")
         print(f"Bot ID: {mask_value(config.bot_id)}")
         print(f"接收人: {config.admin_user_id or '未配置'}")
         print(f"事件目录: {config.ops_events_dir}")

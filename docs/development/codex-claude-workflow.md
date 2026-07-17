@@ -7,10 +7,47 @@
 1. 阅读 `AGENTS.md`。
 2. 阅读 `docs/README.md`，确认哪份文档是本次变更的权威来源。
 3. 阅读整体架构、当前 TODO 和相关模块/Skill 文档。
-4. 检查 Git 状态，识别其他工具或用户正在进行的改动。
-5. 在计划中同时列出实现、测试和文档影响。
+4. 在 `main` 运行 `task-status`，识别其他工具正在进行的任务。
+5. 从已同步且干净的 `main` 创建任务工作区；不要直接在 `main` 修改文件。
+6. 在计划中同时列出实现、测试和文档影响。
 
 不要先修改代码再临时决定文档放在哪里。
+
+## 任务分支生命周期
+
+本项目只保留一个长期分支 `main`。Codex、Claude Code 和紧急修复使用短期任务分支，不建立长期 `develop`，同时最多 2 个任务工作区。
+
+开始任务：
+
+```bash
+uv run --locked python scripts/project_docs.py task-status
+uv run --locked python scripts/project_docs.py start-task codex/<task-name>
+# Claude Code 使用 claude/<task-name>；紧急修复使用 hotfix/<task-name>
+```
+
+命令会确认 `main` 干净且与 `origin/main` 同步，在 `.worktrees/` 创建独立目录，并复用同一项目 `.venv`。它不会复制、链接或读取生产 `.env`。
+
+开发和提交都在新工作区进行。任务完成后回到 `main` 主工作区执行：
+
+```bash
+uv run --locked python scripts/project_docs.py finish-task codex/<task-name> \
+  --summary "完成了什么功能" \
+  --impact "实际改变了什么能力" \
+  --verification "做了哪些关键验证" \
+  --next-step "当前边界或下一步"
+```
+
+`finish-task` 只接受干净任务工作区和包含最新 `main` 的分支；它执行文档检查、快进合并、受管推送和月度日志记录。远端成功后才删除任务工作区和本地分支。发生冲突、远端分叉或推送失败时停止自动清理，保留现场供人工处理。
+
+任务分支不得推送到远端。`main` 的直接提交、非标准分支提交和非 `main` 远端推送均由 Git hook 拒绝。
+
+## Bot 测试边界
+
+- 离线单元测试、模拟企业微信和本地固定样本可在任务分支直接运行。
+- 任务分支需要真实企业微信联调时，必须使用 `M_AGENT_RUNTIME_ENV=test`、专用测试 Bot 凭据和独立 `M_AGENT_TEST_DATA_DIR`。
+- 任务工作区不得复制生产 `.env`；测试配置只保存在该工作区本机 `.env`，不进入 Git。
+- 测试模式不回退生产凭据，运行路径越过测试数据根目录会在连接企业微信前失败。
+- 生产 Bot 只能从 `main` 启动。任务分支的功能只有合并后，才能进入生产 Bot 小范围验收。
 
 ## 标准循环
 
@@ -126,7 +163,7 @@ uv run --locked python scripts/project_docs.py check
 uv run --locked python scripts/project_docs.py check --staged
 ```
 
-禁止直接推送。统一使用：
+日常任务禁止直接推送，统一使用前述 `finish-task`。只有代码已经安全合并到 `main`、但上次推送因网络等原因中断的恢复场景，才直接使用：
 
 ```bash
 uv run --locked python scripts/project_docs.py push \

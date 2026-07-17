@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
@@ -90,6 +91,69 @@ CHANGE_AREA_RULES = (
     ("测试", lambda path: path.startswith("tests/")),
     ("工程化", lambda path: path.startswith(("scripts/", ".githooks/"))),
 )
+TASK_BRANCH_PREFIXES = ("codex/", "claude/", "hotfix/")
+MAX_ACTIVE_TASK_WORKTREES = 2
+
+
+@dataclass(frozen=True)
+class GitWorktree:
+    path: Path
+    branch: str
+
+
+def branch_commit_policy_errors(branch: str, staged_paths: Iterable[str]) -> list[str]:
+    """提交只允许发生在受管任务分支，main 只接受快进合并。"""
+    if not tuple(staged_paths):
+        return []
+    if branch == "main":
+        return ["main 只接受任务分支快进合并，不允许直接提交；请先运行 start-task"]
+    if not branch.startswith(TASK_BRANCH_PREFIXES):
+        return ["开发分支命名必须使用 codex/、claude/ 或 hotfix/ 前缀"]
+    return []
+
+
+def task_start_errors(
+    branch: str,
+    worktrees: Iterable[GitWorktree],
+    *,
+    max_active: int = MAX_ACTIVE_TASK_WORKTREES,
+) -> list[str]:
+    active = tuple(
+        item for item in worktrees if item.branch.startswith(TASK_BRANCH_PREFIXES)
+    )
+    errors: list[str] = []
+    if not branch.startswith(TASK_BRANCH_PREFIXES):
+        errors.append("开发分支命名必须使用 codex/、claude/ 或 hotfix/ 前缀")
+    elif branch.endswith("/") or " " in branch or ".." in branch:
+        errors.append(f"任务分支名称无效：{branch}")
+    if any(item.branch == branch for item in active):
+        errors.append(f"任务分支已存在：{branch}")
+    if len(active) >= max_active:
+        errors.append(
+            f"当前已有 {len(active)} 个活跃任务工作区，达到上限 {max_active}；"
+            "请先完成或清理旧任务"
+        )
+    return errors
+
+
+def parse_git_worktrees(output: str) -> tuple[GitWorktree, ...]:
+    worktrees: list[GitWorktree] = []
+    current_path: Path | None = None
+    current_branch = ""
+    for line in (*output.splitlines(), ""):
+        if line.startswith("worktree "):
+            current_path = Path(line.removeprefix("worktree ").strip())
+        elif line.startswith("branch refs/heads/"):
+            current_branch = line.removeprefix("branch refs/heads/").strip()
+        elif not line.strip() and current_path is not None:
+            worktrees.append(GitWorktree(path=current_path, branch=current_branch))
+            current_path = None
+            current_branch = ""
+    return tuple(worktrees)
+
+
+def git_worktrees() -> tuple[GitWorktree, ...]:
+    return parse_git_worktrees(_run_git("worktree", "list", "--porcelain").stdout)
 
 
 def validate_todo_document(text: str) -> list[str]:
@@ -558,6 +622,8 @@ def push_and_record(
     verification: str,
     next_step: str,
 ) -> None:
+    if branch != "main":
+        raise RuntimeError("任务分支不得推送到远端；请使用 finish-task 快进合并到 main 后推送")
     if not summary.strip() or not impact.strip() or not verification.strip() or not next_step.strip():
         raise RuntimeError("开发日志必须说明完成功能、能力变化、关键验证和当前边界/下一步")
     if _run_git("status", "--porcelain").stdout.strip():
@@ -663,6 +729,8 @@ def check_repository(*, staged: bool = False) -> list[str]:
     if staged:
         changes = _staged_changes()
         paths = [path for _, path in changes]
+        current_branch = _run_git("branch", "--show-current").stdout.strip()
+        errors.extend(branch_commit_policy_errors(current_branch, paths))
         for local_path in LOCAL_ONLY_PATHS:
             if any(path == local_path and status != "D" for status, path in changes):
                 errors.append(f"{local_path} 是本地文件，不允许暂存")
@@ -713,6 +781,134 @@ def install_hooks() -> None:
     _run_git("config", "core.hooksPath", ".githooks")
 
 
+def start_task(*, branch: str, remote: str = "origin") -> Path:
+    """从已同步的 main 创建短期任务分支和独立 worktree。"""
+    current_branch = _run_git("branch", "--show-current").stdout.strip()
+    if current_branch != "main":
+        raise RuntimeError("start-task 必须从 main 主工作区运行")
+    if _run_git("status", "--porcelain").stdout.strip():
+        raise RuntimeError("main 工作区存在未提交变更，不能创建任务")
+
+    errors = task_start_errors(branch, git_worktrees())
+    branch_exists = _run_git(
+        "show-ref", "--verify", f"refs/heads/{branch}", check=False
+    ).returncode == 0
+    if branch_exists and f"任务分支已存在：{branch}" not in errors:
+        errors.append(f"任务分支已存在：{branch}")
+    if errors:
+        raise RuntimeError("；".join(errors))
+
+    fetched = _run_git("fetch", remote, "main", check=False)
+    if fetched.returncode != 0:
+        raise RuntimeError(fetched.stderr.strip() or "无法获取远端 main")
+    local_hash = _run_git("rev-parse", "main").stdout.strip()
+    remote_hash = _run_git("rev-parse", f"{remote}/main").stdout.strip()
+    if local_hash != remote_hash:
+        raise RuntimeError("本地 main 与远端不同步，请先处理同步状态")
+
+    worktree_root = ROOT / ".worktrees"
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    target = worktree_root / branch.replace("/", "-")
+    if target.exists():
+        raise RuntimeError(f"任务工作区目录已存在：{target}")
+    created = _run_git("worktree", "add", "-b", branch, str(target), "main", check=False)
+    if created.returncode != 0:
+        raise RuntimeError(created.stderr.strip() or "创建任务工作区失败")
+
+    shared_venv = ROOT / ".venv"
+    task_venv = target / ".venv"
+    if shared_venv.exists() and not task_venv.exists():
+        task_venv.symlink_to(shared_venv, target_is_directory=True)
+    print(f"任务工作区已创建：{target}")
+    print("未复制生产 .env；如需连接企业微信，只能配置专用测试 Bot 和测试数据目录。")
+    return target
+
+
+def print_task_status() -> None:
+    tasks = tuple(
+        item for item in git_worktrees() if item.branch.startswith(TASK_BRANCH_PREFIXES)
+    )
+    if not tasks:
+        print("当前没有活跃任务工作区。")
+        return
+    print(f"活跃任务工作区：{len(tasks)}/{MAX_ACTIVE_TASK_WORKTREES}")
+    for item in tasks:
+        dirty = bool(
+            _run_git("-C", str(item.path), "status", "--porcelain").stdout.strip()
+        )
+        ahead_result = _run_git(
+            "rev-list", "--count", f"main..{item.branch}", check=False
+        )
+        ahead = ahead_result.stdout.strip() if ahead_result.returncode == 0 else "?"
+        state = "有未提交变更" if dirty else "工作区干净"
+        print(f"- {item.branch}：领先 main {ahead} 个提交，{state}，目录 {item.path}")
+
+
+def finish_task(
+    *,
+    branch: str,
+    remote: str,
+    summary: str,
+    impact: str,
+    verification: str,
+    next_step: str,
+) -> None:
+    """快进合并任务分支，受管推送 main，成功后清理任务工作区。"""
+    if not branch.startswith(TASK_BRANCH_PREFIXES):
+        raise RuntimeError("只能完成 codex/、claude/ 或 hotfix/ 任务分支")
+    current_branch = _run_git("branch", "--show-current").stdout.strip()
+    if current_branch != "main":
+        raise RuntimeError("finish-task 必须从 main 主工作区运行")
+    if _run_git("status", "--porcelain").stdout.strip():
+        raise RuntimeError("main 工作区存在未提交变更，不能合并任务")
+    task = next((item for item in git_worktrees() if item.branch == branch), None)
+    if task is None:
+        raise RuntimeError(f"找不到任务工作区：{branch}")
+    if _run_git("-C", str(task.path), "status", "--porcelain").stdout.strip():
+        raise RuntimeError(f"任务工作区仍有未提交变更：{task.path}")
+
+    checked = subprocess.run(
+        ("uv", "run", "--locked", "python", "scripts/project_docs.py", "check"),
+        cwd=task.path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if checked.returncode != 0:
+        detail = checked.stderr.strip() or checked.stdout.strip()
+        raise RuntimeError(f"任务分支文档检查失败：{detail}")
+
+    fetched = _run_git("fetch", remote, "main", check=False)
+    if fetched.returncode != 0:
+        raise RuntimeError(fetched.stderr.strip() or "无法获取远端 main")
+    if _run_git("rev-parse", "main").stdout.strip() != _run_git(
+        "rev-parse", f"{remote}/main"
+    ).stdout.strip():
+        raise RuntimeError("本地 main 与远端不同步，不能自动合并")
+    if _run_git("merge-base", "--is-ancestor", "main", branch, check=False).returncode != 0:
+        raise RuntimeError("任务分支没有包含最新 main，请先更新任务分支后再完成")
+
+    merged = _run_git("merge", "--ff-only", branch, check=False)
+    if merged.returncode != 0:
+        raise RuntimeError(merged.stderr.strip() or "任务分支无法快进合并")
+    push_and_record(
+        remote=remote,
+        branch="main",
+        summary=summary,
+        impact=impact,
+        verification=verification,
+        next_step=next_step,
+    )
+    removed = _run_git("worktree", "remove", str(task.path), check=False)
+    if removed.returncode != 0:
+        raise RuntimeError(
+            "main 已成功推送，但任务工作区清理失败："
+            + (removed.stderr.strip() or str(task.path))
+        )
+    _run_git("branch", "-d", branch)
+    print(f"任务 {branch} 已合并、推送并清理。")
+
+
 def _staged_changes() -> list[tuple[str, str]]:
     output = _run_git("diff", "--cached", "--name-status", "--diff-filter=ACMRD").stdout
     changes: list[tuple[str, str]] = []
@@ -757,6 +953,17 @@ def main(argv: list[str] | None = None) -> int:
     push_parser.add_argument("--impact", required=True, help="实际改变了什么能力或用户体验")
     push_parser.add_argument("--verification", required=True, help="完成了哪些关键验证")
     push_parser.add_argument("--next-step", required=True, help="当前边界、遗留问题或下一步")
+    start_task_parser = subparsers.add_parser("start-task", help="从 main 创建受管任务工作区")
+    start_task_parser.add_argument("branch", help="任务分支名，例如 codex/runtime-guard")
+    start_task_parser.add_argument("--remote", default="origin")
+    subparsers.add_parser("task-status", help="查看活跃任务工作区")
+    finish_task_parser = subparsers.add_parser("finish-task", help="快进合并并交付任务分支")
+    finish_task_parser.add_argument("branch")
+    finish_task_parser.add_argument("--remote", default="origin")
+    finish_task_parser.add_argument("--summary", required=True)
+    finish_task_parser.add_argument("--impact", required=True)
+    finish_task_parser.add_argument("--verification", required=True)
+    finish_task_parser.add_argument("--next-step", required=True)
     record_push_parser = subparsers.add_parser("record-push", help="补记一次已完成的推送")
     record_push_parser.add_argument("--remote", default="origin")
     record_push_parser.add_argument("--branch", default="main")
@@ -787,6 +994,30 @@ def main(argv: list[str] | None = None) -> int:
             push_and_record(
                 remote=args.remote,
                 branch=args.branch,
+                summary=args.summary,
+                impact=args.impact,
+                verification=args.verification,
+                next_step=args.next_step,
+            )
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "start-task":
+        try:
+            start_task(branch=args.branch, remote=args.remote)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "task-status":
+        print_task_status()
+        return 0
+    if args.command == "finish-task":
+        try:
+            finish_task(
+                branch=args.branch,
+                remote=args.remote,
                 summary=args.summary,
                 impact=args.impact,
                 verification=args.verification,

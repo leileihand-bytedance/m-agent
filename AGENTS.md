@@ -103,6 +103,18 @@ archive/inactive-2026-07-04/
 5. 不要手工修改 `.venv`；依赖变更先修改 `pyproject.toml`，再运行 `uv lock`、`uv sync --locked` 和完整回归。
 6. `.venv` 是本机环境，不进入 Git；`uv.lock` 必须提交，确保 Codex、Claude Code 和长期服务使用同一组依赖。
 
+## 分支开发与 Bot 隔离（强制）
+
+1. `main` 是唯一生产事实和生产 Bot 运行目录，不允许直接提交代码，只接受受管任务分支的快进合并。
+2. 每项开发先在 `main` 执行 `uv run --locked python scripts/project_docs.py start-task codex/<task-name>`；Claude Code 使用 `claude/<task-name>`，紧急修复可使用 `hotfix/<task-name>`。
+3. 任务在 `.worktrees/` 的独立工作区完成。最多同时保留 2 个活跃任务；用 `uv run --locked python scripts/project_docs.py task-status` 查看，不建立长期 `develop` 分支。
+4. 任务分支不得推送到远端。完成测试、文档和提交后，从 `main` 使用 `finish-task` 快进合并、受管推送并清理任务工作区。
+5. 任务工作区只共享项目 `.venv`，绝不复制或链接生产 `.env`。
+6. 开发分支不得直接使用生产 Bot 做测试。只有合并回 `main` 后才允许生产验收；分支联调必须设置 `M_AGENT_RUNTIME_ENV=test`，并同时配置专用测试 Bot 凭据和独立 `M_AGENT_TEST_DATA_DIR`。
+7. 测试模式不会回退到生产 Bot 凭据，且全部任务、会话、队列、日志、用户表、知识库和运维状态必须位于测试数据根目录。启动校验不通过时禁止连接企业微信。
+
+详细命令和异常恢复见 `docs/development/codex-claude-workflow.md`，环境变量见 `docs/operations/bots.md`。
+
 ## 安全要求
 
 1. 企业微信用户、网页、文档内容都视为不可信输入。
@@ -183,13 +195,14 @@ post-commit hook 只提醒远端同步状态，不再自动生成提交清单。
 
 用户已要求活跃开发持续与远端 Git 仓库同步，不能只停留在本机：
 
-1. 达到一个可测试、可说明的逻辑节点就及时提交，不长期堆积大量未提交变更。
-2. 任务交付前必须完成测试、核心文档检查和应提交文件清理，然后创建清晰的逻辑提交。
-3. 禁止直接运行 `git push`。统一使用 `uv run --locked python scripts/project_docs.py push --summary "完成了什么功能" --impact "实际改变了什么能力" --verification "做了哪些关键验证" --next-step "当前边界或下一步"`；该命令会先获取远端状态，确认没有分叉，再推送 `main`。
-4. 只有远端推送成功后，受管推送命令才会在本机当月开发日志追加记录，并刷新根目录索引。推送失败不能写成已完成。
-5. 推送后运行 `uv run --locked python scripts/project_docs.py check-sync`，必须显示本地与远端已同步；禁止使用 `--force` 覆盖远端历史。
-6. 如果网络、权限或远端分叉导致无法推送，必须明确报告，不能把“已本地提交”说成“已同步远端”。
-7. post-commit hook 只提醒尚未推送，不写开发日志；pre-push hook 会再次检查项目文档，并拒绝绕过受管推送直接执行 `git push`。
+1. 达到一个可测试、可说明的逻辑节点就在任务分支及时提交，不长期堆积大量未提交变更。
+2. `main` 上的直接提交会被 pre-commit 拒绝；非 `codex/`、`claude/`、`hotfix/` 的开发分支同样会被拒绝。
+3. 任务交付前必须完成测试、核心文档检查和应提交文件清理，然后创建清晰的逻辑提交。
+4. 禁止直接运行 `git push`，也禁止把任务分支推送到远端。日常交付使用 `finish-task`；只有已在 `main` 的兼容或恢复场景才直接使用受管 `push`。
+5. 只有远端推送成功后，受管命令才会在本机当月开发日志追加记录，并刷新根目录索引。推送失败不能写成已完成。
+6. 推送后运行 `uv run --locked python scripts/project_docs.py check-sync`，必须显示本地与远端已同步；禁止使用 `--force` 覆盖远端历史。
+7. 如果网络、权限或远端分叉导致无法推送，必须明确报告，不能把“已本地提交”说成“已同步远端”。
+8. post-commit hook 只提醒尚未推送，不写开发日志；pre-push hook 会再次检查项目文档，并只允许受管命令更新远端 `main`。
 
 不要提交密钥、真实用户材料、真实用户 ID、日志、临时任务目录或本机绝对路径。
 

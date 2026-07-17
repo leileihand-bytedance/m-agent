@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.platform.config import DEFAULT_ENV_PATH, ROOT, parse_env_file
 from app.platform.data_paths import DataPaths, configured_path
+from app.platform.runtime_environment import bot_credentials, prepare_runtime_environment
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,18 @@ class OpsBotConfig:
     daily_report_minute: int = 0
     poll_seconds: int = 10
     notification_cooldown: int = 300
+    runtime_mode: str = "production"
+    data_root: Path | None = None
 
 
 def load_config(env_path: Path = DEFAULT_ENV_PATH) -> OpsBotConfig:
-    values = parse_env_file(env_path)
+    runtime = prepare_runtime_environment(parse_env_file(env_path), project_root=ROOT)
+    values = runtime.values
+    bot_id, bot_secret = bot_credentials(
+        runtime,
+        production_keys=("M_AGENT_OPS_BOT_ID", "M_AGENT_OPS_BOT_SECRET"),
+        test_keys=("M_AGENT_TEST_OPS_BOT_ID", "M_AGENT_TEST_OPS_BOT_SECRET"),
+    )
     data_paths = DataPaths.from_values(values, project_root=ROOT)
     ops_events_dir = configured_path(
         values, "M_AGENT_OPS_EVENTS_DIR", data_paths.ops_events, project_root=ROOT
@@ -40,8 +49,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> OpsBotConfig:
         values, "M_AGENT_OPS_HEARTBEAT_DIR", data_paths.heartbeats, project_root=ROOT
     )
     return OpsBotConfig(
-        bot_id=values.get("M_AGENT_OPS_BOT_ID", ""),
-        bot_secret=values.get("M_AGENT_OPS_BOT_SECRET", ""),
+        bot_id=bot_id,
+        bot_secret=bot_secret,
         admin_user_id=values.get("M_AGENT_OPS_ADMIN_USER_ID", "").strip(),
         ops_events_dir=ops_events_dir,
         chat_log_dir=chat_log_dir,
@@ -53,6 +62,8 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> OpsBotConfig:
         daily_report_minute=_int_from_env(values.get("M_AGENT_OPS_DAILY_REPORT_MINUTE"), 0),
         poll_seconds=max(1, _int_from_env(values.get("M_AGENT_OPS_POLL_SECONDS"), 10)),
         notification_cooldown=_int_from_env(values.get("M_AGENT_OPS_NOTIFICATION_COOLDOWN"), 300),
+        runtime_mode=runtime.mode,
+        data_root=runtime.data_root,
     )
 
 

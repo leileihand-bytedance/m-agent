@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.platform.app import PlatformApp
 from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest, DeliveryResult
-from app.platform.config import PlatformConfig
+from app.platform.config import PlatformConfig, ROOT
 from app.platform.gateway.wecom import extract_message_id, format_text_reply
 from app.platform.intent import ConversationIntent
 from app.platform.models import PlatformResult, UploadedFile
@@ -20,6 +20,11 @@ from app.platform.task_execution import (
     PersistentTaskExecutor,
     TaskLifecycleObserver,
     TaskRepository,
+)
+from app.platform.runtime_environment import (
+    RuntimeEnvironment,
+    RuntimeEnvironmentError,
+    validate_bot_startup,
 )
 
 from .config import load_config
@@ -69,6 +74,8 @@ def build_platform_config(config) -> PlatformConfig:
         task_queue_db_path=config.task_queue_db_path,
         search_api_key=config.search_api_key,
         search_api_base_url=config.search_api_base_url,
+        runtime_mode=config.runtime_mode,
+        data_root=config.data_root,
     )
 
 
@@ -1161,7 +1168,31 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
 
-    config = load_config()
+    try:
+        config = load_config()
+        validate_bot_startup(
+            RuntimeEnvironment(
+                mode=config.runtime_mode,
+                data_root=config.data_root or config.jobs_dir.parent,
+                values={},
+            ),
+            data_paths=(
+                config.jobs_dir,
+                config.policy_db_path,
+                config.bank_db_path,
+                config.conversation_dir,
+                config.intake_dir,
+                config.chat_log_dir,
+                config.ops_events_dir,
+                config.ops_heartbeat_dir,
+                config.user_registry_path,
+                config.task_queue_db_path,
+            ),
+            project_root=ROOT,
+        )
+    except RuntimeEnvironmentError as exc:
+        print(f"错误：{exc}")
+        return
 
     if not config.wecom_bot_id or not config.wecom_bot_secret:
         print("错误：缺少 WRITING_BOT_ID 或 WRITING_BOT_SECRET 配置")
@@ -1170,6 +1201,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.check_config:
         platform_config = build_platform_config(config)
         print("配置检查通过。")
+        print(f"运行环境: {config.runtime_mode}")
+        print(f"数据根目录: {config.data_root}")
         print(f"Bot ID: {mask_config_value(config.wecom_bot_id)}")
         print(f"模型: {config.model_name}")
         print(f"模型输出上限: {config.model_max_tokens}")

@@ -43,6 +43,8 @@ app/review/
 - `M_AGENT_REVIEW_RULES`：内参规则文件。
 - `M_AGENT_LOG_MAX_MB`：日志分片上限。
 
+生产审核使用 `M_AGENT_RUNTIME_ENV=production`，只能从 `main` 启动。开发分支联调使用 `M_AGENT_RUNTIME_ENV=test`、`M_AGENT_TEST_REVIEW_BOT_ID/SECRET` 和独立 `M_AGENT_TEST_DATA_DIR`；不会回退到 `WECOM_REVIEW_BOT_*`，也不会写生产审核目录。
+
 真实值不能写入文档、代码、测试或 Git。
 
 ## 运行

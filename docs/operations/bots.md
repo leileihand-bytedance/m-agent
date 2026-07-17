@@ -11,6 +11,34 @@ uv sync --locked
 
 真实凭证写入根目录 `.env`，运行数据由 `M_AGENT_DATA_DIR` 指向仓库外的 `M-Agent-Files/`。不要把密钥、真实用户 ID、日志或任务材料写入文档和 Git。
 
+### 运行环境硬隔离
+
+生产运行：
+
+```text
+M_AGENT_RUNTIME_ENV=production
+M_AGENT_DATA_DIR=../M-Agent-Files
+```
+
+生产 Bot 只允许从 `main` 分支启动。开发任务工作区不复制生产 `.env`，也不能使用生产 Bot 联调。
+
+任务分支真实联调必须使用：
+
+```text
+M_AGENT_RUNTIME_ENV=test
+M_AGENT_TEST_DATA_DIR=../M-Agent-Test-Files
+M_AGENT_TEST_WRITING_BOT_ID=          # 写作测试 Bot
+M_AGENT_TEST_WRITING_BOT_SECRET=
+M_AGENT_TEST_REVIEW_BOT_ID=           # 审核测试 Bot
+M_AGENT_TEST_REVIEW_BOT_SECRET=
+M_AGENT_TEST_REWRITE_BOT_ID=          # 润色测试 Bot
+M_AGENT_TEST_REWRITE_BOT_SECRET=
+M_AGENT_TEST_OPS_BOT_ID=              # 运维测试 Bot
+M_AGENT_TEST_OPS_BOT_SECRET=
+```
+
+只需配置本次要联调的测试 Bot。测试模式不会读取对应生产凭据，也不会回退到生产数据目录；所有任务、会话、队列、日志、用户表、知识库和运维状态必须位于测试根目录。`--check-config` 会显示运行环境、遮罩后的 Bot ID 和数据根目录，不显示 Secret。
+
 ## 写作 Bot
 
 ```bash

@@ -45,6 +45,13 @@ from app.platform.attachment_delivery import (  # noqa: E402
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
 from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
+from app.platform.runtime_environment import (  # noqa: E402
+    RuntimeEnvironment,
+    RuntimeEnvironmentError,
+    bot_credentials,
+    prepare_runtime_environment,
+    validate_bot_startup,
+)
 from app.platform.gateway.wecom import extract_message_id  # noqa: E402
 from app.platform.task_status import write_task_status  # noqa: E402
 from app.platform.task_execution import (  # noqa: E402
@@ -115,6 +122,8 @@ class ReviewConfig:
     task_poll_seconds: float = 0.25
     task_recovery_seconds: float = 5.0
     task_lease_seconds: int = 120
+    runtime_mode: str = "production"
+    data_root: Path | None = None
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -166,7 +175,16 @@ def _env_bool(values: Mapping[str, str], key: str, default: bool) -> bool:
 def load_config(env_path: Path | None = None) -> ReviewConfig:
     if env_path is None:
         env_path = _ROOT / ".env"
-    values = parse_env_file(env_path)
+    runtime = prepare_runtime_environment(parse_env_file(env_path), project_root=_ROOT)
+    values = runtime.values
+    bot_id, bot_secret = bot_credentials(
+        runtime,
+        production_keys=("WECOM_REVIEW_BOT_ID", "WECOM_REVIEW_BOT_SECRET"),
+        test_keys=("M_AGENT_TEST_REVIEW_BOT_ID", "M_AGENT_TEST_REVIEW_BOT_SECRET"),
+    )
+    if runtime.mode == "production":
+        bot_id = require_value(values, "WECOM_REVIEW_BOT_ID")
+        bot_secret = require_value(values, "WECOM_REVIEW_BOT_SECRET")
     data_paths = DataPaths.from_values(values, project_root=_ROOT)
 
     rules_path = Path(values.get("M_AGENT_REVIEW_RULES", "app/data/rules.md") or "app/data/rules.md")
@@ -202,8 +220,8 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
     )
 
     return ReviewConfig(
-        wecom_bot_id=require_value(values, "WECOM_REVIEW_BOT_ID"),
-        wecom_bot_secret=require_value(values, "WECOM_REVIEW_BOT_SECRET"),
+        wecom_bot_id=bot_id,
+        wecom_bot_secret=bot_secret,
         rules_path=rules_path,
         reviews_dir=reviews_dir,
         logs_dir=logs_dir,
@@ -240,6 +258,8 @@ def load_config(env_path: Path | None = None) -> ReviewConfig:
             30,
             _env_int(values, "M_AGENT_REVIEW_TASK_LEASE_SECONDS", 120),
         ),
+        runtime_mode=runtime.mode,
+        data_root=runtime.data_root,
     )
 
 
@@ -2380,7 +2400,29 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    config = load_config()
+    try:
+        config = load_config()
+        runtime = RuntimeEnvironment(
+            mode=config.runtime_mode,
+            data_root=config.data_root or config.reviews_dir.parent,
+            values={},
+        )
+        validate_bot_startup(
+            runtime,
+            data_paths=(
+                config.reviews_dir,
+                config.logs_dir,
+                config.ops_events_dir,
+                config.ops_heartbeat_dir,
+                config.user_registry_path,
+                config.intake_dir,
+                config.task_queue_db,
+            ),
+            project_root=_ROOT,
+        )
+    except RuntimeEnvironmentError as exc:
+        print(f"错误：{exc}")
+        return
 
     # 配置结构化日志
     setup_logging(
@@ -2392,6 +2434,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.check_config:
         logger.info("配置检查通过。", extra=log_extra("system", "system"))
+        logger.info("运行环境: %s", config.runtime_mode, extra=log_extra("system", "system"))
         logger.info("Bot ID: %s...", config.wecom_bot_id[:8], extra=log_extra("system", "system"))
         logger.info("规则库: %s", config.rules_path, extra=log_extra("system", "system"))
         logger.info("存档目录: %s", config.reviews_dir, extra=log_extra("system", "system"))

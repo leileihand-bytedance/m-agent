@@ -18,6 +18,7 @@ M-Agent/
 ├── scripts/              # 长期维护工具
 ├── config/               # 可提交配置示例和本机权限文件
 ├── data/                 # 仅允许脱敏固定测试资料
+├── .worktrees/           # 本机短期任务工作区，不进入 Git
 └── archive/              # 已退出运行的历史代码
 ```
 
@@ -29,6 +30,8 @@ M-Agent/
 - 带有 `old`、`new`、`final`、`copy`、`backup` 的临时版本文件。
 
 一次性验证完成后必须删除；有长期价值的逻辑改为 `tests/` 或 `scripts/` 中的正式资产。
+
+`.worktrees/` 由 `scripts/project_docs.py start-task` 和 `finish-task` 管理，同时最多 2 个。任务工作区可链接主项目 `.venv`，但不得复制或链接生产 `.env`；完成并成功推送后自动删除，不作为长期项目副本。
 
 ## 代码目录
 
@@ -135,6 +138,8 @@ M-Agent-Files/
 ```
 
 `M_AGENT_DATA_DIR` 是统一入口。细分路径只用于特殊部署，不允许各模块自行发明新的持久目录。
+
+开发分支真实联调使用另一棵仓库外目录 `M_AGENT_TEST_DATA_DIR`，例如项目同级的 `M-Agent-Test-Files/`。测试数据目录与生产 `M-Agent-Files/` 结构相同，但不得指向同一路径，也不得写入 Git。
 
 ## 历史资料
 
