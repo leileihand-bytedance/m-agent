@@ -325,7 +325,15 @@ class WritingIntakeStore:
         key = (channel, sender_userid)
         session = self._get_active_session(key)
         if session is None:
-            intent = DIRECT_REPORT_INTENT if skill_id == "direct_report" else BRIEF_INTENT
+            if skill_id in {
+                DIRECT_REPORT_INTENT,
+                RESEARCH_SYNTHESIS_INTENT,
+                SHENYINXIE_NEWS_INTENT,
+                REWRITE_INTENT,
+            }:
+                intent = skill_id
+            else:
+                intent = BRIEF_INTENT
             session = WritingIntakeSession(
                 intent=intent,
                 instructions=[text.strip()] if text.strip() else [],

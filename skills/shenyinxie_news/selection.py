@@ -17,17 +17,25 @@ EXCERPT_EDITOR_NOTE = "说明：本文根据原报道中微众银行相关内容
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
-def calculate_news_period(today: date | None = None) -> tuple[date, date]:
+def calculate_news_period(
+    today: date | None = None,
+    instruction: str = "",
+) -> tuple[date, date]:
     """根据执行日期计算本期新闻发布日期范围。
 
     规则：
     - 每月 1 日：上月 16 日至上月最后一日
     - 每月 2-15 日：当月 1 日至执行日
-    - 每月 16 日：当月 1 日至 15 日
-    - 每月 17 日至月末：当月 16 日至执行日
+    - 每月 16-28 日：当月 1 日至 15 日
+    - 每月 29 日至月末：当月 16 日至执行日
+    - 用户明确指定“某月上半月/下半月”时优先采用指定范围
     """
     if today is None:
         today = datetime.now(_SHANGHAI_TZ).date()
+
+    explicit_period = extract_explicit_half_month(instruction, today)
+    if explicit_period is not None:
+        return explicit_period
 
     day = today.day
 
@@ -40,7 +48,7 @@ def calculate_news_period(today: date | None = None) -> tuple[date, date]:
         # 当月 1 日至执行日
         period_start = today.replace(day=1)
         period_end = today
-    elif day == 16:
+    elif 16 <= day <= 28:
         # 当月 1 日至 15 日
         period_start = today.replace(day=1)
         period_end = today.replace(day=15)
@@ -50,6 +58,43 @@ def calculate_news_period(today: date | None = None) -> tuple[date, date]:
         period_end = today
 
     return period_start, period_end
+
+
+def extract_explicit_half_month(
+    instruction: str,
+    today: date | None = None,
+) -> tuple[date, date] | None:
+    """从“生成7月上半月”等指令中提取明确的半月范围。"""
+    if today is None:
+        today = datetime.now(_SHANGHAI_TZ).date()
+    normalized = instruction.strip().replace(" ", "")
+    half_match = re.search(r"(?P<half>上半月|下半月)", normalized)
+    date_match = re.search(
+        r"(?:(?P<year>\d{4})年)?(?P<month>\d{1,2})月",
+        normalized,
+    )
+    if half_match is None or date_match is None:
+        return None
+
+    month = int(date_match.group("month"))
+    if not 1 <= month <= 12:
+        return None
+    year = int(date_match.group("year") or today.year)
+    if date_match.group("year") is None and month > today.month:
+        year -= 1
+
+    first_of_month = date(year, month, 1)
+    if half_match.group("half") == "上半月":
+        return first_of_month, first_of_month.replace(day=15)
+
+    if month == 12:
+        first_of_next_month = date(year + 1, 1, 1)
+    else:
+        first_of_next_month = date(year, month + 1, 1)
+    month_end = first_of_next_month - timedelta(days=1)
+    if year == today.year and month == today.month and today.day >= 16:
+        month_end = today
+    return first_of_month.replace(day=16), month_end
 
 
 def calculate_issue_number(today: date | None = None) -> str:
@@ -380,6 +425,8 @@ def generate_primary_search_queries(period_start: date, period_end: date) -> lis
     """生成首轮权威媒体检索词，并明确要求按发布日期限定区间。"""
     date_hint = _publication_period_hint(period_start, period_end)
     return [
+        f"微众银行 科技创新助推数字化金融普惠发展 人民日报 {date_hint}",
+        f"微众银行 党建 引领 金融高质量发展 {date_hint}",
         f"微众银行 {date_hint}",
         f"深圳前海微众银行 {date_hint}",
         f"微众银行 正面新闻 成果 {date_hint}",
@@ -441,6 +488,23 @@ def _text_similarity(a: str, b: str) -> float:
     return len(intersection) / len(union)
 
 
+def _normalize_article_title(title: str) -> str:
+    """移除媒体站点追加的标题尾缀，再统一空白和标点。"""
+    normalized = title.strip()
+    for separator in (" - ", "-", "—", "_", "|"):
+        head, found, tail = normalized.rpartition(separator)
+        clean_tail = tail.strip()
+        if (
+            found
+            and head.strip()
+            and len(clean_tail) <= 20
+            and clean_tail.endswith(("网", "报", "报道", "新闻", "客户端", "日报", "时报"))
+        ):
+            normalized = head.strip()
+            break
+    return re.sub(r"[\W_]+", "", normalized.lower())
+
+
 def dedupe_same_article(candidates: list[NewsCandidate], similarity_threshold: float = 0.85) -> list[NewsCandidate]:
     """同稿转载去重：标题/正文高度相似且发布时间接近视为同一篇。
 
@@ -459,7 +523,10 @@ def dedupe_same_article(candidates: list[NewsCandidate], similarity_threshold: f
     for candidate in sorted_candidates:
         is_duplicate = False
         for existing in kept:
-            title_sim = _text_similarity(candidate.title, existing.title)
+            title_sim = _text_similarity(
+                _normalize_article_title(candidate.title),
+                _normalize_article_title(existing.title),
+            )
             body_sim = _text_similarity(candidate.body[:300], existing.body[:300])
             if title_sim >= similarity_threshold or body_sim >= similarity_threshold:
                 is_duplicate = True

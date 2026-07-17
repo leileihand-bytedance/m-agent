@@ -148,6 +148,37 @@ def test_dedupe_same_article_keeps_higher_authority():
     assert result[0].url == "https://people.com.cn/original"
 
 
+def test_dedupe_same_article_ignores_trailing_media_title_suffix():
+    body = "微众银行党委坚持党建引领和科技创新，持续推动金融高质量发展。" * 20
+    candidates = [
+        NewsCandidate(
+            url="http://m.eeo.com.cn/original",
+            canonical_url="http://m.eeo.com.cn/original",
+            title="微众银行：以党建引领金融高质量发展-经济观察网",
+            site="m.eeo.com.cn",
+            media_name="经济观察报",
+            media_tier=2,
+            publish_date="2026-07-01",
+            body="2026-07-01 20:30\n" + body,
+        ),
+        NewsCandidate(
+            url="https://m.21jingji.com/repost",
+            canonical_url="https://m.21jingji.com/repost",
+            title="微众银行：以党建引领金融高质量发展 - 21世纪经济报道",
+            site="m.21jingji.com",
+            media_name="21世纪经济报道",
+            media_tier=2,
+            publish_date="2026-07-01",
+            body=body,
+        ),
+    ]
+
+    result = dedupe_same_article(candidates)
+
+    assert len(result) == 1
+    assert result[0].url == "http://m.eeo.com.cn/original"
+
+
 def test_apply_rule_relevance():
     candidates = [
         NewsCandidate(
@@ -336,6 +367,8 @@ def test_search_queries_include_exact_publication_period_and_are_staged():
     assert primary
     assert expanded
     assert all("2026年7月1日至2026年7月15日" in query for query in primary + expanded)
+    assert primary[0].startswith("微众银行 科技创新助推数字化金融普惠发展 人民日报")
     assert any("人民网" in query for query in primary)
+    assert any("科技创新助推数字化金融普惠发展" in query for query in primary)
     assert any("央广网" in query for query in expanded)
     assert any("南方" in query for query in expanded)

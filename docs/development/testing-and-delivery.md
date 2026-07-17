@@ -155,6 +155,8 @@ uv run --locked python -m app.rewrite_bot --check-config
 uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
 ```
 
+深银协动态还要重点验证：明确指定月份及上/下半月时使用对应发布日期范围；未明确时在任何搜索调用前追问；后台恢复追问后仍保持 `shenyinxie_news` 意图并合并用户回答；查询包含精确日期和成果主题；最终入选仍以原文页面发布日期、白名单和正文核验为准。人民日报旧版页面回归必须覆盖固定错误 `publishdate`，只有页面内期号路径双重印证时才采用真实期号日期；同稿去重必须忽略媒体站点追加的短标题尾缀。
+
 后续新增 skill 后，新增对应测试。
 
 DeepSeek 原生联网搜索适配还需运行：

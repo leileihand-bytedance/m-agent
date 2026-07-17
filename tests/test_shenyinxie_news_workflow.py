@@ -163,6 +163,59 @@ def test_workflow_returns_zero_when_no_qualified_candidates(tmp_path):
     assert "未检索到" in result.message
 
 
+def test_workflow_asks_for_half_month_when_instruction_omits_it(tmp_path):
+    gateway, calls = _make_gateway(search_results={}, web_pages={})
+
+    result = run(
+        {
+            "text": "生成深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 17),
+        },
+        gateway,
+    )
+
+    assert result.needs_clarification is True
+    assert "上半月" in result.message
+    assert "下半月" in result.message
+    assert calls == []
+
+
+def test_workflow_honors_explicit_upper_half_month_instruction(tmp_path):
+    today = date(2026, 7, 17)
+    url = "https://paper.people.com.cn/rmrb/pc/content/202607/11/example.html"
+    search_results = {
+        "微众银行 2026年7月1日至2026年7月15日": [
+            _search_result(url, "科技创新助推数字化金融普惠发展")
+        ]
+    }
+    web_pages = {
+        url: _web_page(
+            title="科技创新助推数字化金融普惠发展",
+            body="微众银行通过科技创新推动数字普惠金融发展，服务实体经济质效持续提升。" * 15,
+            publish_date="2026-07-11",
+            site="paper.people.com.cn",
+            canonical_url=url,
+        )
+    }
+    gateway, calls = _make_gateway(search_results=search_results, web_pages=web_pages)
+
+    result = run(
+        {
+            "text": "生成7月上半月的深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": today,
+        },
+        gateway,
+    )
+
+    assert result.period_start == "2026-07-01"
+    assert result.period_end == "2026-07-15"
+    assert len(result.articles) == 1
+    search_calls = [query for kind, query in calls if kind == "search"]
+    assert any("2026年7月1日至2026年7月15日" in query for query in search_calls)
+
+
 def test_workflow_handles_search_failure(tmp_path):
     today = date(2026, 7, 29)
 

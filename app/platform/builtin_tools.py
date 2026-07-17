@@ -551,7 +551,9 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
 
     canonical_url = _extract_canonical_url(soup, url)
     site = _extract_site(canonical_url or url)
-    publish_date, date_source = _extract_publish_date(soup)
+    publish_date, date_source = _extract_verified_people_daily_issue_date(soup, canonical_url)
+    if publish_date is None:
+        publish_date, date_source = _extract_publish_date(soup)
 
     return {
         "url": url,
@@ -577,6 +579,29 @@ def _extract_site(url: str) -> str:
     parsed = urlparse(url)
     hostname = (parsed.hostname or "").strip().lower().lstrip("www.")
     return hostname
+
+
+def _extract_verified_people_daily_issue_date(soup: Any, url: str) -> tuple[date | None, str]:
+    """人民日报旧版页面的 publishdate 固定为旧值，需用页面内重复的期号路径校验。"""
+    parsed_url = urlparse(url)
+    hostname = (parsed_url.hostname or "").lower()
+    if hostname != "paper.people.com.cn":
+        return None, ""
+
+    match = re.search(r"/(?:pc|pad)/content/(\d{4})(\d{2})/(\d{2})/", parsed_url.path)
+    if match is None:
+        return None, ""
+    year, month, day = (int(item) for item in match.groups())
+    try:
+        issue_date = date(year, month, day)
+    except ValueError:
+        return None, ""
+
+    issue_path = f"{year:04d}{month:02d}/{day:02d}"
+    page_markup = str(soup)
+    if f"layout/{issue_path}" not in page_markup and f"content/{issue_path}" not in page_markup:
+        return None, ""
+    return issue_date, "people-daily:verified-issue-path"
 
 
 def _extract_publish_date(soup: Any) -> tuple[date | None, str]:

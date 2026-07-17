@@ -16,6 +16,7 @@ from skills.shenyinxie_news.selection import (
     calculate_issue_number,
     calculate_news_period,
     dedupe_same_article,
+    extract_explicit_half_month,
     generate_expanded_search_queries,
     generate_primary_search_queries,
     hard_gate,
@@ -171,8 +172,25 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
     else:
         today = None
 
-    period_start, period_end = calculate_news_period(today)
     issue_number = calculate_issue_number(today)
+    instruction = str(inputs.get("text", "") or "").strip()
+    if instruction:
+        requested_period = extract_explicit_half_month(instruction, today)
+        if requested_period is None:
+            return ShenyinxieNewsResult(
+                period_start="",
+                period_end="",
+                issue_number=issue_number,
+                needs_clarification=True,
+                message=(
+                    "请明确要生成哪个月的上半月还是下半月，"
+                    "例如“生成7月上半月的深银协动态”或“生成7月下半月的深银协动态”。"
+                ),
+            )
+        period_start, period_end = requested_period
+    else:
+        # 仅供内部测试和兼容调用；真实入口始终传入用户指令。
+        period_start, period_end = calculate_news_period(today)
 
     whitelist = MediaWhitelist.from_yaml()
 

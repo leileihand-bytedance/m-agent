@@ -343,6 +343,28 @@ def test_read_web_page_extracts_publish_date_and_metadata():
     assert "article:published_time" in result["date_extracted_from"]
 
 
+def test_read_web_page_uses_verified_people_daily_issue_path_over_stale_meta():
+    html = """
+    <html>
+      <head>
+        <title>科技创新助推数字化金融普惠发展</title>
+        <meta name="publishdate" content="2013-07-17">
+      </head>
+      <body>
+        <a href="../../../layout/202607/11/node_07.html">07版</a>
+        <url>http://paper.people.com.cn/rmrb/pc/content/202607/11/content_30168032.html</url>
+        <p>微众银行通过科技创新推动数字普惠金融发展。</p>
+      </body>
+    </html>
+    """
+    url = "https://paper.people.com.cn/rmrb/pc/content/202607/11/content_30168032.html"
+
+    result = read_web_page(url, fetcher=lambda _: html)
+
+    assert result["publish_date"] == "2026-07-11"
+    assert result["date_extracted_from"] == "people-daily:verified-issue-path"
+
+
 def test_read_web_page_falls_back_to_time_element_for_date():
     html = """
     <html>

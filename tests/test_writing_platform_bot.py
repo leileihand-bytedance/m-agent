@@ -591,6 +591,32 @@ def test_writing_intake_runs_shenyinxie_news_without_materials():
     assert "深银协动态" in decision.ack_message
 
 
+def test_shenyinxie_news_clarification_keeps_skill_and_user_period(tmp_path):
+    intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+
+    intake_store.restore_clarification(
+        channel="wecom",
+        sender_userid="user-001",
+        skill_id="shenyinxie_news",
+        text="生成深银协动态",
+        material_text="",
+        urls=(),
+        files=(),
+        message="请明确要生成哪个月的上半月还是下半月。",
+    )
+    resumed = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        message_id="followup-001",
+        text="7月上半月",
+    )
+
+    assert resumed.action == "run"
+    assert resumed.skill_id == "shenyinxie_news"
+    assert "生成深银协动态" in resumed.text
+    assert "7月上半月" in resumed.text
+
+
 def test_writing_intake_ignores_duplicate_file_message_ids():
     intake_store = WritingIntakeStore()
     uploaded = UploadedFile(filename="素材.docx", content=b"material")
