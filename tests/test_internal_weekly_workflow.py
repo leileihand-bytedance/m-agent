@@ -212,9 +212,11 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert any(section["name"] == "市场观察" for section in manifest["sections"])
     assert all(record["url"] for record in manifest["source_records"])
     assert all(record["content_sha256"] for record in manifest["source_records"])
-    assert any("site:gov.cn" in query for query in fake.search_calls)
-    assert any("site:pbc.gov.cn" in query for query in fake.search_calls)
-    assert any("site:bis.org" in query for query in fake.search_calls)
+    assert any("中国政府网" in query for query in fake.search_calls)
+    assert any("中国人民银行" in query for query in fake.search_calls)
+    assert any("BIS" in query for query in fake.search_calls)
+    assert all("site:" not in query for query in fake.search_calls)
+    assert all(" OR " not in query for query in fake.search_calls)
 
 
 def test_workflow_waits_until_monday_market_close_without_search(tmp_path):

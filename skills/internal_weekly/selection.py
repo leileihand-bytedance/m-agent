@@ -213,8 +213,7 @@ def _source_id(url: str) -> str:
     return "src-" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
 
 
-def _describe_change(start: float, end: float) -> str:
-    change = (end / start - 1) * 100
+def _describe_change(change: float) -> str:
     if abs(change) < 0.005:
         return "持平0.00%"
     return f"{'上涨' if change > 0 else '下跌'}{abs(change):.2f}%"
@@ -223,10 +222,21 @@ def _describe_change(start: float, end: float) -> str:
 def _render_group(label: str, series: list[object]) -> str:
     values = "，".join(
         f"{CANONICAL_MARKET_NAMES[item.index_code.upper()]}"
-        f"{_describe_change(item.start_close, item.end_close)}"
+        f"{_describe_change(_series_change(item))}"
         for item in series
     )
     return f"{label}，{values}。"
+
+
+def _series_change(item: object) -> float:
+    reported = getattr(item, "reported_change_pct", None)
+    if reported is not None:
+        return float(reported)
+    start = getattr(item, "start_close", None)
+    end = getattr(item, "end_close", None)
+    if start is None or end is None:
+        raise ValueError(f"行情缺少涨跌幅或起止收盘值：{item.scope}/{item.index_code}")
+    return (float(end) / float(start) - 1) * 100
 
 
 def build_market_item(
@@ -239,6 +249,13 @@ def build_market_item(
     grouped: dict[str, dict[str, object]] = {}
     for item in bundle.series:
         grouped.setdefault(item.scope, {})[item.index_code.upper()] = item
+        has_reported_change = item.reported_change_pct is not None
+        has_any_close = item.start_close is not None or item.end_close is not None
+        has_both_closes = item.start_close is not None and item.end_close is not None
+        if has_reported_change and has_any_close:
+            raise ValueError(f"行情不能同时返回涨跌幅和收盘值：{item.scope}/{item.index_code}")
+        if not has_reported_change and not has_both_closes:
+            raise ValueError(f"行情缺少涨跌幅或起止收盘值：{item.scope}/{item.index_code}")
         try:
             start_date = parse_flexible_date(
                 item.start_date,
@@ -250,7 +267,7 @@ def build_market_item(
             )
         except ValueError as exc:
             raise ValueError(f"行情日期格式无效：{item.scope}/{item.index_code}") from exc
-        if start_date >= end_date:
+        if start_date > end_date or (start_date == end_date and not has_reported_change):
             raise ValueError(f"行情起止日期无效：{item.scope}/{item.index_code}")
         if item.scope == "monday_a" and end_date != publication_date:
             raise ValueError(f"monday_a 必须使用出版日 {publication_date.isoformat()} 的收盘值")

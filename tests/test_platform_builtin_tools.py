@@ -343,6 +343,26 @@ def test_read_web_page_extracts_publish_date_and_metadata():
     assert "article:published_time" in result["date_extracted_from"]
 
 
+def test_read_web_page_extracts_citation_publication_date_used_by_research_sites():
+    html = """
+    <html>
+      <head>
+        <title>Competition in retail digital payments</title>
+        <meta name="citation_publication_date" content="2026-07-13">
+        <meta name="DC.date" content="2026-07-13">
+      </head>
+      <body>
+        <main><p>This bulletin studies competition in retail digital payments.</p></main>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.bis.org/publ/bisbull127.htm", fetcher=lambda _: html)
+
+    assert result["publish_date"] == "2026-07-13"
+    assert result["date_extracted_from"] == "meta:citation_publication_date"
+
+
 def test_read_web_page_uses_verified_people_daily_issue_path_over_stale_meta():
     html = """
     <html>

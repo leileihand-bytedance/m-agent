@@ -614,6 +614,8 @@ def _extract_publish_date(soup: Any) -> tuple[date | None, str]:
         ('meta', 'name', 'pubdate', 'meta:pubdate'),
         ('meta', 'name', 'published_time', 'meta:published_time'),
         ('meta', 'name', 'release_date', 'meta:release_date'),
+        ('meta', 'name', 'citation_publication_date', 'meta:citation_publication_date'),
+        ('meta', 'name', 'DC.date', 'meta:DC.date'),
     ]
     for tag, attr, value, source in meta_selectors:
         node = soup.find(tag, {attr: value})

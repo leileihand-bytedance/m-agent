@@ -27,6 +27,7 @@ from skills.internal_weekly.selection import (
 )
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
+    date_in_period,
     domain_allowed,
     hostname,
     is_research_source,
@@ -126,18 +127,17 @@ def _format_date_range(period_start: date, period_end: date) -> str:
 def _ordinary_queries(period_start: date, period_end: date) -> list[str]:
     date_range = _format_date_range(period_start, period_end)
     return [
-        f"site:gov.cn {date_range} 国务院 金融 重要会议 政策 原文",
+        f"中国政府网 人民网 新华网 国务院 金融 重要会议 政策 原文 {date_range}",
         (
-            f"site:pbc.gov.cn OR site:nfra.gov.cn {date_range} "
-            "中国人民银行 金融监管总局 金融政策 监管动态 原文"
+            f"中国人民银行 发布 金融政策 公开市场 金融统计 原文 {date_range}"
         ),
         (
-            f"site:csrc.gov.cn OR site:safe.gov.cn {date_range} "
-            "证监会 外汇局 金融政策 监管动态 原文"
+            "国家金融监督管理总局 中国证监会 国家外汇管理局 "
+            f"发布 金融政策 监管动态 原文 {date_range}"
         ),
         (
-            f"site:cs.com.cn OR site:stcn.com {date_range} "
-            "银行业 民营银行 数字银行 同业动向 市场动态"
+            "中国证券报 证券时报 第一财经 银行业 民营银行 数字银行 "
+            f"同业动向 市场动态 {date_range}"
         ),
     ]
 
@@ -151,16 +151,16 @@ def _market_queries(
     monday = f"{publication_date.year}年{publication_date.month}月{publication_date.day}日"
     return [
         (
-            "site:sse.com.cn OR site:szse.cn A股 上证指数 深证成指 创业板指 "
-            f"收盘 历史行情 上周{weekly_range}及周一{monday}"
+            "新华财经 一周要闻 全球市场 本周回顾 A股 美股 上证指数 "
+            f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}"
         ),
         (
-            "site:hsi.com.hk OR site:hkex.com.hk 港股 恒生指数 恒生科技指数 "
-            f"恒生中国企业指数 收盘 历史行情 {weekly_range}"
+            "证券时报 中国证券报 第一财经 A股收评 上证指数 深证成指 "
+            f"创业板指 收盘 涨跌幅 {monday}"
         ),
         (
-            "site:spglobal.com OR site:nasdaq.com 美股 道琼斯指数 纳斯达克指数 "
-            f"标普500指数 收盘 历史行情 {weekly_range}"
+            "21世纪经济报道 上海证券报 南方财经 港股周评 恒生指数 "
+            f"恒生科技指数 恒生中国企业指数 周涨跌幅 {weekly_range}"
         ),
     ]
 
@@ -174,9 +174,13 @@ def _frontier_queries(
     marker = "近30日补充" if fallback else "统计期优先"
     return [
         (
-            "site:bis.org OR site:imf.org OR site:worldbank.org OR "
-            "site:federalreserve.gov OR site:ecb.europa.eu "
-            f"银行 金融科技 金融市场 研究报告 {marker} "
+            "BIS working paper bulletin banking finance digital payments "
+            f"研究报告 {marker} "
+            f"{_format_date_range(period_start, period_end)}"
+        ),
+        (
+            "IMF World Bank working paper banking finance financial market "
+            f"研究报告 {marker} "
             f"{_format_date_range(period_start, period_end)}"
         )
     ]
@@ -303,7 +307,9 @@ def _market_item(
             "output_type": MarketEvidenceBundle,
             "prompt_path": "prompts/market.md",
             "instruction": (
-                "只提取页面明确列示的指数起止收盘值和背景原句，不计算涨跌幅。"
+                "只提取页面明确列示的指数涨跌幅，或起止收盘值和背景原句。"
+                "页面已直接披露本期涨跌幅时填 reported_change_pct，禁止倒算收盘值；"
+                "页面只披露起止收盘值时填 start_close、end_close，禁止自行计算涨跌幅。"
                 f"weekly_a、weekly_hk、weekly_us 使用 {period_start.isoformat()} "
                 f"至 {period_end.isoformat()} 内实际交易日起止收盘；"
                 f"monday_a 的 end_date 必须是 {publication_date.isoformat()}。"
@@ -456,23 +462,21 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         _market_queries(publication_date, period_start, period_end),
         tools,
     )
+    frontier_window_start = publication_date - timedelta(days=30)
     frontier_pages, frontier_search_warnings = _collect_pages(
-        _frontier_queries(period_start, period_end),
+        _frontier_queries(frontier_window_start, publication_date, fallback=True),
         tools,
-        period_start=period_start,
-        period_end=period_end,
+        period_start=frontier_window_start,
+        period_end=publication_date,
         require_research=True,
     )
-    if not frontier_pages:
-        fallback_start = publication_date - timedelta(days=30)
-        frontier_pages, fallback_warnings = _collect_pages(
-            _frontier_queries(fallback_start, publication_date, fallback=True),
-            tools,
-            period_start=fallback_start,
-            period_end=publication_date,
-            require_research=True,
-        )
-        frontier_search_warnings.extend(fallback_warnings)
+    weekly_frontier_pages = [
+        page
+        for page in frontier_pages
+        if date_in_period(page.publish_date, period_start, period_end)
+    ]
+    if weekly_frontier_pages:
+        frontier_pages = weekly_frontier_pages
     warnings.extend(market_search_warnings)
     warnings.extend(frontier_search_warnings)
 

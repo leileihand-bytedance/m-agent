@@ -147,6 +147,41 @@ def test_market_summary_accepts_common_chinese_and_slash_date_formats():
     assert "截至7月13日收盘" in item.body
 
 
+def test_market_summary_accepts_source_reported_changes_without_reverse_calculation():
+    scopes = {
+        "weekly_a": (("000001", -1.17), ("399001", -3.53), ("399006", -4.41)),
+        "monday_a": (("000001", -3.05), ("399001", -3.48), ("399006", -7.15)),
+        "weekly_hk": (("HSI", 3.53), ("HSTECH", 4.94), ("HSCEI", 4.41)),
+        "weekly_us": (("DJIA", -0.50), ("COMP", 1.74), ("SPX", 1.23)),
+    }
+    series = []
+    for scope, values in scopes.items():
+        for code, change in values:
+            series.append(
+                MarketSeriesEvidence(
+                    scope=scope,
+                    index_code=code,
+                    index_name="来源中的名称不作为最终名称",
+                    start_date="2026-07-13" if scope == "monday_a" else "2026-07-06",
+                    end_date="2026-07-13" if scope == "monday_a" else "2026-07-10",
+                    reported_change_pct=change,
+                    source_url="https://qhweb.eastmoney.com/news/weekly.html",
+                    source_title="一周市场回顾",
+                    evidence_excerpt=f"{code} 本期变动 {change}%",
+                )
+            )
+
+    item, _ = build_market_item(
+        MarketEvidenceBundle(series=series),
+        publication_date=date(2026, 7, 13),
+    )
+
+    assert "上证指数下跌1.17%" in item.body
+    assert "创业板指下跌7.15%" in item.body
+    assert "恒生科技指数上涨4.94%" in item.body
+    assert "标普500指数上涨1.23%" in item.body
+
+
 def test_frontier_selection_must_be_extract_from_report_body():
     report_body = "第一段说明利率传导机制。\n第二段分析银行净息差变化。\n第三段提示风险边界。"
     selection = FrontierSelection(
@@ -226,6 +261,31 @@ def test_source_policy_accepts_common_chinese_publication_date():
         period_end=date(2026, 7, 12),
         require_research=True,
     )
+
+    assert allowed is True
+    assert reason == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://qhweb.eastmoney.com/news/weekly.html",
+        "https://apnews.com/article/market-weekly",
+        "https://www.cnfin.com/market/weekly.html",
+        "https://www.sfccn.com/market/weekly.html",
+    ],
+)
+def test_source_policy_accepts_registered_market_report_domains(url):
+    candidate = WebCandidate(
+        url=url,
+        canonical_url=url,
+        title="一周市场回顾",
+        site="market",
+        publish_date="2026-07-10",
+        body="本周股票市场主要指数涨跌情况完整列示，可用于人工核对。",
+    )
+
+    allowed, reason = candidate_allowed(candidate)
 
     assert allowed is True
     assert reason == ""
