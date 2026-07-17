@@ -16,6 +16,7 @@ class ReviewRunMetrics:
         self._model_failures_by_stage: dict[str, int] = defaultdict(int)
         self._model_elapsed_ms_by_stage: dict[str, float] = defaultdict(float)
         self._degraded_stages: set[str] = set()
+        self._finding_count = 0
         self._lock = Lock()
 
     @property
@@ -75,3 +76,12 @@ class ReviewRunMetrics:
             return
         with self._lock:
             self._degraded_stages.add(normalized)
+
+    @property
+    def finding_count(self) -> int:
+        with self._lock:
+            return self._finding_count
+
+    def set_finding_count(self, finding_count: int) -> None:
+        with self._lock:
+            self._finding_count = max(0, int(finding_count))

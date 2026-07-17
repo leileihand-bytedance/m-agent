@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from app.review.capabilities import REVIEW_CAPABILITIES, infer_review_capability
+
 
 @dataclass(frozen=True)
 class AdminPaths:
@@ -156,6 +158,29 @@ class TaskStatistics:
 
 
 @dataclass(frozen=True)
+class ReviewCapabilityStatistics:
+    capability_id: str
+    capability_name: str
+    total: int = 0
+    completed: int = 0
+    failed: int = 0
+    incomplete: int = 0
+    delivered: int = 0
+    delivery_failed: int = 0
+    model_calls: int = 0
+    model_failures: int = 0
+    finding_count: int = 0
+    total_elapsed_ms: float = 0.0
+    elapsed_sample_count: int = 0
+
+    @property
+    def average_elapsed_ms(self) -> float:
+        if self.elapsed_sample_count == 0:
+            return 0.0
+        return self.total_elapsed_ms / self.elapsed_sample_count
+
+
+@dataclass(frozen=True)
 class ProjectOverview:
     generated_at: str
     enabled_skill_count: int
@@ -166,6 +191,7 @@ class ProjectOverview:
     review_task_count: int
     writing_task_stats: TaskStatistics
     review_task_stats: TaskStatistics
+    review_capability_stats: tuple[ReviewCapabilityStatistics, ...]
     policy_count: int | None
     bank_count: int | None
     repository: RepositoryAdminSummary
@@ -453,11 +479,20 @@ _ARCHITECTURE_LAYER_SPECS = (
                 skill_ids=("internal_weekly",),
             ),
             _CapabilitySpec(
-                "general_review",
-                "通用内容审核",
-                "检查文字、逻辑、事实一致性并返回标注文档。",
+                "general_text_review",
+                "通用文字审核",
+                "检查直接发送文字中的低级错误、语病和逻辑一致性并返回文字结果。",
                 "stable",
                 ("app/review/general_reviewer.py",),
+                ("TODO-023",),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "general_word_review",
+                "通用 Word 审核",
+                "检查 Word 中的低级错误、语病和逻辑一致性并返回标注文档。",
+                "stable",
+                ("app/review/general_reviewer.py", "app/review/error_marker.py"),
                 ("TODO-023",),
                 "optimize",
             ),
@@ -469,6 +504,24 @@ _ARCHITECTURE_LAYER_SPECS = (
                 ("app/review/html_parser.py", "app/review/general_reviewer.py"),
                 ("TODO-029",),
                 "work",
+            ),
+            _CapabilitySpec(
+                "neican_review",
+                "内参审核",
+                "执行内参两阶段内容审核并保留专属规则和输出方式。",
+                "stable",
+                ("app/review/reviewer.py",),
+                ("TODO-031",),
+                "optimize",
+            ),
+            _CapabilitySpec(
+                "halfmonthly_review",
+                "半月报审核",
+                "执行半月报内容、板块顺序和领导职务等专属审核。",
+                "stable",
+                ("app/review/halfmonthly_reviewer.py",),
+                ("TODO-031",),
+                "optimize",
             ),
             _CapabilitySpec(
                 "official_format_review",
@@ -500,10 +553,10 @@ _ARCHITECTURE_LAYER_SPECS = (
             _CapabilitySpec(
                 "shared_review_core",
                 "审核共享核心",
-                "规划统一问题结构、证据校验、复核和去重，专属业务规则继续隔离。",
-                "planned",
+                "统一问题结构、模型调用、证据校验、去重和运行指标，专属业务规则继续隔离。",
+                "optimizing",
                 todo_ids=("TODO-031",),
-                todo_policy="work",
+                todo_policy="optimize",
             ),
             _CapabilitySpec(
                 "writing_final_review",
@@ -648,19 +701,29 @@ _ARCHITECTURE_RELATION_SPECS = (
     ("conversation_revision", "direct_report", "续改稿件"),
     ("conversation_revision", "brief_writing", "续改稿件"),
     ("conversation_revision", "rewrite", "续改稿件"),
-    ("review_bot", "general_review", "执行审核"),
+    ("review_bot", "general_text_review", "执行审核"),
+    ("review_bot", "general_word_review", "执行审核"),
     ("review_bot", "html_review", "执行审核"),
+    ("review_bot", "neican_review", "执行审核"),
+    ("review_bot", "halfmonthly_review", "执行审核"),
     ("review_bot", "official_format_review", "执行审核"),
     ("review_bot", "multi_file_review", "执行审核"),
     ("review_bot", "ppt_review", "执行审核"),
-    ("html_review", "general_review", "复用通用规则"),
-    ("shared_review_core", "general_review", "规划统一"),
-    ("shared_review_core", "html_review", "规划统一"),
-    ("shared_review_core", "ppt_review", "规划复用"),
+    ("html_review", "general_word_review", "复用通用规则"),
+    ("shared_review_core", "general_text_review", "复用核心"),
+    ("shared_review_core", "general_word_review", "复用核心"),
+    ("shared_review_core", "html_review", "复用核心"),
+    ("shared_review_core", "neican_review", "复用核心"),
+    ("shared_review_core", "halfmonthly_review", "复用核心"),
+    ("shared_review_core", "ppt_review", "有限复用"),
+    ("shared_review_core", "multi_file_review", "复用指标与调用"),
     ("document_service", "direct_report", "提供材料"),
     ("document_service", "brief_writing", "提供材料"),
     ("document_service", "research_synthesis", "提供材料"),
-    ("document_service", "general_review", "提供材料"),
+    ("document_service", "general_word_review", "提供材料"),
+    ("document_service", "neican_review", "提供材料"),
+    ("document_service", "halfmonthly_review", "提供材料"),
+    ("document_service", "official_format_review", "提供材料"),
     ("document_service", "multi_file_review", "提供材料"),
     ("document_service", "ppt_review", "提供材料"),
     ("web_tools", "direct_report", "提供素材"),
@@ -676,7 +739,9 @@ _ARCHITECTURE_RELATION_SPECS = (
     ("pdf_ppt_reader", "document_service", "标准解析"),
     ("direct_report", "writing_final_review", "成稿检查"),
     ("brief_writing", "writing_final_review", "成稿检查"),
-    ("general_review", "attachment_delivery", "回传结果"),
+    ("general_word_review", "attachment_delivery", "回传结果"),
+    ("neican_review", "attachment_delivery", "回传结果"),
+    ("halfmonthly_review", "attachment_delivery", "回传结果"),
     ("official_format_review", "attachment_delivery", "回传结果"),
     ("multi_file_review", "attachment_delivery", "回传结果"),
     ("research_synthesis", "attachment_delivery", "回传 Word"),
@@ -847,6 +912,75 @@ def summarize_review_tasks(root: Path | None) -> TaskStatistics:
     )
 
 
+def summarize_review_capabilities(
+    root: Path | None,
+) -> tuple[ReviewCapabilityStatistics, ...]:
+    counters: dict[str, dict[str, int | float]] = {
+        capability.id: {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "delivered": 0,
+            "delivery_failed": 0,
+            "model_calls": 0,
+            "model_failures": 0,
+            "finding_count": 0,
+            "total_elapsed_ms": 0.0,
+            "elapsed_sample_count": 0,
+        }
+        for capability in REVIEW_CAPABILITIES
+    }
+    if root is not None and root.exists():
+        for meta_path in root.glob("**/meta.json"):
+            task_dir = meta_path.parent
+            meta = _read_json(meta_path)
+            capability = infer_review_capability(meta)
+            if capability is None:
+                continue
+            counter = counters[capability.id]
+            counter["total"] += 1
+
+            status = _read_json(task_dir / "status.json")
+            processing_status = str(status.get("processing_status", ""))
+            if processing_status == "completed" or (task_dir / "output" / "report.md").is_file():
+                counter["completed"] += 1
+            elif processing_status == "failed":
+                counter["failed"] += 1
+            else:
+                counter["incomplete"] += 1
+
+            delivery_status = str(status.get("delivery_status", ""))
+            if delivery_status == "delivered":
+                counter["delivered"] += 1
+            elif delivery_status == "failed":
+                counter["delivery_failed"] += 1
+
+            observability = meta.get("observability", {})
+            if not isinstance(observability, dict):
+                observability = {}
+            counter["model_calls"] += _non_negative_int(observability.get("model_calls"))
+            counter["model_failures"] += _non_negative_int(
+                observability.get("model_failures")
+            )
+            counter["finding_count"] += _non_negative_int(
+                observability.get("finding_count", meta.get("finding_count", 0))
+            )
+            elapsed_ms = _non_negative_float(observability.get("elapsed_ms"))
+            if elapsed_ms is not None:
+                counter["total_elapsed_ms"] += elapsed_ms
+                counter["elapsed_sample_count"] += 1
+
+    return tuple(
+        ReviewCapabilityStatistics(
+            capability_id=capability.id,
+            capability_name=capability.name,
+            **counters[capability.id],
+        )
+        for capability in REVIEW_CAPABILITIES
+    )
+
+
 def list_todos(todo_path: Path) -> list[TodoAdminSummary]:
     if not todo_path.exists():
         return []
@@ -916,6 +1050,7 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
     )
     writing_task_stats = summarize_writing_tasks(paths.jobs_dir)
     review_task_stats = summarize_review_tasks(paths.review_tasks_dir)
+    review_capability_stats = summarize_review_capabilities(paths.review_tasks_dir)
     writing_job_count = writing_task_stats.total
     review_task_count = review_task_stats.total
     policy_count = _sqlite_table_count(paths.policy_db_path, "policy_documents")
@@ -955,6 +1090,7 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         review_task_count=review_task_count,
         writing_task_stats=writing_task_stats,
         review_task_stats=review_task_stats,
+        review_capability_stats=review_capability_stats,
         policy_count=policy_count,
         bank_count=bank_count,
         repository=repository,
@@ -1361,6 +1497,26 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return raw if isinstance(raw, dict) else {}
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, number)
+
+
+def _non_negative_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, number)
 
 
 def _string_list(value: object) -> list[str]:

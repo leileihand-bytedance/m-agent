@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 import json
 from pathlib import Path
 import re
@@ -19,6 +20,8 @@ from app.platform.task_execution import (
     build_idempotency_key,
 )
 from app.platform.task_status import update_task_status, write_task_status
+from app.review.capabilities import review_capability_for_task_type
+from app.review.bot_logging import review_log_context
 
 
 GENERAL_REVIEW_TASK_TYPE = "review_general_docx"
@@ -115,6 +118,19 @@ ReviewProcessor = Callable[[GeneralReviewWorkspace], Awaitable[PreparedReviewDel
 TextSender = Callable[[str, str], Awaitable[bool]]
 AttachmentSender = Callable[[str, Path, Path], Awaitable[bool]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
+
+
+def _with_review_log_context(handler):
+    @wraps(handler)
+    async def wrapped(self, task: TaskRecord):
+        try:
+            capability = review_capability_for_task_type(task.task_type)
+        except ValueError:
+            return await handler(self, task)
+        with review_log_context(capability.id, task.task_id):
+            return await handler(self, task)
+
+    return wrapped
 
 
 class GeneralReviewTaskService:
@@ -275,6 +291,7 @@ class GeneralReviewTaskService:
         )
         return ReviewTaskSubmission(task=task, created=True)
 
+    @_with_review_log_context
     async def handle(self, task: TaskRecord) -> TaskHandlerResult:
         try:
             workspace = self._workspace_from_task(task)
@@ -292,14 +309,29 @@ class GeneralReviewTaskService:
             )
             raise SafeTaskError("invalid_task_checkpoint", retryable=False) from exc
         if checkpoint["processing_status"] != "completed":
+            update_task_status(
+                workspace.task_dir,
+                processing_status="processing",
+                source="review_task_processing",
+            )
             try:
                 prepared = await self._processor(workspace)
                 checkpoint = self._processed_checkpoint(workspace, prepared)
                 self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    processing_status="completed",
+                    source="review_task_processing",
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 retryable = task.attempts < task.max_attempts
+                update_task_status(
+                    workspace.task_dir,
+                    processing_status="queued" if retryable else "failed",
+                    source="review_task_processing",
+                )
                 if not retryable:
                     await self._notify_failure(
                         task.user_id,
@@ -582,6 +614,7 @@ class GeneralReviewTaskService:
         filename: str,
         document_type: str,
     ) -> None:
+        capability = review_capability_for_task_type(task.task_type)
         meta_path = task_dir / "meta.json"
         temporary = task_dir / f".meta.{uuid4().hex}.tmp"
         temporary.write_text(
@@ -589,6 +622,8 @@ class GeneralReviewTaskService:
                 {
                     "task_id": task.task_id,
                     "task_type": task.task_type,
+                    "capability_id": capability.id,
+                    "capability_name": capability.name,
                     "original_filename": filename,
                     "sender_userid": task.user_id,
                     "message_id": "",

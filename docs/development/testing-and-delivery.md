@@ -86,7 +86,7 @@ uv run --locked pytest tests/test_platform_data_paths.py tests/test_runtime_data
 修改审核日志切分、文件命名或日志配置时，至少运行：
 
 ```bash
-uv run --locked pytest tests/test_bot_logging.py tests/test_review_bot.py -v
+uv run --locked pytest tests/test_bot_logging.py tests/test_review_capabilities.py tests/test_review_task_execution.py tests/test_review_bot.py -v
 ```
 
 重点验证按天切换、单文件大小分片、系统日志去重和用户文件句柄上限。
@@ -98,7 +98,7 @@ uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -
 uv run --locked python scripts/project_docs.py check
 ```
 
-重点验证五层架构完整性、关系端点全部属于已登记能力、仓库内每个已安装 Skill 均映射到架构节点、功能状态随 TODO/Skill/代码证据变化、写作/审核/材料润色/运维四个 Bot 的心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核统计兼容 `meta.md`/`meta.json`/`output/report.md`、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
+重点验证五层架构完整性、关系端点全部属于已登记能力、仓库内每个已安装 Skill 均映射到架构节点、功能状态随 TODO/Skill/代码证据变化、写作/审核/材料润色/运维四个 Bot 的心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核总量兼容 `meta.md`/`meta.json`/`output/report.md`、八类审核子能力能按任务类型独立统计处理/交付/耗时/模型调用/问题数量且不读取结果正文、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
 
 ### 1. 平台单元测试
 
@@ -134,7 +134,7 @@ uv run --locked pytest tests/test_review_html.py tests/test_review_task_executio
 uv run --locked pytest tests/test_review_shared_core.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_html.py tests/test_review_halfmonthly.py tests/test_review_multi_file.py tests/test_official_format_review.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_task_execution.py tests/test_review_bot.py -v
 ```
 
-重点验证旧 `Finding` 和输出兼容、专属规则隔离、单点与双边证据、相同输入的模型调用预算、失败和降级指标，以及未迁移审核器不受影响。内参必须保持第一阶段一次有效调用、第二阶段一次有效调用，只有失败或无效JSON才在各阶段预算内重试；半月报保持发现问题后停止、空结果最多调用两次。两类模型候选的 `original_text` 和 `target_text` 都要回填为真实段落证据。任务分支不读取生产 `.env`；真实模型测试只能按生产与测试Bot隔离要求单独执行。
+重点验证旧 `Finding` 和输出兼容、专属规则隔离、单点与双边证据、相同输入的模型调用预算、失败和降级指标，以及未迁移审核器不受影响。还要验证八类审核子能力注册与现有任务类型一一对应，总日志和用户日志继续保留，处理及交付日志进入对应能力文件，成功和失败任务只写不含正文的运行指标。内参必须保持第一阶段一次有效调用、第二阶段一次有效调用，只有失败或无效JSON才在各阶段预算内重试；半月报保持发现问题后停止、空结果最多调用两次。两类模型候选的 `original_text` 和 `target_text` 都要回填为真实段落证据。任务分支不读取生产 `.env`；真实模型测试只能按生产与测试Bot隔离要求单独执行。
 
 修改 PPTX 低级错误审核时，还要运行：
 
@@ -384,7 +384,7 @@ uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_
 uv run --locked pytest tests/test_review_intake.py tests/test_review_multi_file.py tests/test_review_bot.py tests/test_error_marker.py tests/test_official_format_review.py -v
 ```
 
-重点确认：格式审核支持“指令在前”和“文件在前”，且单文件内容审核启动后仍可追加格式审核；文件到达即确认，1 份自动走单文件、连续 2 至 5 份无需前后指令自动走联合审核；联合审核不按上传顺序默认正文，优先结合文件名和正文引用识别，歧义时要求用户指定；待组装文件按入口和用户隔离并可从磁盘恢复；跨文件模型意见必须同时命中两份文件的真实原文；任务归档、摘要和标注文档均保留已确认主文件信息。
+重点确认：格式审核支持“指令在前”和“文件在前”，且单文件内容审核启动后仍可追加格式审核；文件到达即确认，1 份自动走单文件、连续 2 至 5 份无需前后指令自动走联合审核；联合审核不按上传顺序默认正文，优先结合文件名和正文引用识别，歧义时要求用户指定；待组装文件按入口和用户隔离并可从磁盘恢复；跨文件模型意见必须同时命中两份文件的真实原文；任务归档、摘要和标注文档均保留已确认主文件信息。联合审核在模型处理前必须先建立不含正文的任务状态，处理失败和交付失败分别统计，不能只记录成功任务。
 
 ### 修改 Pydantic AI 执行层
 

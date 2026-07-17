@@ -169,6 +169,35 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
     assert "旧格式历史归档 1 个" in html
 
 
+def test_render_dashboard_shows_independent_review_capability_statistics(tmp_path):
+    review_dir = tmp_path / "review" / "2026" / "07" / "task-1"
+    review_dir.mkdir(parents=True)
+    (review_dir / "meta.json").write_text(
+        '{"capability_id":"general_word_review","observability":{"elapsed_ms":1200,"model_calls":2,"model_failures":0,"finding_count":3}}',
+        encoding="utf-8",
+    )
+    (review_dir / "status.json").write_text(
+        '{"processing_status":"completed","delivery_status":"delivered"}',
+        encoding="utf-8",
+    )
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=tmp_path / "skills",
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+            review_tasks_dir=tmp_path / "review",
+        )
+    )
+
+    assert 'href="#review-statistics"' in html
+    assert '<section id="review-statistics">' in html
+    assert "通用 Word 审核" in html
+    assert "模型调用" in html
+    assert "已交付" in html
+
+
 def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(tmp_path):
     skills_dir = tmp_path / "skills"
     _write_skill(skills_dir, "direct_report", enabled=True)

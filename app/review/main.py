@@ -29,12 +29,22 @@ from uuid import uuid4
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from app.review.bot_logging import setup_logging, redirect_stdout_to_logging, log_extra
+from app.review.bot_logging import (
+    log_extra,
+    redirect_stdout_to_logging,
+    review_log_context,
+    setup_logging,
+)
+from app.review.capabilities import (
+    get_review_capability,
+    review_capability_for_task_type,
+)
 from app.review.notification import AdminNotifier, NotificationConfig
 from app.review.user_registry import UserRegistry, RegistrationFlow
 from app.review import load_rules, format_review_result  # noqa: E402
 from app.review.core.metrics import ReviewRunMetrics  # noqa: E402
 from app.review.core.models import Finding, ReviewResult  # noqa: E402
+from app.review.observability import write_review_run_observability  # noqa: E402
 from app.review.rules.profiles import (  # noqa: E402
     GENERAL_DOCX_PROFILE,
     GENERAL_HTML_PROFILE,
@@ -62,7 +72,7 @@ from app.platform.runtime_environment import (  # noqa: E402
     validate_bot_startup,
 )
 from app.platform.gateway.wecom import extract_message_id  # noqa: E402
-from app.platform.task_status import write_task_status  # noqa: E402
+from app.platform.task_status import update_task_status, write_task_status  # noqa: E402
 from app.platform.task_execution import (  # noqa: E402
     ClaimLimits,
     PersistentTaskExecutor,
@@ -541,13 +551,24 @@ def archive_multi_file_review(
     sender: str,
     msgid: str,
     bundle,
+    task_dir: Path | None = None,
+    metrics: ReviewRunMetrics | None = None,
+    elapsed_ms: float = 0.0,
 ) -> tuple[Path, list[Path]]:
     """把一次联合审核保存为一个任务，并生成各文件的标注文档。"""
     from app.review.error_marker import mark_errors_in_docx  # noqa: E402
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    idx = _next_review_index(reviews_dir, date_str)
-    task_dir = reviews_dir / date_str[:4] / date_str[4:6] / f"{date_str}-{idx:03d}"
+    if task_dir is None:
+        task_dir = start_multi_file_review_task(
+            reviews_dir=reviews_dir,
+            sender=sender,
+            msgid=msgid,
+            file_count=len(bundle.documents),
+        )
+    resolved_root = reviews_dir.resolve(strict=False)
+    task_dir = task_dir.resolve(strict=False)
+    if task_dir == resolved_root or not task_dir.is_relative_to(resolved_root):
+        raise ValueError("多文件审核任务目录超出审核根目录")
     input_dir = task_dir / "input"
     output_dir = task_dir / "output"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -602,27 +623,85 @@ def archive_multi_file_review(
         report_sections.extend(f"- {warning}" for warning in bundle.warnings)
         report_sections.append("")
     (output_dir / "report.md").write_text("\n".join(report_sections), encoding="utf-8")
+    meta_path = task_dir / "meta.json"
+    existing_meta: dict[str, object] = {}
+    if meta_path.is_file():
+        try:
+            loaded_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_meta, dict):
+                existing_meta = loaded_meta
+        except (OSError, json.JSONDecodeError):
+            existing_meta = {}
+    existing_meta.update(
+        {
+            "task_id": task_dir.name,
+            "sender_userid": sender,
+            "message_id": msgid,
+            "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "document_type": "multi_file",
+            "file_count": len(bundle.documents),
+            "cross_file_finding_count": bundle.cross_file_finding_count,
+            "primary_file_index": bundle.primary_file_index,
+            "files": file_meta,
+            "warning_count": len(bundle.warnings),
+        }
+    )
+    meta_path.write_text(
+        json.dumps(
+            existing_meta,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    write_review_run_observability(
+        task_dir,
+        capability=get_review_capability("multi_file_review"),
+        metrics=metrics,
+        elapsed_ms=elapsed_ms,
+        finding_count=sum(len(document.result.findings) for document in bundle.documents),
+    )
+    write_task_status(task_dir, processing_status="completed")
+    return task_dir, marked_paths
+
+
+def start_multi_file_review_task(
+    *,
+    reviews_dir: Path,
+    sender: str,
+    msgid: str,
+    file_count: int,
+) -> Path:
+    """Create a content-free task record before multi-file processing starts."""
+    now = datetime.now().astimezone()
+    task_dir = reviews_dir / f"{now:%Y}" / f"{now:%m}" / f"multi-{uuid4().hex}"
+    task_dir.mkdir(parents=True, exist_ok=False)
+    capability = get_review_capability("multi_file_review")
     (task_dir / "meta.json").write_text(
         json.dumps(
             {
                 "task_id": task_dir.name,
+                "capability_id": capability.id,
+                "capability_name": capability.name,
                 "sender_userid": sender,
                 "message_id": msgid,
-                "reviewed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "document_type": "multi_file",
-                "file_count": len(bundle.documents),
-                "cross_file_finding_count": bundle.cross_file_finding_count,
-                "primary_file_index": bundle.primary_file_index,
-                "files": file_meta,
-                "warning_count": len(bundle.warnings),
+                "queued_at": now.isoformat(timespec="seconds"),
+                "document_type": capability.document_type,
+                "file_count": max(0, int(file_count)),
+                "queue_mode": "legacy_multi_file",
             },
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
-    write_task_status(task_dir, processing_status="completed")
-    return task_dir, marked_paths
+    write_task_status(
+        task_dir,
+        processing_status="processing",
+        delivery_status="unknown",
+        source="review_multi_file_processing",
+    )
+    return task_dir
 
 
 def build_multi_file_review_reply(bundle, *, marked_file_count: int) -> str:
@@ -956,6 +1035,8 @@ async def _review_text(
 async def _review_text_result(
     text: str,
     config: ReviewConfig,
+    *,
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[ReviewResult, list[str]]:
     """对纯文字做通用审核,返回结构化结果和段落."""
     from app.review.general_reviewer import review_general  # noqa: E402
@@ -986,6 +1067,7 @@ async def _review_text_result(
         paragraphs,
         general_rules_text,
         "文字消息",
+        metrics=metrics,
         profile=GENERAL_TEXT_PROFILE,
     )
     return result, paragraphs
@@ -1074,13 +1156,71 @@ async def _process_queued_single_review(
     neican_rules_text: str,
 ) -> PreparedReviewDelivery:
     """执行一项已冻结输入的审核，并在任务目录内准备唯一交付结果。"""
+    capability = review_capability_for_task_type(workspace.task_type)
+    metrics = ReviewRunMetrics()
+    started_at = perf_counter()
+    with review_log_context(capability.id, workspace.task_id):
+        try:
+            delivery = await _process_queued_single_review_inner(
+                workspace,
+                config=config,
+                neican_rules_text=neican_rules_text,
+                metrics=metrics,
+            )
+        except Exception:
+            write_review_run_observability(
+                workspace.task_dir,
+                capability=capability,
+                metrics=metrics,
+                elapsed_ms=(perf_counter() - started_at) * 1000,
+                finding_count=metrics.finding_count,
+            )
+            logger.exception(
+                "审核子能力执行失败: capability=%s task_id=%s",
+                capability.id,
+                workspace.task_id,
+                extra=log_extra(workspace.sender_userid, workspace.sender_name),
+            )
+            raise
+        elapsed_ms = (perf_counter() - started_at) * 1000
+        write_review_run_observability(
+            workspace.task_dir,
+            capability=capability,
+            metrics=metrics,
+            elapsed_ms=elapsed_ms,
+            finding_count=metrics.finding_count,
+        )
+        logger.info(
+            "审核子能力执行完成: capability=%s elapsed_ms=%.1f findings=%d "
+            "model_calls=%d model_failures=%d degraded=%s task_id=%s",
+            capability.id,
+            elapsed_ms,
+            metrics.finding_count,
+            metrics.model_calls,
+            metrics.model_failures,
+            metrics.degraded_stages,
+            workspace.task_id,
+            extra=log_extra(workspace.sender_userid, workspace.sender_name),
+        )
+        return delivery
+
+
+async def _process_queued_single_review_inner(
+    workspace: GeneralReviewWorkspace,
+    *,
+    config: ReviewConfig,
+    neican_rules_text: str,
+    metrics: ReviewRunMetrics,
+) -> PreparedReviewDelivery:
     if workspace.task_type == PPT_REVIEW_TASK_TYPE:
         from app.review.ppt import format_ppt_review_messages, review_pptx  # noqa: E402
 
         result = await review_pptx(
             workspace.input_file,
             task_dir=workspace.task_dir,
+            metrics=metrics,
         )
+        metrics.set_finding_count(len(result.findings))
         output_dir = workspace.task_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         result_path = output_dir / "result.json"
@@ -1098,7 +1238,8 @@ async def _process_queued_single_review(
     doc_type = _document_type_for_review_task_type(workspace.task_type)
     if workspace.task_type == GENERAL_TEXT_REVIEW_TASK_TYPE:
         content = await asyncio.to_thread(workspace.input_file.read_text, encoding="utf-8")
-        result, paragraphs = await _review_text_result(content, config)
+        result, paragraphs = await _review_text_result(content, config, metrics=metrics)
+        metrics.set_finding_count(len(result.findings))
         await asyncio.to_thread(
             save_review_to_directory,
             review_dir=workspace.task_dir,
@@ -1141,11 +1282,13 @@ async def _process_queued_single_review(
             parsed_html.paragraphs,
             load_rules("app/review/rules_general.md"),
             workspace.filename,
+            metrics=metrics,
             whole_document_logic_min_chars=(
                 0 if len(parsed_html.paragraphs) >= 2 else 200
             ),
             profile=GENERAL_HTML_PROFILE,
         )
+        metrics.set_finding_count(len(result.findings))
         file_bytes = await asyncio.to_thread(workspace.input_file.read_bytes)
         await asyncio.to_thread(
             save_review_to_directory,
@@ -1183,12 +1326,12 @@ async def _process_queued_single_review(
             parsed.paragraphs,
             load_rules("app/review/rules_general.md"),
             workspace.filename,
+            metrics=metrics,
             profile=GENERAL_DOCX_PROFILE,
         )
     elif doc_type == DocumentType.HALF_MONTHLY:
         from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
 
-        metrics = ReviewRunMetrics()
         result = await review_halfmonthly(
             parsed.paragraphs,
             load_rules("app/review/rules_halfmonthly.md"),
@@ -1217,7 +1360,6 @@ async def _process_queued_single_review(
     else:
         from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
 
-        metrics = ReviewRunMetrics()
         phase1_result, phase2_task, timings = await _start_neican_review(
             phase1_runner=review_phase1,
             phase2_runner=review_phase2,
@@ -1249,6 +1391,7 @@ async def _process_queued_single_review(
             extra=log_extra(workspace.sender_userid, workspace.sender_name),
         )
 
+    metrics.set_finding_count(len(result.findings))
     file_bytes = await asyncio.to_thread(workspace.input_file.read_bytes)
     await asyncio.to_thread(
         save_review_to_directory,
@@ -1789,66 +1932,121 @@ async def run_review_bot(config: ReviewConfig) -> None:
 
     async def run_multi_file_decision(frame, sender: str, decision) -> None:
         try:
-            await ws_client.reply_stream(
-                frame,
-                generate_req_id("review-multi"),
-                f"已收到 {len(decision.files)} 份文件，正在逐份审核并核对正文与附件，请稍等……",
-                True,
-            )
-            from app.review.multi_file_reviewer import review_multiple_docx  # noqa: E402
-
-            bundle = await review_multiple_docx(
-                decision.files,
-                general_rules_text=load_rules("app/review/rules_general.md"),
-                neican_rules_text=rules_text,
-                halfmonthly_rules_text=load_rules("app/review/rules_halfmonthly.md"),
-                primary_file_index=decision.primary_file_index,
-                instructions=decision.instructions,
-            )
-            task_dir, marked_paths = archive_multi_file_review(
+            task_dir = start_multi_file_review_task(
                 reviews_dir=config.reviews_dir,
                 sender=sender,
                 msgid=extract_message_id(frame),
-                bundle=bundle,
+                file_count=len(decision.files),
             )
-            logger.info(
-                "多文件联合审核完成: %d 份文件, %d 个跨文件问题, 存档: %s",
-                len(bundle.documents),
-                bundle.cross_file_finding_count,
-                task_dir,
-                extra=log_extra(sender, registry.get_name(sender) or sender),
-            )
-            await send_text_result(
-                frame,
-                build_multi_file_review_reply(bundle, marked_file_count=len(marked_paths)),
-                prefix="review-multi-done",
-                sender=sender,
-                label="多文件联合审核摘要",
-            )
-            for path in marked_paths:
-                await send_review_file(
-                    frame,
-                    path,
-                    sender=sender,
-                    label=f"联合审核文档 {path.name}",
-                )
         except Exception as exc:
             logger.exception(
-                "多文件联合审核失败 from %s",
+                "多文件联合审核任务创建失败 from %s",
                 sender,
                 exc_info=exc,
                 extra=log_extra(sender, registry.get_name(sender) or sender),
             )
             filenames = "、".join(file.filename for file in decision.files)
-            await notifier.notify_file_review_error(sender, filenames, "多文件联合审核", exc)
+            await notifier.notify_file_review_error(sender, filenames, "多文件联合审核受理", exc)
             await ws_client.reply_stream(
                 frame,
                 generate_req_id("review-err"),
-                _build_processing_failure_user_reply("多文件联合审核", exc),
+                _build_processing_failure_user_reply("多文件联合审核受理", exc),
                 True,
             )
-        finally:
             review_intake_store.cleanup_files(decision.files)
+            return
+        capability = get_review_capability("multi_file_review")
+        metrics = ReviewRunMetrics()
+        started_at = perf_counter()
+        processing_completed = False
+        with review_log_context(capability.id, task_dir.name):
+            try:
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-multi"),
+                    f"已收到 {len(decision.files)} 份文件，正在逐份审核并核对正文与附件，请稍等……",
+                    True,
+                )
+                from app.review.multi_file_reviewer import review_multiple_docx  # noqa: E402
+
+                bundle = await review_multiple_docx(
+                    decision.files,
+                    general_rules_text=load_rules("app/review/rules_general.md"),
+                    neican_rules_text=rules_text,
+                    halfmonthly_rules_text=load_rules("app/review/rules_halfmonthly.md"),
+                    primary_file_index=decision.primary_file_index,
+                    instructions=decision.instructions,
+                    metrics=metrics,
+                )
+                metrics.set_finding_count(
+                    sum(len(document.result.findings) for document in bundle.documents)
+                )
+                task_dir, marked_paths = archive_multi_file_review(
+                    reviews_dir=config.reviews_dir,
+                    sender=sender,
+                    msgid=extract_message_id(frame),
+                    bundle=bundle,
+                    task_dir=task_dir,
+                    metrics=metrics,
+                    elapsed_ms=(perf_counter() - started_at) * 1000,
+                )
+                processing_completed = True
+                logger.info(
+                    "多文件联合审核完成: %d 份文件, %d 个跨文件问题, 存档: %s",
+                    len(bundle.documents),
+                    bundle.cross_file_finding_count,
+                    task_dir,
+                    extra=log_extra(sender, registry.get_name(sender) or sender),
+                )
+                await send_text_result(
+                    frame,
+                    build_multi_file_review_reply(bundle, marked_file_count=len(marked_paths)),
+                    prefix="review-multi-done",
+                    sender=sender,
+                    label="多文件联合审核摘要",
+                )
+                for path in marked_paths:
+                    await send_review_file(
+                        frame,
+                        path,
+                        sender=sender,
+                        label=f"联合审核文档 {path.name}",
+                    )
+                update_task_status(
+                    task_dir,
+                    delivery_status="delivered",
+                    source="review_multi_file_delivery",
+                )
+            except Exception as exc:
+                write_review_run_observability(
+                    task_dir,
+                    capability=capability,
+                    metrics=metrics,
+                    elapsed_ms=(perf_counter() - started_at) * 1000,
+                    finding_count=metrics.finding_count,
+                )
+                update_task_status(
+                    task_dir,
+                    processing_status="completed" if processing_completed else "failed",
+                    delivery_status="failed" if processing_completed else "unknown",
+                    source="review_multi_file_failure",
+                )
+                logger.exception(
+                    "多文件联合审核失败 from %s",
+                    sender,
+                    exc_info=exc,
+                    extra=log_extra(sender, registry.get_name(sender) or sender),
+                )
+                filenames = "、".join(file.filename for file in decision.files)
+                await notifier.notify_file_review_error(sender, filenames, "多文件联合审核", exc)
+                await ws_client.reply_stream(
+                    frame,
+                    generate_req_id("review-err"),
+                    _build_processing_failure_user_reply("多文件联合审核", exc),
+                    True,
+                )
+            finally:
+                review_intake_store.cleanup_files(decision.files)
 
     async def process_queued_review(
         workspace: GeneralReviewWorkspace,

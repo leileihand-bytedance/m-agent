@@ -10,6 +10,7 @@
 - 执行通用、内参、半月报、公文格式、HTML、PPTX 和联合审核。
 - 生成审核消息、报告和标记 Word。
 - 通过公共任务执行器、附件交付、状态索引和运维事件完成交付。
+- 对外仍作为一个审核能力运行；内部八类审核使用稳定子能力 ID，分别记录日志、任务状态和运行指标。
 
 ## 主要代码
 
@@ -17,6 +18,8 @@
 app/review/
 ├── main.py                     # 企业微信入口和任务分流
 ├── task_execution.py           # 审核持久任务适配
+├── capabilities.py             # 八类审核子能力注册表和任务类型映射
+├── observability.py            # 不含正文的任务运行指标
 ├── intake.py                   # 审核材料和操作组装
 ├── core/                       # 共享问题、模型运行、证据、去重和指标
 ├── rules/                      # 规则目录和各审核类型静态profile
@@ -31,6 +34,8 @@ app/review/
 ├── output_formatter.py         # 用户可见审核消息
 └── bot_logging.py              # 按天和大小分片日志
 ```
+
+当前八类子能力为：通用文字、通用 Word、静态 HTML、内参、半月报、公文格式、PPTX 和多文件联合审核。子能力注册只负责稳定身份、日志和统计边界，不改变用户意图识别，也不把专属规则合并到同一提示词。
 
 内参审核静态规则当前位于 `app/data/rules.md`。通用语义规则文字位于 `rules_general.md`，规则ID、规则族、证据和定位政策统一登记在 `rules/catalog.py`；profile只选择规则，不复制完整规则或提示词。
 
@@ -65,7 +70,10 @@ M-Agent-Files/tasks/review/YYYY/MM/<job_id>/
 M-Agent-Files/runtime/intake/review/
 M-Agent-Files/runtime/task-execution/
 M-Agent-Files/runtime/logs/
+M-Agent-Files/runtime/logs/review-capabilities/<capability_id>/
 ```
+
+审核总日志和按用户日志继续保留；进入具体审核任务后，同一条记录还会写入对应子能力日志，并带 `capability_id` 和 `task_id`。每个当前任务的 `meta.json` 只增加耗时、模型调用/失败、阶段耗时、降级阶段和问题数量等不含正文的 `observability` 字段。管理台按八类子能力汇总处理、交付、耗时、模型调用和问题数量；历史任务能根据已有任务类型或文档类型归类，无法可靠归类的旧记录只保留在审核总量中。
 
 ## 技术边界
 
@@ -74,6 +82,7 @@ M-Agent-Files/runtime/logs/
 - Word 标记必须命中原文，模型伪造的证据和位置不能进入结果。
 - 用户侧只收到简洁结果和必要的处理编号；内部路径、堆栈和详细异常进入运维事件。
 - 单项审核已经使用持久任务；多文件联合审核仍保留独立路径。
+- 多文件联合审核尚未接入 SQLite 持久执行器，但会在处理开始前建立内容为空的任务记录；成功、处理失败和交付失败都进入模块日志与统计。
 - 共享核心不包含文种判断；结构敏感和类型专属规则必须由静态profile隔离，不能因为规则名称相近而全局启用。
 
 ## 测试

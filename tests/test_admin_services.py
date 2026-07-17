@@ -17,9 +17,71 @@ from app.admin.services import (  # noqa: E402
     list_todos,
     set_skill_enabled,
     set_user_skills,
+    summarize_review_capabilities,
     summarize_review_tasks,
     summarize_writing_tasks,
 )
+
+
+def test_review_capability_statistics_are_independent_and_include_delivery(tmp_path):
+    root = tmp_path / "review"
+    word_task = root / "2026" / "07" / "word-task"
+    ppt_task = root / "2026" / "07" / "ppt-task"
+    for task_dir in (word_task, ppt_task):
+        task_dir.mkdir(parents=True)
+
+    (word_task / "meta.json").write_text(
+        json.dumps(
+            {
+                "capability_id": "general_word_review",
+                "observability": {
+                    "elapsed_ms": 2500,
+                    "model_calls": 3,
+                    "model_failures": 1,
+                    "finding_count": 4,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (word_task / "status.json").write_text(
+        json.dumps(
+            {"processing_status": "completed", "delivery_status": "delivered"}
+        ),
+        encoding="utf-8",
+    )
+    (ppt_task / "meta.json").write_text(
+        json.dumps(
+            {
+                "task_type": "review_pptx",
+                "observability": {
+                    "elapsed_ms": 1000,
+                    "model_calls": 2,
+                    "model_failures": 0,
+                    "finding_count": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ppt_task / "status.json").write_text(
+        json.dumps({"processing_status": "failed", "delivery_status": "failed"}),
+        encoding="utf-8",
+    )
+
+    by_id = {item.capability_id: item for item in summarize_review_capabilities(root)}
+
+    assert len(by_id) == 8
+    assert by_id["general_word_review"].total == 1
+    assert by_id["general_word_review"].completed == 1
+    assert by_id["general_word_review"].delivered == 1
+    assert by_id["general_word_review"].average_elapsed_ms == 2500
+    assert by_id["general_word_review"].model_calls == 3
+    assert by_id["general_word_review"].model_failures == 1
+    assert by_id["general_word_review"].finding_count == 4
+    assert by_id["ppt_review"].failed == 1
+    assert by_id["ppt_review"].delivery_failed == 1
+    assert by_id["general_text_review"].total == 0
 
 
 def _write_skill(root: Path, skill_id: str, *, enabled: bool) -> None:
@@ -518,11 +580,22 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["shenyinxie_news"].status == "optimizing"
     assert capabilities["internal_weekly"].status == "optimizing"
     assert capabilities["html_review"].status == "stable"
-    assert capabilities["shared_review_core"].status == "planned"
+    assert capabilities["shared_review_core"].status == "optimizing"
     assert capabilities["unified_entry"].status == "paused"
     assert capabilities["official_format_review"].status == "stable"
     assert capabilities["ppt_review"].status == "optimizing"
     assert capabilities["multi_file_review"].status == "optimizing"
+    assert {
+        "general_text_review",
+        "general_word_review",
+        "html_review",
+        "neican_review",
+        "halfmonthly_review",
+        "official_format_review",
+        "ppt_review",
+        "multi_file_review",
+    }.issubset(capabilities)
+    assert "general_review" not in capabilities
     assert capabilities["attachment_delivery"].status == "building"
     assert capabilities["task_execution"].status == "building"
     assert overview.capability_status_counts["building"] >= 1
@@ -598,14 +671,14 @@ def test_project_overview_architecture_relations_only_reference_known_capabiliti
     )
     assert any(
         relation.source_id == "html_review"
-        and relation.target_id == "general_review"
+        and relation.target_id == "general_word_review"
         and relation.label == "复用通用规则"
         for relation in overview.architecture_relations
     )
     assert any(
         relation.source_id == "shared_review_core"
-        and relation.target_id == "general_review"
-        and relation.label == "规划统一"
+        and relation.target_id == "general_word_review"
+        and relation.label == "复用核心"
         for relation in overview.architecture_relations
     )
     assert any(

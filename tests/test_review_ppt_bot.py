@@ -13,6 +13,7 @@ from app.review.main import (
     is_pptx_filename,
     is_supported_review_filename,
 )
+from app.review.core.metrics import ReviewRunMetrics
 from app.review.ppt.models import PptFinding, PptReviewResult
 from app.review.task_execution import (
     PPT_REVIEW_TASK_TYPE,
@@ -38,8 +39,15 @@ def test_queued_ppt_review_uses_independent_processor_and_returns_text_parts(
 
     calls: list[tuple[Path, Path]] = []
 
-    async def fake_review_pptx(path: Path, *, task_dir: Path):
+    async def fake_review_pptx(
+        path: Path,
+        *,
+        task_dir: Path,
+        metrics: ReviewRunMetrics | None = None,
+    ):
         calls.append((path, task_dir))
+        assert isinstance(metrics, ReviewRunMetrics)
+        metrics.record_model_call("ppt_language")
         return PptReviewResult(
             filename=path.name,
             page_count=3,
@@ -101,3 +109,7 @@ def test_queued_ppt_review_uses_independent_processor_and_returns_text_parts(
     saved = json.loads((task_dir / "output" / "result.json").read_text(encoding="utf-8"))
     assert saved["filename"] == "经营汇报.pptx"
     assert saved["findings"][0]["target_text"] == "持续不断提升"
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["capability_id"] == "ppt_review"
+    assert meta["observability"]["model_calls"] == 1
+    assert meta["observability"]["finding_count"] == 1

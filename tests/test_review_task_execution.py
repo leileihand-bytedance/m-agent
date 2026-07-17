@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 import json
 from pathlib import Path
+from datetime import datetime
 
 import pytest
 
@@ -25,6 +26,7 @@ from app.review.task_execution import (
     GeneralReviewTaskService,
     PreparedReviewDelivery,
 )
+from app.review.bot_logging import log_extra, setup_logging
 
 
 def _service(
@@ -104,6 +106,51 @@ def test_general_review_submission_is_persistent_and_idempotent(tmp_path: Path):
     assert status["processing_status"] == "queued"
     meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
     assert meta["task_type"] == "review_general_docx"
+    assert meta["capability_id"] == "general_word_review"
+    assert meta["capability_name"] == "通用 Word 审核"
+
+
+def test_single_review_delivery_logs_keep_capability_and_task_context(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    logger = setup_logging(tmp_path / "logs")
+
+    async def processor(_workspace):
+        logger.info("processing", extra=log_extra("user-1", "User One"))
+        return PreparedReviewDelivery.text("审核完成。")
+
+    async def text_sender(_recipient: str, _text: str) -> bool:
+        logger.info("delivery", extra=log_extra("user-1", "User One"))
+        return True
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=text_sender,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-context",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+
+    asyncio.run(service.handle(submission.task))
+
+    now = datetime.now()
+    capability_log = (
+        tmp_path
+        / "logs"
+        / "review-capabilities"
+        / "general_word_review"
+        / f"{now:%Y-%m-%d}.log"
+    )
+    content = capability_log.read_text(encoding="utf-8")
+    assert "processing" in content
+    assert "delivery" in content
+    assert f"capability=general_word_review|task={submission.task.task_id}" in content
 
 
 def test_ppt_submission_freezes_single_pptx_outside_sqlite_payload(tmp_path: Path):
@@ -455,6 +502,13 @@ def test_completed_general_review_is_not_processed_or_delivered_twice(tmp_path: 
     )
     assert checkpoint["processing_status"] == "completed"
     assert checkpoint["delivery_status"] == "delivered"
+    status = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status["processing_status"] == "completed"
+    assert status["delivery_status"] == "delivered"
     meta = json.loads(
         (Path(str(submission.task.payload["task_dir"])) / "meta.json").read_text(
             encoding="utf-8"

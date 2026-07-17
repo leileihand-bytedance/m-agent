@@ -15,14 +15,23 @@ import logging
 import re
 import sys
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .capabilities import REVIEW_CAPABILITIES
+
 
 DEFAULT_LOG_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_OPEN_USER_HANDLERS = 64
+_REVIEW_CAPABILITY_IDS = frozenset(capability.id for capability in REVIEW_CAPABILITIES)
+_LOG_CONTEXT: ContextVar[tuple[str, str]] = ContextVar(
+    "review_log_context",
+    default=("unscoped", "unscoped"),
+)
 
 
 @dataclass(frozen=True)
@@ -175,6 +184,45 @@ class _UserDailySizeFileHandler(logging.Handler):
         super().close()
 
 
+class _CapabilityDailySizeFileHandler(logging.Handler):
+    """Route scoped records to one daily log per review sub-capability."""
+
+    def __init__(
+        self,
+        logs_dir: Path,
+        *,
+        max_bytes: int = DEFAULT_LOG_MAX_BYTES,
+        now_provider: Callable[[], datetime] | None = None,
+    ) -> None:
+        super().__init__()
+        self.logs_dir = logs_dir
+        self.max_bytes = max(1, int(max_bytes))
+        self._now_provider = now_provider or datetime.now
+        self._handlers: dict[str, _DailySizeFileHandler] = {}
+
+    def emit(self, record: logging.LogRecord) -> None:
+        capability_id = str(getattr(record, "capability_id", "") or "")
+        if capability_id not in _REVIEW_CAPABILITY_IDS:
+            return
+        handler = self._handlers.get(capability_id)
+        if handler is None:
+            handler = _DailySizeFileHandler(
+                self.logs_dir / "review-capabilities" / capability_id,
+                "{year}-{month:02d}-{day:02d}.log",
+                max_bytes=self.max_bytes,
+                now_provider=self._now_provider,
+            )
+            handler.setFormatter(self.formatter)
+            self._handlers[capability_id] = handler
+        handler.emit(record)
+
+    def close(self) -> None:
+        for handler in self._handlers.values():
+            handler.close()
+        self._handlers.clear()
+        super().close()
+
+
 def _safe_user_dir_name(userid: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(userid or "unknown")).strip(".")
     if not cleaned or cleaned in {".", ".."}:
@@ -190,6 +238,11 @@ class _UserContextFilter(logging.Filter):
             record.userid = "system"
         if not hasattr(record, "english_name"):
             record.english_name = record.userid
+        capability_id, task_id = _LOG_CONTEXT.get()
+        if not hasattr(record, "capability_id"):
+            record.capability_id = capability_id
+        if not hasattr(record, "task_id"):
+            record.task_id = task_id
         return True
 
 
@@ -199,7 +252,11 @@ def _make_formatter() -> logging.Formatter:
     格式: [2026-07-07 10:30:00] [INFO] [user=test-user|userid=xxx] message
     """
     return logging.Formatter(
-        fmt="[%(asctime)s] [%(levelname)s] [user=%(english_name)s|userid=%(userid)s] %(message)s",
+        fmt=(
+            "[%(asctime)s] [%(levelname)s] "
+            "[user=%(english_name)s|userid=%(userid)s] "
+            "[capability=%(capability_id)s|task=%(task_id)s] %(message)s"
+        ),
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -226,6 +283,7 @@ def setup_logging(
     for handler in logger.handlers:
         handler.close()
     logger.handlers.clear()
+    logger.filters.clear()
 
     # 补齐 user 字段
     logger.addFilter(_UserContextFilter())
@@ -246,7 +304,12 @@ def setup_logging(
     user_handler.setFormatter(formatter)
     logger.addHandler(user_handler)
 
-    # 3. 控制台输出(调试用)
+    # 3. 子能力日志: 只接收绑定了审核能力上下文的记录
+    capability_handler = _CapabilityDailySizeFileHandler(logs_dir, max_bytes=max_bytes)
+    capability_handler.setFormatter(formatter)
+    logger.addHandler(capability_handler)
+
+    # 4. 控制台输出(调试用)
     if console_output:
         console = logging.StreamHandler(sys.stdout)
         console.setFormatter(formatter)
@@ -261,6 +324,18 @@ def log_extra(userid: str = "unknown", english_name: str | None = None) -> dict[
         "userid": userid or "unknown",
         "english_name": english_name or userid or "unknown",
     }
+
+
+@contextmanager
+def review_log_context(capability_id: str, task_id: str):
+    """Bind all logs in one review run to its capability and task."""
+    if capability_id not in _REVIEW_CAPABILITY_IDS:
+        raise ValueError(f"未登记的审核子能力：{capability_id}")
+    token = _LOG_CONTEXT.set((capability_id, task_id or "unknown"))
+    try:
+        yield
+    finally:
+        _LOG_CONTEXT.reset(token)
 
 
 def redirect_stdout_to_logging(logger: logging.Logger) -> None:

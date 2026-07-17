@@ -44,6 +44,7 @@ from app.review.main import (  # noqa: E402
     _summarize_delivery_error,
     RecentSubmissionTracker,
     archive_multi_file_review,
+    start_multi_file_review_task,
     build_multi_file_review_reply,
     _build_file_ack,
     _extract_primary_inference_texts,
@@ -167,11 +168,31 @@ def test_archive_multi_file_review_creates_one_task_and_marked_outputs(tmp_path:
     assert meta["primary_file_index"] == 0
     assert meta["files"][0]["is_primary"] is True
     assert meta["files"][1]["is_primary"] is False
+    assert meta["capability_id"] == "multi_file_review"
+    assert meta["observability"]["model_calls"] == 0
+    assert meta["observability"]["finding_count"] == 1
     status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
     assert status["processing_status"] == "completed"
     assert status["delivery_status"] == "unknown"
     report = (task_dir / "output" / "report.md").read_text(encoding="utf-8")
     assert "主文件：正文.docx" in report
+
+
+def test_multi_file_task_is_visible_before_processing_completes(tmp_path: Path):
+    task_dir = start_multi_file_review_task(
+        reviews_dir=tmp_path / "reviews",
+        sender="user-1",
+        msgid="message-1",
+        file_count=3,
+    )
+
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    status = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+    assert meta["capability_id"] == "multi_file_review"
+    assert meta["file_count"] == 3
+    assert "files" not in meta
+    assert status["processing_status"] == "processing"
+    assert status["delivery_status"] == "unknown"
 
 
 def test_build_multi_file_review_reply_only_summarizes_counts():
@@ -411,12 +432,12 @@ async def test_file_ack_suppresses_redundant_queue_acceptance():
 
 
 @pytest.mark.parametrize(
-    ("task_type", "filename", "engine_name"),
+    ("task_type", "filename", "engine_name", "capability_id"),
     [
-        (GENERAL_REVIEW_TASK_TYPE, "材料.docx", "general"),
-        (HALF_MONTHLY_REVIEW_TASK_TYPE, "信息动态半月报.docx", "halfmonthly"),
-        (NEICAN_REVIEW_TASK_TYPE, "信息内参周报.docx", "neican"),
-        (OFFICIAL_FORMAT_REVIEW_TASK_TYPE, "请示.docx", "official_format"),
+        (GENERAL_REVIEW_TASK_TYPE, "材料.docx", "general", "general_word_review"),
+        (HALF_MONTHLY_REVIEW_TASK_TYPE, "信息动态半月报.docx", "halfmonthly", "halfmonthly_review"),
+        (NEICAN_REVIEW_TASK_TYPE, "信息内参周报.docx", "neican", "neican_review"),
+        (OFFICIAL_FORMAT_REVIEW_TASK_TYPE, "请示.docx", "official_format", "official_format_review"),
     ],
 )
 def test_persistent_single_review_routes_to_existing_engine(
@@ -425,6 +446,7 @@ def test_persistent_single_review_routes_to_existing_engine(
     task_type: str,
     filename: str,
     engine_name: str,
+    capability_id: str,
 ):
     from app.review import general_reviewer, halfmonthly_reviewer, official_format_checker, reviewer
 
@@ -436,6 +458,8 @@ def test_persistent_single_review_routes_to_existing_engine(
     async def fake_general(_paragraphs, _rules, name, **kwargs):
         calls.append("general")
         assert kwargs["profile"].profile_id == "general_docx"
+        assert isinstance(kwargs["metrics"], ReviewRunMetrics)
+        kwargs["metrics"].record_model_call("fake_general")
         return passed_result(name)
 
     async def fake_halfmonthly(_paragraphs, _rules, name, **kwargs):
@@ -512,6 +536,11 @@ def test_persistent_single_review_routes_to_existing_engine(
     else:
         assert calls == [engine_name]
     assert (task_dir / "output" / "report.md").is_file()
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["capability_id"] == capability_id
+    assert meta["observability"]["finding_count"] == 0
+    assert meta["observability"]["elapsed_ms"] >= 0
+    assert meta["observability"]["model_calls"] == (1 if engine_name == "general" else 0)
 
 
 def test_persistent_text_review_uses_snapshotted_text_and_returns_text(
@@ -522,8 +551,15 @@ def test_persistent_text_review_uses_snapshotted_text_and_returns_text(
 
     seen: list[str] = []
 
-    async def fake_text_review(content: str, _config: ReviewConfig):
+    async def fake_text_review(
+        content: str,
+        _config: ReviewConfig,
+        *,
+        metrics: ReviewRunMetrics | None = None,
+    ):
         seen.append(content)
+        assert isinstance(metrics, ReviewRunMetrics)
+        metrics.record_model_call("fake_text")
         return (
             ReviewResult(
                 findings=[],
@@ -576,6 +612,9 @@ def test_persistent_text_review_uses_snapshotted_text_and_returns_text(
     assert delivery.kind == "text"
     assert "未发现低级错误" in delivery.text
     assert (task_dir / "output" / "report.md").is_file()
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["capability_id"] == "general_text_review"
+    assert meta["observability"]["model_calls"] == 1
 
 
 def test_save_review_increments_index():

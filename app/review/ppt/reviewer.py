@@ -6,10 +6,13 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from time import perf_counter
 from typing import Any, cast
 from uuid import uuid4
 
 from app.review.model_config import build_anthropic_client
+from app.review.core.metrics import ReviewRunMetrics
+from app.review.core.model_runtime import create_model_message
 
 from .evidence import (
     dedupe_findings,
@@ -68,9 +71,15 @@ async def review_ppt_document(
     model_runner: PptModelRunner | None = None,
     progress_path: Path | None = None,
     input_digest: str = "",
+    metrics: ReviewRunMetrics | None = None,
 ) -> PptReviewResult:
     """独立审核 PPT 文档；模型候选必须经过原文证据校验。"""
-    runner = model_runner or _build_default_model_runner()
+    if model_runner is None:
+        runner = _build_default_model_runner(metrics=metrics)
+    elif metrics is None:
+        runner = model_runner
+    else:
+        runner = _tracked_model_runner(model_runner, metrics)
     findings = list(check_ppt_rules(document))
     progress = _load_progress(progress_path, input_digest=input_digest)
     stored_batches = cast(dict[str, object], progress["language_batches"])
@@ -126,6 +135,8 @@ async def review_ppt_document(
                 findings.append(finding)
     except Exception:
         consistency_complete = False
+        if metrics is not None:
+            metrics.record_degraded_stage("ppt_consistency")
 
     return PptReviewResult(
         filename=document.filename,
@@ -142,6 +153,7 @@ async def review_pptx(
     *,
     task_dir: Path,
     model_runner: PptModelRunner | None = None,
+    metrics: ReviewRunMetrics | None = None,
 ) -> PptReviewResult:
     document = await asyncio.to_thread(extract_ppt_document, path, task_dir=task_dir)
     input_digest = await asyncio.to_thread(_file_sha256, path)
@@ -150,15 +162,22 @@ async def review_pptx(
         model_runner=model_runner,
         progress_path=task_dir / "work" / "ppt_review_progress.json",
         input_digest=input_digest,
+        metrics=metrics,
     )
 
 
-def _build_default_model_runner() -> PptModelRunner:
+def _build_default_model_runner(
+    metrics: ReviewRunMetrics | None = None,
+) -> PptModelRunner:
     client, model_name = build_anthropic_client()
 
     async def run(_stage: str, prompt: str) -> dict[str, object]:
+        stage_name = "ppt_language" if _stage == "language" else "ppt_consistency"
         response = await asyncio.to_thread(
-            client.messages.create,
+            create_model_message,
+            client,
+            metrics=metrics,
+            stage=stage_name,
             model=model_name,
             max_tokens=4096,
             temperature=0,
@@ -174,6 +193,25 @@ def _build_default_model_runner() -> PptModelRunner:
             if getattr(block, "type", "") == "text"
         )
         return parse_model_payload(text)
+
+    return run
+
+
+def _tracked_model_runner(
+    runner: PptModelRunner,
+    metrics: ReviewRunMetrics,
+) -> PptModelRunner:
+    async def run(stage: str, prompt: str) -> dict[str, object]:
+        stage_name = "ppt_language" if stage == "language" else "ppt_consistency"
+        metrics.record_model_call(stage_name)
+        started_at = perf_counter()
+        try:
+            return await runner(stage, prompt)
+        except Exception:
+            metrics.record_model_failure(stage_name)
+            raise
+        finally:
+            metrics.record_model_elapsed(stage_name, (perf_counter() - started_at) * 1000)
 
     return run
 

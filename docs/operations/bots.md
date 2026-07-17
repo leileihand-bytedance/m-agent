@@ -81,10 +81,11 @@ uv run --locked python -m app.platform.ops.bot
 M-Agent-Files/runtime/ops/heartbeats/   # 服务心跳
 M-Agent-Files/runtime/ops/events/       # 脱敏运维事件
 M-Agent-Files/runtime/logs/             # 系统和用户日志
+M-Agent-Files/runtime/logs/review-capabilities/<capability_id>/  # 审核子能力日志
 M-Agent-Files/runtime/task-execution/   # 持久任务队列和恢复状态
 ```
 
-日志按天并按大小分片。日志可以记录消息、意图、Skill、任务、耗时和错误分类，但不能记录密钥、其他用户材料或不必要的全文。控制台默认不展示用户权限和任务正文。
+日志按天并按大小分片。审核 Bot 总日志和按用户日志继续保留；具体审核任务还按通用文字、通用 Word、HTML、内参、半月报、公文格式、PPTX 和多文件八类子能力分别写日志，记录稳定的能力 ID 和任务 ID。日志可以记录消息、意图、Skill、任务、耗时和错误分类，但不能记录密钥、其他用户材料或不必要的全文。控制台默认不展示用户权限和任务正文。
 
 ## 故障处理顺序
 

@@ -10,6 +10,8 @@ from pathlib import Path
 from app.review.bot_logging import (
     setup_logging,
     log_extra,
+    review_log_context,
+    _CapabilityDailySizeFileHandler,
     _DailySizeFileHandler,
     _UserDailySizeFileHandler,
 )
@@ -130,12 +132,12 @@ def test_user_daily_handler_limits_open_file_handlers(tmp_path: Path):
     assert handler.open_handler_count == 2
 
 
-def test_setup_logging_creates_main_and_user_handlers():
+def test_setup_logging_creates_main_user_and_capability_handlers():
     with tempfile.TemporaryDirectory() as tmpdir:
         logs_dir = Path(tmpdir)
         logger = setup_logging(logs_dir)
 
-        assert len(logger.handlers) == 2
+        assert len(logger.handlers) == 3
 
         now = datetime.now()
         logger.info("main log message", extra=log_extra("system", "system"))
@@ -155,11 +157,36 @@ def test_setup_logging_creates_main_and_user_handlers():
         assert "user log message" in user_content
 
 
+def test_review_log_context_routes_records_to_independent_capability_log(tmp_path: Path):
+    logger = setup_logging(tmp_path)
+
+    with review_log_context("general_word_review", "task-123"):
+        logger.info("开始通用 Word 审核", extra=log_extra("user-1", "Jack"))
+    logger.info("系统心跳", extra=log_extra("system", "system"))
+
+    now = datetime.now()
+    capability_log = (
+        tmp_path
+        / "review-capabilities"
+        / "general_word_review"
+        / f"{now.year}-{now.month:02d}-{now.day:02d}.log"
+    )
+    assert capability_log.exists()
+    content = capability_log.read_text(encoding="utf-8")
+    assert "开始通用 Word 审核" in content
+    assert "capability=general_word_review|task=task-123" in content
+    assert "系统心跳" not in content
+
+
 def test_setup_logging_passes_size_limit_to_file_handlers(tmp_path: Path):
     logger = setup_logging(tmp_path, max_bytes=1234)
 
     main_handler = next(item for item in logger.handlers if isinstance(item, _DailySizeFileHandler))
     user_handler = next(item for item in logger.handlers if isinstance(item, _UserDailySizeFileHandler))
+    capability_handler = next(
+        item for item in logger.handlers if isinstance(item, _CapabilityDailySizeFileHandler)
+    )
 
     assert main_handler.max_bytes == 1234
     assert user_handler.max_bytes == 1234
+    assert capability_handler.max_bytes == 1234

@@ -9,6 +9,7 @@ from docx import Document
 
 from app.platform.models import UploadedFile
 from app.review.document_type import DocumentType
+from app.review.core.metrics import ReviewRunMetrics
 from app.review.multi_file_reviewer import (
     MultiFileSource,
     build_cross_file_prompt,
@@ -198,8 +199,12 @@ async def test_review_multiple_docx_merges_individual_and_cross_file_findings(tm
     _write_docx(attachment_path, ["附件1：换届工作领导小组名单", "会议日期为7月10日。"])
     calls: list[str] = []
 
-    async def fake_general(paragraphs, rules_text, filename):
+    metrics = ReviewRunMetrics()
+
+    async def fake_general(paragraphs, rules_text, filename, *, metrics=None):
         calls.append(filename)
+        assert metrics is not None
+        metrics.record_model_call("fake_individual")
         findings = []
         if filename == "正文.docx":
             findings.append(
@@ -214,8 +219,10 @@ async def test_review_multiple_docx_merges_individual_and_cross_file_findings(tm
             )
         return ReviewResult(findings=findings, total_rules=10, passed_rules=9, filename=filename)
 
-    async def fake_cross(sources, primary_file_index, instructions=()):
+    async def fake_cross(sources, primary_file_index, instructions=(), *, metrics=None):
         assert primary_file_index == 0
+        assert metrics is not None
+        metrics.record_model_call("fake_cross")
         return parse_cross_file_output(
             '{"issues":[{"file_index":0,"paragraph_index":1,"target_text":"7月9日","related_file_index":1,"related_paragraph_index":1,"related_target_text":"7月10日","description":"日期不一致"}]}',
             sources,
@@ -233,6 +240,7 @@ async def test_review_multiple_docx_merges_individual_and_cross_file_findings(tm
         neican_rules_text="neican-rules",
         halfmonthly_rules_text="halfmonthly-rules",
         primary_file_index=0,
+        metrics=metrics,
     )
 
     assert calls == ["正文.docx", "附件1.docx"]
@@ -242,6 +250,7 @@ async def test_review_multiple_docx_merges_individual_and_cross_file_findings(tm
     assert "multi-file-attachment-name-mismatch" in main_rule_ids
     assert "multi-file-logic-inconsistency" in main_rule_ids
     assert bundle.cross_file_finding_count == 2
+    assert metrics.model_calls == 3
 
 
 @pytest.mark.anyio

@@ -12,6 +12,8 @@ import tempfile
 from app.platform.models import UploadedFile
 
 from .core.models import Finding, ReviewResult
+from .core.metrics import ReviewRunMetrics
+from .core.model_runtime import create_model_message
 from .document_type import DocumentType, detect_document_type
 from .general_reviewer import review_general
 from .halfmonthly_reviewer import review_halfmonthly
@@ -410,9 +412,16 @@ def parse_cross_file_output(output: str, sources: list[MultiFileSource]) -> list
     return findings
 
 
-def _call_cross_file_llm(prompt: str, sources: list[MultiFileSource]) -> tuple[list[MultiFileFinding], str | None]:
+def _call_cross_file_llm(
+    prompt: str,
+    sources: list[MultiFileSource],
+    metrics: ReviewRunMetrics | None = None,
+) -> tuple[list[MultiFileFinding], str | None]:
     client, model_name = build_anthropic_client()
-    message = client.messages.create(
+    message = create_model_message(
+        client,
+        metrics=metrics,
+        stage="multi_file_logic",
         model=model_name,
         max_tokens=4096,
         temperature=0,
@@ -432,6 +441,8 @@ async def review_cross_file_semantics(
     sources: list[MultiFileSource],
     primary_file_index: int,
     instructions: tuple[str, ...] = (),
+    *,
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[MultiFileFinding], str | None]:
     prompt = build_cross_file_prompt(
         sources,
@@ -439,16 +450,25 @@ async def review_cross_file_semantics(
         instructions=instructions,
     )
     if prompt is None:
+        if metrics is not None:
+            metrics.record_degraded_stage("multi_file_logic_length_limit")
         return [], "多文件总文字超过10万字，已完成逐文件审核和确定性附件检查，未执行通篇跨文件模型检查"
     errors: list[str] = []
     for _ in range(2):
         try:
-            findings, error = await asyncio.to_thread(_call_cross_file_llm, prompt, sources)
+            findings, error = await asyncio.to_thread(
+                _call_cross_file_llm,
+                prompt,
+                sources,
+                metrics,
+            )
             if error is None:
                 return findings, None
             errors.append(error)
         except Exception as exc:
             errors.append(str(exc))
+    if metrics is not None:
+        metrics.record_degraded_stage("multi_file_logic")
     return [], "; ".join(errors)
 
 
@@ -469,29 +489,35 @@ async def _review_single_source(
     general_rules_text: str,
     neican_rules_text: str,
     halfmonthly_rules_text: str,
+    metrics: ReviewRunMetrics | None = None,
 ) -> MultiFileReviewedDocument:
     doc_type = detect_document_type(source.filename, list(source.paragraphs))
     if doc_type == DocumentType.HALF_MONTHLY:
+        kwargs = {"metrics": metrics} if metrics is not None else {}
         result = await review_halfmonthly(
             list(source.paragraphs),
             halfmonthly_rules_text,
             source.filename,
             numbering=parsed.numbering,
             file_path=source.path,
+            **kwargs,
         )
     elif doc_type == DocumentType.NEI_CAN:
+        kwargs = {"metrics": metrics} if metrics is not None else {}
         phase1, phase2 = await asyncio.gather(
             review_phase1(
                 list(source.paragraphs),
                 neican_rules_text,
                 source.filename,
                 source.path,
+                **kwargs,
             ),
             review_phase2(
                 list(source.paragraphs),
                 neican_rules_text,
                 source.filename,
                 source.path,
+                **kwargs,
             ),
         )
         findings = sorted(
@@ -505,10 +531,12 @@ async def _review_single_source(
             filename=source.filename,
         )
     else:
+        kwargs = {"metrics": metrics} if metrics is not None else {}
         result = await review_general(
             list(source.paragraphs),
             general_rules_text,
             source.filename,
+            **kwargs,
         )
     return MultiFileReviewedDocument(source=source, doc_type=doc_type, result=result)
 
@@ -553,6 +581,7 @@ async def review_multiple_docx(
     halfmonthly_rules_text: str,
     primary_file_index: int,
     instructions: tuple[str, ...] = (),
+    metrics: ReviewRunMetrics | None = None,
 ) -> MultiFileReviewBundle:
     """逐份执行原有审核，再追加跨文件确定性和语义检查。"""
     if len(files) < 2:
@@ -587,11 +616,13 @@ async def review_multiple_docx(
             sources,
             primary_file_index=primary_file_index,
         )
+        semantic_kwargs = {"metrics": metrics} if metrics is not None else {}
         semantic_task = asyncio.create_task(
             review_cross_file_semantics(
                 sources,
                 primary_file_index,
                 instructions,
+                **semantic_kwargs,
             )
         )
         semaphore = asyncio.Semaphore(2)
@@ -604,6 +635,7 @@ async def review_multiple_docx(
                     general_rules_text=general_rules_text,
                     neican_rules_text=neican_rules_text,
                     halfmonthly_rules_text=halfmonthly_rules_text,
+                    metrics=metrics,
                 )
 
         documents = list(await asyncio.gather(*(run_one(source) for source in sources)))
