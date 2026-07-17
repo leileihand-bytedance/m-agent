@@ -77,7 +77,7 @@ uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -
 uv run --locked python scripts/project_docs.py check
 ```
 
-重点验证五层架构完整性、关系端点全部属于已登记能力、功能状态随 TODO/Skill/代码证据变化、Bot 心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核统计兼容 `meta.md`/`meta.json`/`output/report.md`、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
+重点验证五层架构完整性、关系端点全部属于已登记能力、仓库内每个已安装 Skill 均映射到架构节点、功能状态随 TODO/Skill/代码证据变化、写作/审核/材料润色/运维四个 Bot 的心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核统计兼容 `meta.md`/`meta.json`/`output/report.md`、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
 
 ### 1. 平台单元测试
 

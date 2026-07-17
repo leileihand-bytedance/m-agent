@@ -207,6 +207,13 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert "通用底座" in html
     assert "工具与知识库" in html
     assert "运维与数据" in html
+    assert "材料润色 Bot" in html
+    assert "综合调研整合" in html
+    assert "深银协动态" in html
+    assert "静态 HTML 审核" in html
+    assert "审核共享核心" in html
+    assert "单份 PPTX 低级错误审核" in html
+    assert "检查幻灯片文字、逻辑、版式并提供可交付结果" not in html
     assert 'data-capability-status="stable"' in html
     assert 'data-capability-status="building"' in html
     assert 'data-capability-filter="all"' in html

@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.admin.services import (  # noqa: E402
+    _ARCHITECTURE_LAYER_SPECS,
     AdminPaths,
     build_project_overview,
     list_jobs,
@@ -261,6 +262,10 @@ def test_list_service_health_distinguishes_healthy_stale_and_missing(tmp_path):
         json.dumps({"service": "review_bot", "updated_at": "2026-07-13 09:50:00"}),
         encoding="utf-8",
     )
+    (heartbeat_dir / "rewrite_bot.json").write_text(
+        json.dumps({"service": "rewrite_bot", "updated_at": "2026-07-13 09:59:00"}),
+        encoding="utf-8",
+    )
 
     services = list_service_health(
         heartbeat_dir,
@@ -271,8 +276,10 @@ def test_list_service_health_distinguishes_healthy_stale_and_missing(tmp_path):
     assert [(item.service, item.status) for item in services] == [
         ("writing_bot", "healthy"),
         ("review_bot", "stale"),
+        ("rewrite_bot", "healthy"),
         ("ops_bot", "missing"),
     ]
+    assert services[2].name == "材料润色 Bot"
 
 
 def test_list_service_health_treats_malformed_heartbeat_as_missing(tmp_path):
@@ -349,6 +356,10 @@ def test_build_project_overview_uses_runtime_counts_without_reading_content(tmp_
     assert overview.policy_count == 2
     assert overview.bank_count == 1
     assert any(module.name == "审核" and module.next_todo_id == "TODO-201" for module in overview.modules)
+    assert any(
+        module.key == "operations" and "写作、审核、润色、运维共 4 个服务" in module.current_summary
+        for module in overview.modules
+    )
 
 
 def test_project_overview_builds_layered_capability_map_from_real_status_sources(tmp_path):
@@ -356,6 +367,8 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     skills_dir = project_root / "skills"
     _write_skill(skills_dir, "direct_report", enabled=True)
     _write_skill(skills_dir, "rewrite", enabled=False)
+    _write_skill(skills_dir, "research_synthesis", enabled=True)
+    _write_skill(skills_dir, "shenyinxie_news", enabled=True)
     todo_path = project_root / "docs" / "development" / "TODO.md"
     todo_path.parent.mkdir(parents=True)
     todo_path.write_text(
@@ -426,6 +439,30 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
 优先级：P1
 
 归属：底座
+
+### TODO-029：静态 HTML 审核
+
+状态：已完成
+
+优先级：P2
+
+归属：审核
+
+### TODO-030：深银协动态
+
+状态：进行中
+
+优先级：P1
+
+归属：功能区
+
+### TODO-031：共享审核核心
+
+状态：未开始
+
+优先级：P1
+
+归属：审核
     """,
         encoding="utf-8",
     )
@@ -440,6 +477,10 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     heartbeat_dir = tmp_path / "heartbeats"
     heartbeat_dir.mkdir()
     (heartbeat_dir / "writing_bot.json").write_text(
+        json.dumps({"updated_at": "2099-01-01 00:00:00"}),
+        encoding="utf-8",
+    )
+    (heartbeat_dir / "rewrite_bot.json").write_text(
         json.dumps({"updated_at": "2099-01-01 00:00:00"}),
         encoding="utf-8",
     )
@@ -468,13 +509,18 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
         for capability in layer.capabilities
     }
     assert capabilities["writing_bot"].runtime_status == "healthy"
+    assert capabilities["rewrite_bot"].runtime_status == "healthy"
     assert capabilities["direct_report"].status == "optimizing"
     assert capabilities["direct_report"].todo_id == "TODO-001"
     assert capabilities["rewrite"].status == "disabled"
+    assert capabilities["research_synthesis"].status == "optimizing"
+    assert capabilities["shenyinxie_news"].status == "optimizing"
+    assert capabilities["html_review"].status == "stable"
+    assert capabilities["shared_review_core"].status == "planned"
     assert capabilities["unified_entry"].status == "paused"
     assert capabilities["official_format_review"].status == "stable"
-    assert capabilities["ppt_review"].status == "building"
-    assert capabilities["multi_file_review"].status == "building"
+    assert capabilities["ppt_review"].status == "optimizing"
+    assert capabilities["multi_file_review"].status == "optimizing"
     assert capabilities["attachment_delivery"].status == "building"
     assert capabilities["task_execution"].status == "building"
     assert overview.capability_status_counts["building"] >= 1
@@ -524,3 +570,58 @@ def test_project_overview_architecture_relations_only_reference_known_capabiliti
         and relation.label == "提交后台任务"
         for relation in overview.architecture_relations
     )
+    assert any(
+        relation.source_id == "writing_bot"
+        and relation.target_id == "shenyinxie_news"
+        and relation.label == "路由任务"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "rewrite_bot"
+        and relation.target_id == "rewrite"
+        and relation.label == "执行润色"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "review_bot"
+        and relation.target_id == "html_review"
+        and relation.label == "执行审核"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "html_review"
+        and relation.target_id == "general_review"
+        and relation.label == "复用通用规则"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "shared_review_core"
+        and relation.target_id == "general_review"
+        and relation.label == "规划统一"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "web_tools"
+        and relation.target_id == "shenyinxie_news"
+        and relation.label == "检索新闻"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "research_synthesis"
+        and relation.target_id == "attachment_delivery"
+        and relation.label == "回传 Word"
+        for relation in overview.architecture_relations
+    )
+
+
+def test_real_skill_configs_are_all_represented_in_architecture():
+    project_root = Path(__file__).resolve().parent.parent
+    configured_skill_ids = {skill.id for skill in list_skills(project_root / "skills")}
+    represented_skill_ids = {
+        skill_id
+        for layer in _ARCHITECTURE_LAYER_SPECS
+        for capability in layer.capabilities
+        for skill_id in capability.skill_ids
+    }
+
+    assert configured_skill_ids <= represented_skill_ids
