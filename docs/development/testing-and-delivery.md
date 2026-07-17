@@ -113,7 +113,7 @@ uv run --locked pytest tests/test_review_html.py tests/test_review_task_executio
 uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_ppt_formatter.py tests/test_review_ppt_bot.py tests/test_review_task_execution.py tests/test_platform_document_service.py tests/test_review_bot.py -v
 ```
 
-重点验证：只提取任务目录内 `.pptx` 的可编辑文本框、表格和可读图表内容；图片文字和备注不进入审核；序号按对象、段落层级和连续列表分组，小数不当作序号；模型伪造页码、对象或原文会被丢弃；即使模型声称同口径，明确不同年份、时间范围、单位或目标/实际状态也不报跨页矛盾；同一首侧证据与不同第二侧证据不会被错误合并；PPT 包不导入其他业务审核引擎；用户可见问题说明不透传任何模型自由描述，“建议修改、推荐改成、最好写成、宜改成、需要改成、可考虑”等表达均不能进入结果；图表读取失败会显示页码提示；长结果按编号分段；处理中断后已完成模型批次不重复调用，发送完成后不重复发送。自动化通过后仍要用经授权真实 PPT 人工核对误报、漏报、页码、图表读取和企业微信展示。
+重点验证：只提取任务目录内 `.pptx` 的可编辑文本框、表格和可读图表内容；图片文字和备注不进入审核；序号按对象、段落层级和连续列表分组，小数不当作序号；模型伪造页码、对象或原文会被丢弃；即使模型声称同口径，明确不同年份、时间范围、单位或目标/实际状态也不报跨页矛盾；同一首侧证据与不同第二侧证据不会被错误合并；PPT 包不导入其他业务审核引擎；用户可见问题说明不透传任何模型自由描述，“建议修改、推荐改成、最好写成、宜改成、需要改成、可考虑”等表达均不能进入结果；图表读取失败会显示页码提示；长结果按编号分段；常规语言批次不超过约 3000 字符（单个超长对象除外），`stop_reason=max_tokens` 会触发按对象拆半和结果合并，单对象仍超限时必须停止；普通网络或 JSON 错误不能误进拆分分支；处理中断后已完成顶层模型批次不重复调用，发送完成后不重复发送。自动化通过后仍要用经授权真实 PPT 人工核对误报、漏报、页码、图表读取和企业微信展示。
 
 直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
 
@@ -121,7 +121,7 @@ uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_
 uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
-重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖七类单项任务分派、处理与发送检查点、已完成任务不重复审核、单段/多段队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、Word 单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、可见/隐藏/嵌套/未闭合 slide 页码映射、普通 HTML 段落兜底、消息与报告定位、短文数据一致性、正文不进 SQLite 和不生成标记文件。PPT 专项按上文命令覆盖独立规则、双边证据、无建议格式和多段交付。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
+重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖七类单项任务分派、处理与发送检查点、已完成任务不重复审核、单段/多段队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、Word 单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、可见/隐藏/嵌套/未闭合 slide 页码映射、普通 HTML 段落兜底、消息与报告定位、短文数据一致性、正文不进 SQLite 和不生成标记文件。PPT 专项按上文命令覆盖独立规则、双边证据、无建议格式、模型输出超限识别、按对象拆半合并、单对象停止条件和多段交付。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
 
 修改独立材料润色 Bot 或入口级 Skill 白名单时，还要运行：
 

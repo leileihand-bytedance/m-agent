@@ -30,6 +30,11 @@ from .rules import check_ppt_rules
 
 PptModelRunner = Callable[[str, str], Awaitable[dict[str, object]]]
 
+
+class PptModelOutputTruncatedError(ValueError):
+    """模型因输出上限提前停止，返回的结构化结果不完整。"""
+
+
 _PROMPT_DIR = Path(__file__).with_name("prompts")
 _JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(\{.*\})\s*```\s*$", re.DOTALL)
 _LOCAL_CATEGORIES = {
@@ -41,7 +46,7 @@ _LOCAL_CATEGORIES = {
     "sequence",
 }
 _CROSS_CATEGORIES = {"data_inconsistency", "content_inconsistency"}
-_MAX_LANGUAGE_BATCH_CHARS = 6000
+_MAX_LANGUAGE_BATCH_CHARS = 3000
 
 
 def parse_model_payload(text: str) -> dict[str, object]:
@@ -71,17 +76,17 @@ async def review_ppt_document(
     stored_batches = cast(dict[str, object], progress["language_batches"])
 
     language_template = _load_prompt("language.md")
-    for batch_number, batch in enumerate(_language_batches(document), 1):
+    for batch_number, elements in enumerate(_language_batch_groups(document), 1):
+        batch = "\n\n".join(elements)
         batch_key = _stage_key(f"language:{batch_number}", batch)
         stored_payload = stored_batches.get(batch_key)
         if stored_payload is not None:
             payload = _checked_payload(stored_payload)
         else:
-            payload = _checked_payload(
-                await runner(
-                    "language",
-                    f"{language_template}\n\n以下是待审核材料：\n{batch}",
-                )
+            payload = await _run_language_batch(
+                runner,
+                language_template,
+                elements,
             )
             stored_batches[batch_key] = payload
             _write_progress(progress_path, progress)
@@ -157,8 +162,12 @@ def _build_default_model_runner() -> PptModelRunner:
             model=model_name,
             max_tokens=4096,
             temperature=0,
+            thinking={"type": "disabled"},
+            timeout=180.0,
             messages=[{"role": "user", "content": prompt}],
         )
+        if getattr(response, "stop_reason", "") == "max_tokens":
+            raise PptModelOutputTruncatedError("模型输出达到上限")
         text = "".join(
             block.text
             for block in response.content
@@ -250,19 +259,63 @@ def _load_prompt(filename: str) -> str:
 
 
 def _language_batches(document: PptReviewDocument) -> tuple[str, ...]:
-    batches: list[str] = []
+    return tuple("\n\n".join(batch) for batch in _language_batch_groups(document))
+
+
+def _language_batch_groups(
+    document: PptReviewDocument,
+) -> tuple[tuple[str, ...], ...]:
+    batches: list[tuple[str, ...]] = []
     current: list[str] = []
     current_size = 0
     for tagged in _tagged_elements(document):
-        if current and current_size + len(tagged) > _MAX_LANGUAGE_BATCH_CHARS:
-            batches.append("\n\n".join(current))
+        separator_size = 2 if current else 0
+        if (
+            current
+            and current_size + separator_size + len(tagged)
+            > _MAX_LANGUAGE_BATCH_CHARS
+        ):
+            batches.append(tuple(current))
             current = []
             current_size = 0
+            separator_size = 0
         current.append(tagged)
-        current_size += len(tagged)
+        current_size += separator_size + len(tagged)
     if current:
-        batches.append("\n\n".join(current))
+        batches.append(tuple(current))
     return tuple(batches)
+
+
+async def _run_language_batch(
+    runner: PptModelRunner,
+    language_template: str,
+    elements: tuple[str, ...],
+) -> dict[str, object]:
+    batch = "\n\n".join(elements)
+    try:
+        return _checked_payload(
+            await runner(
+                "language",
+                f"{language_template}\n\n以下是待审核材料：\n{batch}",
+            )
+        )
+    except PptModelOutputTruncatedError:
+        if len(elements) <= 1:
+            raise
+        midpoint = len(elements) // 2
+        left_payload = await _run_language_batch(
+            runner,
+            language_template,
+            elements[:midpoint],
+        )
+        right_payload = await _run_language_batch(
+            runner,
+            language_template,
+            elements[midpoint:],
+        )
+        left_issues = cast(list[object], left_payload["issues"])
+        right_issues = cast(list[object], right_payload["issues"])
+        return {"issues": [*left_issues, *right_issues]}
 
 
 def _document_text(document: PptReviewDocument) -> str:

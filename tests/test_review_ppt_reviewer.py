@@ -3,9 +3,11 @@ from __future__ import annotations
 import ast
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.review.ppt import reviewer as ppt_reviewer
 from app.review.ppt.evidence import (
     dedupe_findings,
     validate_cross_candidate,
@@ -378,6 +380,165 @@ def test_parse_model_payload_accepts_json_fence_and_rejects_non_issue_list():
         assert "输出格式无效" in str(exc)
     else:
         raise AssertionError("无效模型输出必须被拒绝")
+
+
+def test_default_model_runner_detects_output_truncation_before_json_parse(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                stop_reason="max_tokens",
+                content=[SimpleNamespace(type="text", text='{"issues": [')],
+            )
+
+    fake_client = SimpleNamespace(messages=FakeMessages())
+    monkeypatch.setattr(
+        ppt_reviewer,
+        "build_anthropic_client",
+        lambda: (fake_client, "test-model"),
+    )
+
+    runner = ppt_reviewer._build_default_model_runner()
+
+    with pytest.raises(ppt_reviewer.PptModelOutputTruncatedError):
+        asyncio.run(runner("language", "test prompt"))
+
+    assert captured["max_tokens"] == 4096
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["timeout"] == 180.0
+
+
+def test_language_review_splits_truncated_batch_by_element_and_merges_findings():
+    document = PptReviewDocument(
+        filename="拆分审核.pptx",
+        page_count=1,
+        slides=(
+            PptSlide(
+                slide_number=1,
+                elements=(
+                    PptElement("slide:1/shape:1", 1, "text", "机构甲持续推进服务"),
+                    PptElement("slide:1/shape:2", 1, "text", "机构乙持续推进服务"),
+                ),
+            ),
+        ),
+    )
+    language_element_counts: list[int] = []
+
+    async def fake_runner(stage: str, prompt: str) -> dict[str, object]:
+        if stage == "consistency":
+            return {"issues": []}
+        element_count = prompt.count("[slide=")
+        language_element_counts.append(element_count)
+        if element_count > 1:
+            raise ppt_reviewer.PptModelOutputTruncatedError("模型输出达到上限")
+        if "机构甲持续推进服务" in prompt:
+            return {
+                "issues": [
+                    {
+                        "category": "name",
+                        "slide_number": 1,
+                        "element_id": "slide:1/shape:1",
+                        "target_text": "机构甲",
+                        "description": "名称存在疑问",
+                    }
+                ]
+            }
+        return {
+            "issues": [
+                {
+                    "category": "name",
+                    "slide_number": 1,
+                    "element_id": "slide:1/shape:2",
+                    "target_text": "机构乙",
+                    "description": "名称存在疑问",
+                }
+            ]
+        }
+
+    result = asyncio.run(review_ppt_document(document, model_runner=fake_runner))
+
+    assert language_element_counts == [2, 1, 1]
+    assert {finding.target_text for finding in result.findings} == {"机构甲", "机构乙"}
+    assert result.consistency_complete is True
+
+
+def test_language_review_does_not_loop_when_single_element_is_still_truncated():
+    document = PptReviewDocument(
+        filename="单元素.pptx",
+        page_count=1,
+        slides=(
+            PptSlide(
+                slide_number=1,
+                elements=(PptElement("slide:1/shape:1", 1, "text", "待审核文字"),),
+            ),
+        ),
+    )
+    call_count = 0
+
+    async def truncated_runner(stage: str, _prompt: str) -> dict[str, object]:
+        nonlocal call_count
+        if stage == "consistency":
+            return {"issues": []}
+        call_count += 1
+        raise ppt_reviewer.PptModelOutputTruncatedError("模型输出达到上限")
+
+    with pytest.raises(ppt_reviewer.PptModelOutputTruncatedError):
+        asyncio.run(review_ppt_document(document, model_runner=truncated_runner))
+
+    assert call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message"),
+    [
+        (ConnectionError, "model unavailable"),
+        (ValueError, "invalid json"),
+    ],
+)
+def test_language_review_does_not_split_other_model_errors(error_type, message):
+    call_count = 0
+
+    async def failing_runner(stage: str, _prompt: str) -> dict[str, object]:
+        nonlocal call_count
+        if stage == "consistency":
+            return {"issues": []}
+        call_count += 1
+        raise error_type(message)
+
+    with pytest.raises(error_type, match=message):
+        asyncio.run(review_ppt_document(_document(), model_runner=failing_runner))
+
+    assert call_count == 1
+
+
+def test_language_batches_stay_within_reduced_character_budget():
+    document = PptReviewDocument(
+        filename="长文字.pptx",
+        page_count=1,
+        slides=(
+            PptSlide(
+                slide_number=1,
+                elements=tuple(
+                    PptElement(
+                        f"slide:1/shape:{index}",
+                        1,
+                        "text",
+                        f"第{index}段" + "甲" * 700,
+                    )
+                    for index in range(1, 11)
+                ),
+            ),
+        ),
+    )
+
+    batches = ppt_reviewer._language_batches(document)
+
+    assert len(batches) >= 3
+    assert all(len(batch) <= 3000 for batch in batches)
 
 
 def test_dedupe_prefers_data_issue_over_generic_grammar_at_same_source():
