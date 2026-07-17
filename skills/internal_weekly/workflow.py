@@ -147,20 +147,34 @@ def _market_queries(
     period_start: date,
     period_end: date,
 ) -> list[str]:
+    return [
+        query
+        for _, query in _market_query_groups(publication_date, period_start, period_end)
+    ]
+
+
+def _market_query_groups(
+    publication_date: date,
+    period_start: date,
+    period_end: date,
+) -> list[tuple[tuple[str, ...], str]]:
     weekly_range = _format_date_range(period_start, period_end)
     monday = f"{publication_date.year}年{publication_date.month}月{publication_date.day}日"
     return [
         (
+            ("weekly_a", "weekly_us"),
             "新华财经 一周要闻 全球市场 本周回顾 A股 美股 上证指数 "
-            f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}"
+            f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}",
         ),
         (
+            ("monday_a",),
             "证券时报 中国证券报 第一财经 A股收评 上证指数 深证成指 "
-            f"创业板指 收盘 涨跌幅 {monday}"
+            f"创业板指 收盘 涨跌幅 {monday}",
         ),
         (
+            ("weekly_hk",),
             "21世纪经济报道 上海证券报 南方财经 港股周评 恒生指数 "
-            f"恒生科技指数 恒生中国企业指数 周涨跌幅 {weekly_range}"
+            f"恒生科技指数 恒生中国企业指数 周涨跌幅 {weekly_range}",
         ),
     ]
 
@@ -182,7 +196,7 @@ def _frontier_queries(
             "IMF World Bank working paper banking finance financial market "
             f"研究报告 {marker} "
             f"{_format_date_range(period_start, period_end)}"
-        )
+        ),
     ]
 
 
@@ -289,7 +303,7 @@ def _ordinary_items(
 
 
 def _market_item(
-    pages: list[WebCandidate],
+    page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]],
     tools: ToolGateway,
     *,
     publication_date: date,
@@ -297,35 +311,70 @@ def _market_item(
     period_end: date,
     retrieved_at: str,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
-    if not pages:
-        return None, [], ["资本市场综述缺少可读取的行情数据页"]
-    result = tools.call(
-        "llm_writer",
-        {
-            "task": "internal_weekly_market_extraction",
-            "skill_id": "internal_weekly",
-            "output_type": MarketEvidenceBundle,
-            "prompt_path": "prompts/market.md",
-            "instruction": (
-                "只提取页面明确列示的指数涨跌幅，或起止收盘值和背景原句。"
-                "页面已直接披露本期涨跌幅时填 reported_change_pct，禁止倒算收盘值；"
-                "页面只披露起止收盘值时填 start_close、end_close，禁止自行计算涨跌幅。"
-                f"weekly_a、weekly_hk、weekly_us 使用 {period_start.isoformat()} "
-                f"至 {period_end.isoformat()} 内实际交易日起止收盘；"
-                f"monday_a 的 end_date 必须是 {publication_date.isoformat()}。"
-                "所有 start_date、end_date 必须输出 YYYY-MM-DD。"
-            ),
-            "materials": _materials(pages),
-        },
-    )
-    bundle = result if isinstance(result, MarketEvidenceBundle) else MarketEvidenceBundle.model_validate(result)
-    page_map = {page.canonical_url: page for page in pages}
-    for evidence in [*bundle.series, *bundle.contexts]:
-        page = page_map.get(evidence.source_url)
-        if page is None:
-            raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
-        if not evidence.evidence_excerpt.strip() or evidence.evidence_excerpt.strip() not in page.body:
-            raise ValueError(f"行情证据无法在原页面逐字核对：{evidence.index_name if hasattr(evidence, 'index_name') else evidence.scope}")
+    missing_page_groups = ["/".join(scopes) for scopes, pages in page_groups if not pages]
+    if missing_page_groups:
+        return None, [], [
+            f"资本市场综述缺少可读取的数据页：{', '.join(missing_page_groups)}"
+        ]
+
+    series = []
+    contexts = []
+    page_map: dict[str, WebCandidate] = {}
+    for required_scopes, pages in page_groups:
+        page_map.update({page.canonical_url: page for page in pages})
+        required_label = "、".join(required_scopes)
+        result = tools.call(
+            "llm_writer",
+            {
+                "task": "internal_weekly_market_extraction",
+                "skill_id": "internal_weekly",
+                "output_type": MarketEvidenceBundle,
+                "prompt_path": "prompts/market.md",
+                "required_scopes": list(required_scopes),
+                "instruction": (
+                    f"本次只返回 {required_label}，不要返回其他 scope。"
+                    "只提取页面明确列示的指数涨跌幅，或起止收盘值和背景原句。"
+                    "页面已直接披露本期涨跌幅时填 reported_change_pct，禁止倒算收盘值；"
+                    "页面只披露起止收盘值时填 start_close、end_close，禁止自行计算涨跌幅。"
+                    f"weekly_a、weekly_hk、weekly_us 使用 {period_start.isoformat()} "
+                    f"至 {period_end.isoformat()} 内实际交易日；"
+                    f"monday_a 必须使用 {publication_date.isoformat()} 当日数据。"
+                    "所有 start_date、end_date 必须输出 YYYY-MM-DD。"
+                ),
+                "materials": _materials(pages),
+            },
+        )
+        group_bundle = (
+            result
+            if isinstance(result, MarketEvidenceBundle)
+            else MarketEvidenceBundle.model_validate(result)
+        )
+        unexpected_scopes = {
+            evidence.scope
+            for evidence in [*group_bundle.series, *group_bundle.contexts]
+            if evidence.scope not in required_scopes
+        }
+        if unexpected_scopes:
+            raise ValueError(
+                f"行情分组返回了未请求的 scope：{', '.join(sorted(unexpected_scopes))}"
+            )
+        group_page_map = {page.canonical_url: page for page in pages}
+        for evidence in [*group_bundle.series, *group_bundle.contexts]:
+            page = group_page_map.get(evidence.source_url)
+            if page is None:
+                raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
+            excerpt = evidence.evidence_excerpt.strip()
+            if not excerpt or excerpt not in page.body:
+                label = (
+                    evidence.index_name
+                    if hasattr(evidence, "index_name")
+                    else evidence.scope
+                )
+                raise ValueError(f"行情证据无法在原页面逐字核对：{label}")
+        series.extend(group_bundle.series)
+        contexts.extend(group_bundle.contexts)
+
+    bundle = MarketEvidenceBundle(series=series, contexts=contexts)
     item, records = build_market_item(
         bundle,
         publication_date=publication_date,
@@ -458,10 +507,14 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         period_start=period_start,
         period_end=period_end,
     )
-    market_pages, market_search_warnings = _collect_pages(
-        _market_queries(publication_date, period_start, period_end),
-        tools,
-    )
+    market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []
+    market_search_warnings: list[str] = []
+    for required_scopes, query in _market_query_groups(
+        publication_date, period_start, period_end
+    ):
+        group_pages, group_warnings = _collect_pages([query], tools)
+        market_page_groups.append((required_scopes, group_pages))
+        market_search_warnings.extend(group_warnings)
     frontier_window_start = publication_date - timedelta(days=30)
     frontier_pages, frontier_search_warnings = _collect_pages(
         _frontier_queries(frontier_window_start, publication_date, fallback=True),
@@ -495,7 +548,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     market_item: WeeklyItem | None = None
     try:
         market_item, records, item_warnings = _market_item(
-            market_pages,
+            market_page_groups,
             tools,
             publication_date=publication_date,
             period_start=period_start,

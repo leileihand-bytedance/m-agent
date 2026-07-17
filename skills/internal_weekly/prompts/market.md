@@ -2,7 +2,7 @@
 
 只从材料中提取明确列示的指数涨跌幅或起止收盘值，不计算、不倒算、不猜测缺失值。
 
-必须完整返回四组：`weekly_a`、`monday_a`、`weekly_hk`、`weekly_us`。指数代码分别为：
+本次任务指令会指定当前要返回的 scope，只返回指定分组，不要返回其他分组。完整周报最终需要四组：`weekly_a`、`monday_a`、`weekly_hk`、`weekly_us`。指数代码分别为：
 
 - A股：000001、399001、399006
 - 港股：HSI、HSTECH、HSCEI

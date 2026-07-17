@@ -52,6 +52,7 @@ def _market_series() -> list[MarketSeriesEvidence]:
 class FakeTools:
     def __init__(self):
         self.search_calls: list[str] = []
+        self.market_required_scopes: list[tuple[str, ...]] = []
         self.pages = {
             "https://www.gov.cn/meeting.htm": {
                 "url": "https://www.gov.cn/meeting.htm",
@@ -152,7 +153,13 @@ class FakeTools:
                 ]
             )
         if payload["task"] == "internal_weekly_market_extraction":
-            return MarketEvidenceBundle(series=_market_series())
+            required_scopes = tuple(payload["required_scopes"])
+            self.market_required_scopes.append(required_scopes)
+            return MarketEvidenceBundle(
+                series=[
+                    item for item in _market_series() if item.scope in required_scopes
+                ]
+            )
         if payload["task"] == "internal_weekly_frontier_selection":
             return FrontierSelection(
                 source_url="https://www.bis.org/publ/work999.htm",
@@ -217,6 +224,11 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert any("BIS" in query for query in fake.search_calls)
     assert all("site:" not in query for query in fake.search_calls)
     assert all(" OR " not in query for query in fake.search_calls)
+    assert fake.market_required_scopes == [
+        ("weekly_a", "weekly_us"),
+        ("monday_a",),
+        ("weekly_hk",),
+    ]
 
 
 def test_workflow_waits_until_monday_market_close_without_search(tmp_path):
