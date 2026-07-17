@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import re
+import unicodedata
 
 from .models import (
     PptCrossCandidate,
@@ -35,25 +36,65 @@ _UNIT_RE = re.compile(
 )
 _TARGET_SCOPE_RE = re.compile(r"目标|计划|预计|预测|预算|拟|力争")
 _ACTUAL_SCOPE_RE = re.compile(r"实际|已完成|实现|截至|达到")
+_NAME_SEPARATORS = frozenset(" \t\r\n-_.‐‑‒–—·・")
+_ANNOTATION_TEXT_RE = re.compile(
+    r"(?:以上|以下)?数据截至|(?:数据|资料)来源\s*[:：]|"
+    r"(?:数据)?口径\s*[:：]|(?:^|[\s(（])(?:注|备注|说明)\s*[:：]"
+)
 
 
 def validate_local_candidate(
     document: PptReviewDocument,
     candidate: PptLocalCandidate,
 ) -> PptFinding | None:
-    """只接受能在指定页、指定对象逐字找到的单点候选。"""
-    element = _element_index(document).get(
+    """接受单点实证候选；名称不一致还必须有可核对的双边写法。"""
+    index = _element_index(document)
+    element = index.get(
         (candidate.slide_number, candidate.element_id)
     )
     if element is None or not _has_exact_source(element, candidate.target_text):
         return None
+    if candidate.category != "name":
+        return PptFinding(
+            rule_id=f"ppt-{candidate.category.replace('_', '-')}",
+            category=candidate.category,
+            slide_number=candidate.slide_number,
+            element_id=candidate.element_id,
+            target_text=candidate.target_text,
+            description=factual_description(candidate.category),
+        )
+
+    if candidate.related_slide_number is None:
+        return None
+    related = index.get(
+        (candidate.related_slide_number, candidate.related_element_id)
+    )
+    if related is None or not _has_exact_source(related, candidate.related_text):
+        return None
+    first_name = candidate.target_text.strip()
+    second_name = candidate.related_text.strip()
+    if first_name == second_name:
+        return None
+    if (
+        _starts_with_annotation_marker(first_name)
+        or _starts_with_annotation_marker(second_name)
+        or _ANNOTATION_TEXT_RE.search(first_name)
+        or _ANNOTATION_TEXT_RE.search(second_name)
+    ):
+        return None
+    first_canonical = _canonical_name(first_name)
+    if not first_canonical or first_canonical != _canonical_name(second_name):
+        return None
     return PptFinding(
-        rule_id=f"ppt-{candidate.category.replace('_', '-')}",
-        category=candidate.category,
+        rule_id="ppt-name",
+        category="name",
         slide_number=candidate.slide_number,
         element_id=candidate.element_id,
         target_text=candidate.target_text,
-        description=factual_description(candidate.category),
+        description=factual_description("name"),
+        related_slide_number=candidate.related_slide_number,
+        related_element_id=candidate.related_element_id,
+        related_text=candidate.related_text,
     )
 
 
@@ -118,12 +159,16 @@ def dedupe_findings(findings: Iterable[PptFinding]) -> tuple[PptFinding, ...]:
         is_cross = finding.related_slide_number is not None
         key: tuple[object, ...]
         if is_cross:
-            key = (
-                "cross",
-                *primary_key,
+            related_key = (
                 finding.related_slide_number,
                 finding.related_element_id,
                 finding.related_text,
+            )
+            first_endpoint, second_endpoint = sorted((primary_key, related_key))
+            key = (
+                "cross",
+                *first_endpoint,
+                *second_endpoint,
             )
             local_key = ("local", *primary_key)
             local = selected.get(local_key)
@@ -217,3 +262,39 @@ def _element_index(
 
 def _has_exact_source(element: PptElement, target_text: str) -> bool:
     return bool(target_text.strip()) and target_text in element.text
+
+
+def _canonical_name(text: str) -> str:
+    """仅忽略名称内部的大小写、宽窄字符及常见分隔符。"""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    canonical: list[str] = []
+    index = 0
+    while index < len(normalized):
+        character = normalized[index]
+        if character not in _NAME_SEPARATORS:
+            canonical.append(character)
+            index += 1
+            continue
+        separator_end = index + 1
+        while (
+            separator_end < len(normalized)
+            and normalized[separator_end] in _NAME_SEPARATORS
+        ):
+            separator_end += 1
+        previous_is_name = bool(canonical and canonical[-1].isalnum())
+        next_is_name = (
+            separator_end < len(normalized)
+            and normalized[separator_end].isalnum()
+        )
+        if not (previous_is_name and next_is_name):
+            canonical.extend(normalized[index:separator_end])
+        index = separator_end
+    return "".join(canonical)
+
+
+def _starts_with_annotation_marker(text: str) -> bool:
+    """拒绝以标点、符号、圈号等脚注或列表标记开头的候选。"""
+    if not text:
+        return False
+    category = unicodedata.category(text[0])
+    return category[0] in {"P", "S"} or category in {"Nl", "No"}

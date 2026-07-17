@@ -300,6 +300,235 @@ def test_reviewer_keeps_real_candidates_and_discards_hallucinated_evidence():
     assert result.consistency_complete is True
 
 
+def test_name_candidate_requires_two_distinct_exact_name_variants():
+    document = PptReviewDocument(
+        filename="名称审核.pptx",
+        page_count=4,
+        slides=(
+            PptSlide(
+                1,
+                (PptElement("slide:1/shape:1", 1, "text", "CyclOne项目"),),
+            ),
+            PptSlide(
+                2,
+                (
+                    PptElement(
+                        "slide:2/shape:1",
+                        2,
+                        "text",
+                        "*以上数据截至2024年12月末",
+                    ),
+                ),
+            ),
+            PptSlide(
+                3,
+                (
+                    PptElement(
+                        "slide:3/shape:1",
+                        3,
+                        "text",
+                        "以上数据截至2024年12月末",
+                    ),
+                ),
+            ),
+            PptSlide(
+                4,
+                (
+                    PptElement(
+                        "slide:4/shape:1",
+                        4,
+                        "text",
+                        "We Bank与we-bank前后写法不同",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    async def fake_runner(stage: str, _prompt: str) -> dict[str, object]:
+        if stage == "consistency":
+            return {"issues": []}
+        return {
+            "issues": [
+                {
+                    "category": "name",
+                    "slide_number": 1,
+                    "element_id": "slide:1/shape:1",
+                    "target_text": "CyclOne",
+                    "description": "名称写法可能异常",
+                },
+                {
+                    "category": "name",
+                    "slide_number": 2,
+                    "element_id": "slide:2/shape:1",
+                    "target_text": "*以上数据截至2024年12月末",
+                    "related_slide_number": 3,
+                    "related_element_id": "slide:3/shape:1",
+                    "related_text": "以上数据截至2024年12月末",
+                    "description": "两处文字重复",
+                },
+                {
+                    "category": "name",
+                    "slide_number": 4,
+                    "element_id": "slide:4/shape:1",
+                    "target_text": "We Bank",
+                    "related_slide_number": 4,
+                    "related_element_id": "slide:4/shape:1",
+                    "related_text": "we-bank",
+                    "description": "同一名称大小写不一致",
+                },
+            ]
+        }
+
+    result = asyncio.run(review_ppt_document(document, model_runner=fake_runner))
+
+    assert len(result.findings) == 1
+    assert result.findings[0] == PptFinding(
+        rule_id="ppt-name",
+        category="name",
+        slide_number=4,
+        element_id="slide:4/shape:1",
+        target_text="We Bank",
+        description="该处名称写法前后不一致",
+        related_slide_number=4,
+        related_element_id="slide:4/shape:1",
+        related_text="we-bank",
+    )
+
+
+def test_name_candidate_rejects_different_names_and_dedupes_reversed_pair():
+    document = PptReviewDocument(
+        filename="名称审核.pptx",
+        page_count=2,
+        slides=(
+            PptSlide(
+                1,
+                (
+                    PptElement(
+                        "slide:1/shape:1",
+                        1,
+                        "text",
+                        "Linkis、EventMesh与WeBank",
+                    ),
+                ),
+            ),
+            PptSlide(
+                2,
+                (PptElement("slide:2/shape:1", 2, "text", "Webank"),),
+            ),
+        ),
+    )
+
+    async def fake_runner(stage: str, _prompt: str) -> dict[str, object]:
+        if stage == "consistency":
+            return {"issues": []}
+        return {
+            "issues": [
+                {
+                    "category": "name",
+                    "slide_number": 1,
+                    "element_id": "slide:1/shape:1",
+                    "target_text": "Linkis",
+                    "related_slide_number": 1,
+                    "related_element_id": "slide:1/shape:1",
+                    "related_text": "EventMesh",
+                    "description": "相邻名称大小写模式不同",
+                },
+                {
+                    "category": "name",
+                    "slide_number": 1,
+                    "element_id": "slide:1/shape:1",
+                    "target_text": "WeBank",
+                    "related_slide_number": 2,
+                    "related_element_id": "slide:2/shape:1",
+                    "related_text": "Webank",
+                    "description": "同一名称大小写不一致",
+                },
+                {
+                    "category": "name",
+                    "slide_number": 2,
+                    "element_id": "slide:2/shape:1",
+                    "target_text": "Webank",
+                    "related_slide_number": 1,
+                    "related_element_id": "slide:1/shape:1",
+                    "related_text": "WeBank",
+                    "description": "同一名称大小写不一致",
+                },
+            ]
+        }
+
+    result = asyncio.run(review_ppt_document(document, model_runner=fake_runner))
+
+    assert len(result.findings) == 1
+    assert {result.findings[0].target_text, result.findings[0].related_text} == {
+        "WeBank",
+        "Webank",
+    }
+
+
+@pytest.mark.parametrize(
+    ("first_text", "second_text"),
+    [
+        ("*以上数据截至2024年末", "＊以上数据截至2024年末"),
+        ("①以上数据截至2024年末", "1以上数据截至2024年末"),
+        ("1以上数据截至2024年末", "１以上数据截至2024年末"),
+        ("a以上数据截至2024年末", "A以上数据截至2024年末"),
+        ("*未经审计", "＊未经审计"),
+        ("*最终数据以年报为准", "＊最终数据以年报为准"),
+    ],
+)
+def test_name_candidate_rejects_compatibility_variants_of_footnote_markers(
+    first_text: str,
+    second_text: str,
+):
+    document = PptReviewDocument(
+        filename="脚注审核.pptx",
+        page_count=2,
+        slides=(
+            PptSlide(1, (PptElement("slide:1/shape:1", 1, "text", first_text),)),
+            PptSlide(2, (PptElement("slide:2/shape:1", 2, "text", second_text),)),
+        ),
+    )
+    candidate = PptLocalCandidate(
+        category="name",
+        slide_number=1,
+        element_id="slide:1/shape:1",
+        target_text=first_text,
+        related_slide_number=2,
+        related_element_id="slide:2/shape:1",
+        related_text=second_text,
+        description="脚注标记写法不同",
+    )
+
+    assert validate_local_candidate(document, candidate) is None
+
+
+def test_name_candidate_keeps_symbol_bounded_product_name():
+    document = PptReviewDocument(
+        filename="名称审核.pptx",
+        page_count=2,
+        slides=(
+            PptSlide(1, (PptElement("slide:1/shape:1", 1, "text", "C++"),)),
+            PptSlide(2, (PptElement("slide:2/shape:1", 2, "text", "c++"),)),
+        ),
+    )
+    candidate = PptLocalCandidate(
+        category="name",
+        slide_number=1,
+        element_id="slide:1/shape:1",
+        target_text="C++",
+        related_slide_number=2,
+        related_element_id="slide:2/shape:1",
+        related_text="c++",
+        description="同一产品名称大小写不一致",
+    )
+
+    finding = validate_local_candidate(document, candidate)
+
+    assert finding is not None
+    assert finding.related_text == "c++"
+
+
 def test_reviewer_removes_model_advice_from_issue_description():
     async def fake_runner(stage: str, _prompt: str) -> dict[str, object]:
         if stage == "language":
@@ -439,22 +668,22 @@ def test_language_review_splits_truncated_batch_by_element_and_merges_findings()
             return {
                 "issues": [
                     {
-                        "category": "name",
+                        "category": "grammar",
                         "slide_number": 1,
                         "element_id": "slide:1/shape:1",
-                        "target_text": "机构甲",
-                        "description": "名称存在疑问",
+                        "target_text": "持续推进",
+                        "description": "存在明显语病",
                     }
                 ]
             }
         return {
             "issues": [
                 {
-                    "category": "name",
+                    "category": "grammar",
                     "slide_number": 1,
                     "element_id": "slide:1/shape:2",
-                    "target_text": "机构乙",
-                    "description": "名称存在疑问",
+                    "target_text": "持续推进",
+                    "description": "存在明显语病",
                 }
             ]
         }
@@ -462,7 +691,10 @@ def test_language_review_splits_truncated_batch_by_element_and_merges_findings()
     result = asyncio.run(review_ppt_document(document, model_runner=fake_runner))
 
     assert language_element_counts == [2, 1, 1]
-    assert {finding.target_text for finding in result.findings} == {"机构甲", "机构乙"}
+    assert {finding.element_id for finding in result.findings} == {
+        "slide:1/shape:1",
+        "slide:1/shape:2",
+    }
     assert result.consistency_complete is True
 
 

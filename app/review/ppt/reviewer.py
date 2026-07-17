@@ -343,6 +343,11 @@ def _local_candidates(payload: dict[str, object]) -> tuple[PptLocalCandidate, ..
         description = _non_empty_string(issue.get("description"))
         if None in (slide_number, element_id, target_text, description):
             continue
+        related_slide_number = _strict_int(issue.get("related_slide_number"))
+        related_element_id = (
+            _non_empty_string(issue.get("related_element_id")) or ""
+        )
+        related_text = _non_empty_string(issue.get("related_text")) or ""
         candidates.append(
             PptLocalCandidate(
                 category=cast(PptFindingCategory, category),
@@ -350,6 +355,9 @@ def _local_candidates(payload: dict[str, object]) -> tuple[PptLocalCandidate, ..
                 element_id=element_id,
                 target_text=target_text,
                 description=description,
+                related_slide_number=related_slide_number,
+                related_element_id=related_element_id,
+                related_text=related_text,
             )
         )
     return tuple(candidates)

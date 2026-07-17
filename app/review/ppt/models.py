@@ -69,6 +69,9 @@ class PptLocalCandidate:
     element_id: str
     target_text: str
     description: str
+    related_slide_number: int | None = None
+    related_element_id: str = ""
+    related_text: str = ""
 
 
 @dataclass(frozen=True)
