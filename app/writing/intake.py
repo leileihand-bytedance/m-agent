@@ -28,6 +28,7 @@ DIRECT_REPORT_INTENT = "direct_report"
 REWRITE_INTENT = "rewrite"
 RESEARCH_SYNTHESIS_INTENT = "research_synthesis"
 SHENYINXIE_NEWS_INTENT = "shenyinxie_news"
+INTERNAL_WEEKLY_INTENT = "internal_weekly"
 DEFAULT_MAX_FILES = 10
 DEFAULT_MAX_TOTAL_FILE_BYTES = 20 * 1024 * 1024
 _CANCEL_SIGNALS = {"取消", "取消写作", "不要写了", "不用写了", "清空材料", "重新开始"}
@@ -185,7 +186,7 @@ class WritingIntakeStore:
                 if not session.materials:
                     self._persist_session(key, session)
                     return IntakeDecision(action="wait", reply=_reply_for_waiting_material(intent))
-            if intent == SHENYINXIE_NEWS_INTENT:
+            if intent in {SHENYINXIE_NEWS_INTENT, INTERNAL_WEEKLY_INTENT}:
                 return self._build_run_decision(key, session)
             if session.materials:
                 return self._build_run_decision(key, session)
@@ -329,6 +330,7 @@ class WritingIntakeStore:
                 DIRECT_REPORT_INTENT,
                 RESEARCH_SYNTHESIS_INTENT,
                 SHENYINXIE_NEWS_INTENT,
+                INTERNAL_WEEKLY_INTENT,
                 REWRITE_INTENT,
             }:
                 intent = skill_id
@@ -376,7 +378,7 @@ class WritingIntakeStore:
             )
         if session.intent == REWRITE_INTENT and not any(item.kind == "text" for item in session.materials):
             return IntakeDecision(action="wait", reply=_reply_for_waiting_material(REWRITE_INTENT))
-        if session.intent == SHENYINXIE_NEWS_INTENT:
+        if session.intent in {SHENYINXIE_NEWS_INTENT, INTERNAL_WEEKLY_INTENT}:
             return self._build_run_decision(key, session)
         if not session.materials:
             return IntakeDecision(
@@ -466,6 +468,8 @@ class WritingIntakeStore:
 
 
 def detect_writing_intent(text: str) -> str | None:
+    if "内参周报" in text:
+        return INTERNAL_WEEKLY_INTENT
     if any(marker in text for marker in ("综合调研", "调研材料整合", "调研材料汇总", "调研材料做个汇总", "按提纲整合", "按提纲汇总", "按调研提纲整合", "按调研提纲汇总")):
         return RESEARCH_SYNTHESIS_INTENT
     if "调研材料" in text and any(marker in text for marker in ("整合", "汇总")):
@@ -542,6 +546,8 @@ def resolve_skill_id(session: WritingIntakeSession) -> str:
         return RESEARCH_SYNTHESIS_INTENT
     if session.intent == SHENYINXIE_NEWS_INTENT:
         return SHENYINXIE_NEWS_INTENT
+    if session.intent == INTERNAL_WEEKLY_INTENT:
+        return INTERNAL_WEEKLY_INTENT
     if session.intent == DIRECT_REPORT_INTENT:
         return "direct_report"
     if session.intent == REWRITE_INTENT:
@@ -578,6 +584,7 @@ def _is_pure_intent_text(text: str, intent: str) -> bool:
         REWRITE_INTENT: {"改写", "帮我改写", "润色", "帮我润色", "修改", "改稿"},
         RESEARCH_SYNTHESIS_INTENT: {"综合调研", "做综合调研", "综合调研材料整合", "帮我做综合调研材料整合", "按提纲整合"},
         SHENYINXIE_NEWS_INTENT: {"深银协动态", "生成深银协动态", "整理深银协动态", "深圳银行业协会动态"},
+        INTERNAL_WEEKLY_INTENT: {"内参周报", "生成内参周报", "生成本周内参周报", "整理内参周报", "内参周报内容稿"},
     }
     return normalized in pure_values.get(intent, set())
 
@@ -591,6 +598,8 @@ def _reply_for_waiting_material(intent: str) -> str:
         return "材料润色当前只支持直接粘贴文字。请把待润色原文直接粘贴过来，发完后回复“开始写”。"
     if intent == SHENYINXIE_NEWS_INTENT:
         return "收到，准备整理深银协动态。系统会自动检索权威媒体，无需额外提供素材。"
+    if intent == INTERNAL_WEEKLY_INTENT:
+        return "收到，准备生成内参周报内容核对稿。系统会自动检索并保留溯源信息，无需额外提供素材。"
     return "收到，准备写简报。请继续发送一个或多个链接、文字或文件素材，发完后回复“开始写”。"
 
 
@@ -602,6 +611,7 @@ def _skill_label(skill_id: str) -> str:
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",
         "shenyinxie_news": "深银协动态",
+        "internal_weekly": "内参周报内容核对稿",
     }
     return labels.get(skill_id, "写作")
 

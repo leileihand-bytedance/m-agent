@@ -369,6 +369,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     _write_skill(skills_dir, "rewrite", enabled=False)
     _write_skill(skills_dir, "research_synthesis", enabled=True)
     _write_skill(skills_dir, "shenyinxie_news", enabled=True)
+    _write_skill(skills_dir, "internal_weekly", enabled=True)
     todo_path = project_root / "docs" / "development" / "TODO.md"
     todo_path.parent.mkdir(parents=True)
     todo_path.write_text(
@@ -515,6 +516,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["rewrite"].status == "disabled"
     assert capabilities["research_synthesis"].status == "optimizing"
     assert capabilities["shenyinxie_news"].status == "optimizing"
+    assert capabilities["internal_weekly"].status == "optimizing"
     assert capabilities["html_review"].status == "stable"
     assert capabilities["shared_review_core"].status == "planned"
     assert capabilities["unified_entry"].status == "paused"
@@ -573,6 +575,12 @@ def test_project_overview_architecture_relations_only_reference_known_capabiliti
     assert any(
         relation.source_id == "writing_bot"
         and relation.target_id == "shenyinxie_news"
+        and relation.label == "路由任务"
+        for relation in overview.architecture_relations
+    )
+    assert any(
+        relation.source_id == "writing_bot"
+        and relation.target_id == "internal_weekly"
         and relation.label == "路由任务"
         for relation in overview.architecture_relations
     )

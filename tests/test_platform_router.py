@@ -118,3 +118,12 @@ def test_router_matches_shenyinxie_news_from_trigger_words():
 
     assert route.skill_id == "shenyinxie_news"
     assert route.needs_clarification is False
+
+
+def test_router_matches_internal_weekly_from_trigger_words():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("生成本周内参周报", registry)
+
+    assert route.skill_id == "internal_weekly"
+    assert route.needs_clarification is False

@@ -181,10 +181,12 @@ uv run --locked python -m app.rewrite_bot --check-config
 验证具体业务能力：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
 ```
 
 深银协动态还要重点验证：明确指定月份及上/下半月时使用对应发布日期范围；未明确时在任何搜索调用前追问；后台恢复追问后仍保持 `shenyinxie_news` 意图并合并用户回答；查询包含精确日期和成果主题；最终入选仍以原文页面发布日期、白名单和正文核验为准。人民日报旧版页面回归必须覆盖固定错误 `publishdate`，只有页面内期号路径双重印证时才采用真实期号日期；同稿去重必须忽略媒体站点追加的短标题尾缀。
+
+内参周报还要重点验证：出版日固定为周一、统计期固定为上一自然周；周一 15:30 前不调用搜索；五类板块顺序和分类规则独立于审核模块；资本市场综述固定为市场观察首项，完整包含 `weekly_a`、`monday_a`、`weekly_hk`、`weekly_us` 四组必填指数，涨跌幅只由代码计算；研报摘录逐字存在于来源页面；核对稿和溯源清单的 `draft_version` 一致，每个来源都有 URL、证据原句和正文哈希；第一阶段不得产生 `.docx`。真实联网验收要分别记录普通内容、行情和研报来源的公开标题与域名，不记录抓取全文；公开页面无法稳定返回历史行情时，应保留待核事项，不能把模拟测试通过解释为真实数据源已经稳定。
 
 后续新增 skill 后，新增对应测试。
 

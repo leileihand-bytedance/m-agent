@@ -70,6 +70,18 @@ def test_registry_loads_enabled_shenyinxie_news_skill():
     assert skill.supports_revision is False
 
 
+def test_registry_loads_enabled_internal_weekly_skill():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    skill = registry.get("internal_weekly")
+
+    assert skill.name == "内参周报"
+    assert skill.enabled is True
+    assert skill.allowed_tools == ("search", "web_reader", "llm_writer")
+    assert skill.workflow == "skills.internal_weekly.workflow:run"
+    assert skill.supports_revision is False
+
+
 def test_registry_lists_only_enabled_skills(tmp_path):
     skills_dir = tmp_path / "skills"
     enabled = skills_dir / "enabled_skill"

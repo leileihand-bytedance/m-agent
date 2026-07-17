@@ -591,6 +591,20 @@ def test_writing_intake_runs_shenyinxie_news_without_materials():
     assert "深银协动态" in decision.ack_message
 
 
+def test_writing_intake_runs_internal_weekly_without_materials():
+    intake_store = WritingIntakeStore()
+
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="生成本周内参周报",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "internal_weekly"
+    assert "内参周报" in decision.ack_message
+
+
 def test_shenyinxie_news_clarification_keeps_skill_and_user_period(tmp_path):
     intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
 
@@ -1165,6 +1179,21 @@ def test_result_output_file_recognizes_shenyinxie_news_docx(tmp_path):
     output_path.write_bytes(b"fake-docx")
     result = PlatformResult(
         skill_id="shenyinxie_news",
+        output={"output_file": str(output_path)},
+        needs_clarification=False,
+        message="完成",
+    )
+
+    assert writing_bot._result_output_file(result) == output_path.resolve()
+
+
+def test_result_output_file_recognizes_internal_weekly_review_markdown(tmp_path):
+    output_dir = tmp_path / "task" / "output"
+    output_dir.mkdir(parents=True)
+    output_path = output_dir / "内参周报-内容核对稿.md"
+    output_path.write_text("# 内容核对稿\n", encoding="utf-8")
+    result = PlatformResult(
+        skill_id="internal_weekly",
         output={"output_file": str(output_path)},
         needs_clarification=False,
         message="完成",

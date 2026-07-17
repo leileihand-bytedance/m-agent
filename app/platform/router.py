@@ -64,7 +64,7 @@ def route_message(message: str, registry: SkillRegistry) -> RoutedRequest:
         skill_id=None,
         confidence=0.0,
         needs_clarification=True,
-        message="我还不确定你要做什么。你是想写直报、写简报、按提纲整合综合调研材料、润色文字，还是审核文档？",
+        message="我还不确定你要做什么。你是想写直报、写简报、生成内参周报、按提纲整合综合调研材料、润色文字，还是审核文档？",
         inputs={"text": normalized, "urls": urls},
     )
 

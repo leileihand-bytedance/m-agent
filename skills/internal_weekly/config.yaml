@@ -1,0 +1,32 @@
+id: internal_weekly
+name: 内参周报
+enabled: true
+description: 独立生成周一出版的内参周报内容核对稿。按固定五类板块筛选上一自然周信息；市场观察首项强制生成包含上周A股、周一A股收盘、上周港股和上周美股的资本市场综述；前沿观点只摘录可核验研究报告原文。第一阶段输出 Markdown 核对稿与 JSON 溯源清单，不生成 Word。
+triggers:
+  - 内参周报
+  - 生成内参周报
+  - 整理内参周报
+  - 内参周报内容稿
+allowed_tools:
+  - search
+  - web_reader
+  - llm_writer
+workflow: skills.internal_weekly.workflow:run
+supports_revision: false
+inputs:
+  - text
+outputs:
+  - title
+  - body
+  - sources
+  - publication_date
+  - period_start
+  - period_end
+  - sections
+  - source_records
+  - ready_for_approval
+  - draft_version
+  - output_file
+  - manifest_file
+  - needs_clarification
+  - message

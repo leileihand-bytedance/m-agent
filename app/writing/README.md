@@ -14,7 +14,7 @@
   -> app/writing/task_execution.py # 直报/简报持久任务适配
   -> app/writing/portal.py      # 结构化素材页与本地预览入口
   -> app/platform/app.py
-  -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/、skills/shenyinxie_news/ 或 skills/rewrite/
+  -> skills/direct_report/、skills/writer1/、skills/writer2/、skills/research_synthesis/、skills/shenyinxie_news/、skills/internal_weekly/ 或 skills/rewrite/
 ```
 
 当前入口形态：
@@ -26,6 +26,7 @@
 - 综合调研正文不是把各部门文件逐份拼接：工作流先按提纲形成可追溯材料台账，再按提纲问题跨部门归并；来源标签在综合段末保留一次，标题编号、原始文件名、遗漏一级主题和连续图片提醒在生成后确定性校正。
 - 文本消息的即时提示会按实际路由到的 skill 变化，例如直报、单素材简报、多素材简报和综合调研整合分别使用不同话术。
 - 深银协动态不要求用户提供素材，但必须明确月份和上半月/下半月；未明确时入口保留原任务并追问，用户答复后继续由同一 Skill 执行，确认前不搜索。入口路由后由底座使用当前 DeepSeek 模型配置调用原生 Web Search。Skill 先检索原权威白名单，专题全文不足 3 篇时再检索已核验的行业/广东主流媒体；网页正文还要经过日期与域名硬门槛、DeepSeek 结构化报送价值判断，综合稿只允许做原文摘编并在 Word 中标注。成品直接复制用户确认案例的净化母版并替换对应位置，正文按原文自然段写入，可点击链接随稿交付；生产运行不读取桌面案例。`SEARCH_API_*` 只用于显式覆盖独立搜索供应商，不能把 DeepSeek 模型地址拼接到 MiniMax 搜索端点。
+- 内参周报不要求用户提供素材。用户发送“生成本周内参周报”后，入口直接提交独立 `internal_weekly` Skill；周一 15:30 前因当日 A 股尚未收盘会先提示稍后生成。第一阶段只回传带原文链接和核验信息的 Markdown 内容核对稿，并在任务目录保存 JSON 溯源清单，不生成 Word。其板块规则属于 Skill 自身，不调用审核模块；前沿观点只摘录可逐字核验的研究报告页面，资本市场综述缺少任一固定数据组时不让模型补齐。
 - 企业微信新直报、单素材简报和多素材简报先返回对应写作类型的已受理提示，再由后台 worker 生成并主动发送初稿。后台始终保留任务编号，但正常受理和重复提交提示不向用户展示。任务入队前已经创建正式写作 job、复制文件快照；处理、会话收尾和发送分别记录检查点，Bot 重启后不会因为 intake 临时文件丢失而无法恢复。
 - 写作队列使用独立 `runtime/task-execution/writing.sqlite3`，默认 1 个 worker、同一用户同一时刻只跑 1 项初稿。审核队列与写作队列分离，两个 worker 不会互相领取任务。
 - 同一企业微信文字或文件消息按稳定消息 ID 去重；用户有初稿在途时，入口会提示等待，不接收下一批材料或改稿，避免不同批次互相覆盖。收到初稿后，上一稿改稿仍走现有实时会话链路。
@@ -35,7 +36,7 @@
 - 提交后结果直接返回企业微信对话。
 - 素材入口默认只监听 `127.0.0.1`，企业微信欢迎语不发送入口链接。本地 preview 仅允许回环地址访问；单次请求和企业微信单文件上限均为 20MB。
 - 企业微信待组装文件和会话保存在 `M-Agent-Files/runtime/intake/`，默认 1800 秒有效；底层通过公共 `app/platform/intake.py` 统一原子状态、匿名用户目录、文件安全暂存、路径隔离和过期清理，写作 Bot 重启后会恢复有效会话。普通任务成功、处理失败、取消或过期后清理；需要用户补充说明的任务保留到用户回答并续跑完成。
-- 写作状态机已转换为公共 `wait/submit/cancel/bypass` 协议；具体直报、简报、综合调研判断仍留在写作适配层。
+- 写作状态机已转换为公共 `wait/submit/cancel/bypass` 协议；具体直报、简报、综合调研、深银协动态和内参周报判断仍留在写作适配层。
 - 每次写作任务最多接收 10 份文件，文件总大小不超过 20MB；数量上限和总大小上限会分别校验。
 - 任务开始后，原文件复制到 `M-Agent-Files/tasks/writing/YYYY/MM/<job_id>/input/`，完整文档解析结果写入同一任务的 `work/documents/`。统一解析器默认安全上限为 50MB，可通过 `M_AGENT_DOCUMENT_MAX_MB` 调整，但入口 20MB 限制仍优先生效。
 - DOCX 素材含图片时，图片只提取到任务 `work/` 用于确认存在性，不默认 OCR，也不嵌入综合调研稿；模型材料保留原位置提醒，正文在对应小节保留人工评估提示，连续的同部门提醒合并计数。
@@ -100,14 +101,14 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 
 程序不会自动把素材页链接发给企业微信用户。若显式开放局域网访问，必须同时评估鉴权、网络边界和运维风险；不要把 `preview=1` 当作远程入口。
 
-本地预览调试如果走 `local-preview-user`，也需要在 `config/platform-policy.yaml` 中给它授权 `direct_report`、`writer1`、`writer2`。需要调试综合调研整合时，再显式增加 `research_synthesis` 权限。
+本地预览调试如果走 `local-preview-user`，也需要在 `config/platform-policy.yaml` 中给它授权 `direct_report`、`writer1`、`writer2`。需要调试综合调研整合或内参周报时，再显式增加 `research_synthesis` 或 `internal_weekly` 权限。
 
 审核 Bot 使用 `app/review/` 的独立配置。
 
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py -v
 uv run --locked pytest tests/test_platform_runtime_environment.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

@@ -610,13 +610,18 @@ async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, f
 
 
 def _result_output_file(result: PlatformResult) -> Path | None:
-    if result.needs_clarification or result.skill_id not in {"research_synthesis", "shenyinxie_news"}:
+    allowed_suffixes = {
+        "research_synthesis": ".docx",
+        "shenyinxie_news": ".docx",
+        "internal_weekly": ".md",
+    }
+    if result.needs_clarification or result.skill_id not in allowed_suffixes:
         return None
     raw_path = str(result.output.get("output_file", "") or "").strip()
     if not raw_path:
         return None
     path = Path(raw_path).resolve()
-    if path.suffix.lower() != ".docx" or path.parent.name != "output":
+    if path.suffix.lower() != allowed_suffixes[result.skill_id] or path.parent.name != "output":
         return None
     try:
         size = path.stat().st_size
@@ -829,6 +834,7 @@ def _ack_label_for_skill(skill_id: str | None) -> str:
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",
         "shenyinxie_news": "深银协动态",
+        "internal_weekly": "内参周报内容核对稿",
     }
     return labels.get(str(skill_id or ""), "写作")
 

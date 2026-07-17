@@ -10,6 +10,7 @@ users:
       - rewrite
       - research_synthesis
       - shenyinxie_news
+      - internal_weekly
   local-preview-user:
     allowed_skills:
       - direct_report
@@ -17,3 +18,4 @@ users:
       - writer2
       - research_synthesis
       - shenyinxie_news
+      - internal_weekly
