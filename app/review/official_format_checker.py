@@ -16,7 +16,7 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
 from .parser import iter_reviewable_paragraphs, open_docx_sanitized, paragraph_text
-from .reviewer import Finding, ReviewResult
+from .core.models import Finding, ReviewResult
 
 
 _RULES_PATH = Path(__file__).with_name("official_format_rules.json")

@@ -17,6 +17,12 @@ from pathlib import Path
 
 from docx.oxml.ns import qn
 
+from .core.model_output import (
+    collect_message_text,
+    looks_like_valid_issue_json,
+    parse_paragraph_findings,
+)
+from .core.models import Finding, ReviewResult
 from .format_checker import check_all_format_rules
 from .model_config import build_anthropic_client
 from .parser import iter_reviewable_paragraphs, open_docx_sanitized
@@ -25,25 +31,6 @@ from .toc_utils import (
     normalize_toc_entry_text,
     strip_pageref,
 )
-
-
-@dataclass(frozen=True)
-class Finding:
-    """一条审核发现."""
-    rule_id: str            # 规则 ID(如 "dupe-char-check")
-    paragraph_index: int    # 段号(0-indexed)
-    line_number: int        # 估算行号(段号 + 1)
-    original_text: str      # 该段原始内容
-    description: str        # 问题描述
-    target_text: str = ""   # 需要标红的精确错误片段(通用审核使用)
-
-@dataclass(frozen=True)
-class ReviewResult:
-    """完整审核结果."""
-    findings: list[Finding]
-    total_rules: int
-    passed_rules: int
-    filename: str
 
 
 @dataclass(frozen=True)
@@ -771,64 +758,8 @@ def _parse_llm_output(
     paragraphs: list[str],
     allowed_rules: tuple[str, ...] = SEMANTIC_RULE_IDS,
 ) -> tuple[list[Finding], str]:
-    """从 LLM 输出中解析 JSON,转成 Finding 列表.
-
-    Returns:
-        (findings, reasoning) — findings 列表和 reasoning 文字
-    """
-    text = output.strip()
-
-    # 1. 去掉可能的 ```json 包裹
-    if text.startswith("```"):
-        lines = text.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    # 2. 找 JSON 主体
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
-
-    # 3. 解析
-    reasoning = ""
-    try:
-        data = json.loads(text)
-        reasoning = str(data.get("reasoning", ""))[:200]
-    except json.JSONDecodeError:
-        return [], ""
-
-    issues = data.get("issues", [])
-    if not isinstance(issues, list):
-        return [], reasoning
-
-    findings = []
-    for issue in issues:
-        if not isinstance(issue, dict):
-            continue
-        rule_id = str(issue.get("rule_id", ""))
-        # 只接受允许的规则 ID
-        if rule_id not in allowed_rules:
-            continue
-        try:
-            idx = int(issue.get("paragraph_index", -1))
-        except (ValueError, TypeError):
-            continue
-        if idx < 0 or idx >= len(paragraphs):
-            continue
-        findings.append(Finding(
-            rule_id=rule_id,
-            paragraph_index=idx,
-            line_number=idx + 1,
-            original_text=str(issue.get("original_text", paragraphs[idx])),
-            description=str(issue.get("description", ""))[:100],
-            target_text=str(issue.get("target_text", ""))[:50],
-        ))
-
-    return findings, reasoning
+    """兼容旧调用方，实际解析由共享审核核心完成。"""
+    return parse_paragraph_findings(output, paragraphs, allowed_rules)
 
 
 def _normalize_neican_target_text(finding: Finding, paragraph: str) -> str:
@@ -1138,34 +1069,11 @@ def _normalize_neican_findings(
 
 
 def _collect_message_text(message: object) -> str:
-    text_parts: list[str] = []
-    for block in getattr(message, "content", []):
-        if hasattr(block, "text") and block.text:
-            text_parts.append(block.text)
-    return "\n".join(text_parts)
+    return collect_message_text(message)
 
 
 def _looks_like_valid_issue_json(output: str) -> bool:
-    text = output.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        return False
-
-    try:
-        data = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return False
-
-    return isinstance(data, dict) and isinstance(data.get("issues", []), list)
+    return looks_like_valid_issue_json(output)
 
 
 async def _call_phase_llm_once(
@@ -1806,7 +1714,7 @@ def check_section_mismatch(paragraphs: list[str]) -> list["Finding"]:
     4. 实体出现在引用语境（"据X数据显示"）→ 不作为主体判断
     5. 期望板块与实际板块不一致 → 报错
     """
-    from .reviewer import Finding
+    from .core.models import Finding
     from .section_entities import (
         REGULATORY_ENTITIES, PARTY_GOV_ENTITIES, BANKING_ENTITIES,
         MARKET_OBSERVATION_MARKERS,

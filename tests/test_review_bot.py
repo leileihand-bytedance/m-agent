@@ -432,8 +432,9 @@ def test_persistent_single_review_routes_to_existing_engine(
     def passed_result(name: str) -> ReviewResult:
         return ReviewResult(findings=[], total_rules=1, passed_rules=1, filename=name)
 
-    async def fake_general(_paragraphs, _rules, name):
+    async def fake_general(_paragraphs, _rules, name, **kwargs):
         calls.append("general")
+        assert kwargs["profile"].profile_id == "general_docx"
         return passed_result(name)
 
     async def fake_halfmonthly(_paragraphs, _rules, name, **_kwargs):

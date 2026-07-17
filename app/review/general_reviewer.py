@@ -18,34 +18,33 @@ import asyncio
 import json
 import re
 from difflib import SequenceMatcher
+from typing import cast
 
-from .format_checker import check_all_format_rules
-from .general_rule_checker import (
-    GENERAL_DETERMINISTIC_RULE_IDS,
-    check_general_document_rules,
+from .core.dedupe import dedupe_prefer_longer_description
+from .core.evidence import build_paragraph_evidence
+from .core.metrics import ReviewRunMetrics
+from .core.model_output import (
+    collect_message_text,
+    looks_like_valid_issue_json,
+    parse_paragraph_findings,
 )
+from .core.model_runtime import create_model_message, run_with_retries
+from .core.models import Finding, ReviewResult, SourceKind
+from .format_checker import check_format_rules
+from .general_rule_checker import check_general_document_rules
 from .general_term_checker import build_protected_terms_prompt_section
-from .reviewer import (
-    Finding,
-    ReviewResult,
-    _collect_message_text,
-    _looks_like_valid_issue_json,
-    _parse_llm_output,
-)
 from .model_config import build_anthropic_client
-from .review_metrics import ReviewRunMetrics
-
-
-# 通用审核语义类规则 ID
-GENERAL_LOCAL_SEMANTIC_RULE_IDS = (
-    "general-typo",
-    "general-name-error",
-    "general-grammar",
-    "general-punctuation",
-    "general-incomplete",
-    "general-duplicate",
+from .rules.profiles import (
+    GENERAL_DETERMINISTIC_RULE_IDS,
+    GENERAL_DOCX_PROFILE,
+    GENERAL_DOCUMENT_SEMANTIC_RULE_IDS,
+    GENERAL_LOCAL_SEMANTIC_RULE_IDS,
+    ReviewProfile,
 )
-GENERAL_LOGIC_RULE_IDS = ("general-logic-inconsistency",)
+
+
+# 保留旧常量名，实际规则来源统一到静态审核 profile。
+GENERAL_LOGIC_RULE_IDS = GENERAL_DOCUMENT_SEMANTIC_RULE_IDS
 GENERAL_SEMANTIC_RULE_IDS = GENERAL_LOCAL_SEMANTIC_RULE_IDS + GENERAL_LOGIC_RULE_IDS
 
 _GENERAL_CHUNK_MAX_CHARS = 6000
@@ -77,17 +76,6 @@ _SPECIFIC_FORMAT_RULE_IDS = {
     "mixed-punct",
     "num-unit",
 }
-
-
-def _create_model_message(client, metrics: ReviewRunMetrics | None, **kwargs):
-    if metrics is not None:
-        metrics.record_model_call()
-    try:
-        return client.messages.create(**kwargs)
-    except Exception:
-        if metrics is not None:
-            metrics.record_model_failure()
-        raise
 
 
 def _build_general_chunks(paragraphs: list[str]) -> list[list[tuple[int, str]]]:
@@ -130,6 +118,7 @@ def _build_general_prompt(
     rules_text: str,
     chunk: list[tuple[int, str]],
     filename: str,
+    local_rule_ids: tuple[str, ...] = GENERAL_LOCAL_SEMANTIC_RULE_IDS,
 ) -> str:
     """构造通用审核 prompt."""
     paras_text = "\n\n".join(
@@ -196,7 +185,7 @@ def _build_general_prompt(
 
 **关键规则:**
 - paragraph_index 必须直接使用上面段落标签中的数字
-- rule_id 必须是以下之一:{", ".join(GENERAL_LOCAL_SEMANTIC_RULE_IDS)}
+- rule_id 必须是以下之一:{", ".join(local_rule_ids)}
 - target_text 必须是原文里真实出现的短片段，优先返回真正出错的词、标点或句尾残句
 - original_text 必须是该段的**完整原文**,不要截断
 - 需要提出替换时，description 统一写成“原文错误片段”应为“正确写法”；修改前文本必须与 target_text 完全一致并真实出现在原文
@@ -284,13 +273,15 @@ def _call_general_llm_once(
     prompt: str,
     paragraphs: list[str],
     allowed_paragraph_indexes: frozenset[int],
+    allowed_rule_ids: tuple[str, ...] = GENERAL_LOCAL_SEMANTIC_RULE_IDS,
     metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str | None]:
     """调用 LLM 做通用审核，返回 findings 或错误原因."""
     client, model_name = build_anthropic_client()
-    message = _create_model_message(
+    message = create_model_message(
         client,
-        metrics,
+        metrics=metrics,
+        stage="local_scan",
         model=model_name,
         max_tokens=8192,
         temperature=0,
@@ -298,17 +289,17 @@ def _call_general_llm_once(
         timeout=180.0,
     )
 
-    output = _collect_message_text(message)
+    output = collect_message_text(message)
 
-    if not _looks_like_valid_issue_json(output):
+    if not looks_like_valid_issue_json(output):
         if metrics is not None:
-            metrics.record_model_failure()
+            metrics.record_model_failure("local_scan")
         return [], "invalid JSON"
 
-    findings, _ = _parse_llm_output(
+    findings, _ = parse_paragraph_findings(
         output,
         paragraphs,
-        GENERAL_LOCAL_SEMANTIC_RULE_IDS,
+        allowed_rule_ids,
     )
     findings = [
         finding
@@ -321,26 +312,28 @@ def _call_general_llm_once(
 def _call_whole_document_logic_llm_once(
     prompt: str,
     paragraphs: list[str],
+    allowed_rule_ids: tuple[str, ...] = GENERAL_LOGIC_RULE_IDS,
     metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str | None]:
     """调用 LLM 做一次通篇逻辑审核."""
     client, model_name = build_anthropic_client()
-    message = _create_model_message(
+    message = create_model_message(
         client,
-        metrics,
+        metrics=metrics,
+        stage="whole_document_logic",
         model=model_name,
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
         timeout=240.0,
     )
 
-    output = _collect_message_text(message)
-    if not _looks_like_valid_issue_json(output):
+    output = collect_message_text(message)
+    if not looks_like_valid_issue_json(output):
         if metrics is not None:
-            metrics.record_model_failure()
+            metrics.record_model_failure("whole_document_logic")
         return [], "invalid JSON"
 
-    findings, _ = _parse_llm_output(output, paragraphs, GENERAL_LOGIC_RULE_IDS)
+    findings, _ = parse_paragraph_findings(output, paragraphs, allowed_rule_ids)
     return findings, None
 
 
@@ -348,10 +341,10 @@ async def _review_whole_document_logic(
     prompt: str,
     paragraphs: list[str],
     metrics: ReviewRunMetrics | None = None,
+    allowed_rule_ids: tuple[str, ...] = GENERAL_LOGIC_RULE_IDS,
 ) -> tuple[list[Finding], str | None]:
     """通篇逻辑审核失败时重试一次，不阻断现有分段审核."""
-    errors: list[str] = []
-    for attempt in range(2):
+    async def run_attempt(attempt: int) -> tuple[list[Finding], str | None]:
         try:
             loop = asyncio.get_running_loop()
             findings, err = await loop.run_in_executor(
@@ -359,15 +352,15 @@ async def _review_whole_document_logic(
                 _call_whole_document_logic_llm_once,
                 prompt,
                 paragraphs,
+                allowed_rule_ids,
                 metrics,
             )
             if err:
-                errors.append(err)
                 print(
                     f"  通篇逻辑审核第 {attempt + 1} 次失败: {err}",
                     flush=True,
                 )
-                continue
+                return [], err
             print(
                 f"  通篇逻辑审核第 {attempt + 1} 次: {len(findings)} 条",
                 flush=True,
@@ -375,14 +368,18 @@ async def _review_whole_document_logic(
             return findings, None
         except Exception as exc:
             error = str(exc)
-            errors.append(error)
             print(
                 f"  通篇逻辑审核第 {attempt + 1} 次失败: {error}",
                 flush=True,
             )
+            return [], error
+
+    outcome = await run_with_retries(run_attempt, max_attempts=2)
+    if outcome.succeeded:
+        return outcome.value or [], None
     if metrics is not None:
         metrics.record_degraded_stage("whole_document_logic")
-    return [], "; ".join(errors)
+    return [], "; ".join(outcome.errors)
 
 
 _RELATED_PARAGRAPH_RE = re.compile(
@@ -563,9 +560,10 @@ def _call_long_document_verifier_once(
     metrics: ReviewRunMetrics | None = None,
 ) -> tuple[set[int] | None, str | None]:
     client, model_name = build_anthropic_client()
-    message = _create_model_message(
+    message = create_model_message(
         client,
-        metrics,
+        metrics=metrics,
+        stage="candidate_verification",
         model=model_name,
         max_tokens=4096,
         temperature=0,
@@ -603,24 +601,24 @@ def _call_long_document_verifier_once(
                 break
 
     if data is None:
-        output = _collect_message_text(message).strip()
+        output = collect_message_text(message).strip()
         start = output.find("{")
         end = output.rfind("}")
         if start < 0 or end <= start:
             if metrics is not None:
-                metrics.record_model_failure()
+                metrics.record_model_failure("candidate_verification")
             return None, "invalid JSON"
         try:
             data = json.loads(output[start:end + 1])
         except json.JSONDecodeError:
             if metrics is not None:
-                metrics.record_model_failure()
+                metrics.record_model_failure("candidate_verification")
             return None, "invalid JSON"
 
     raw_ids = data.get("keep_candidate_ids")
     if not isinstance(raw_ids, list):
         if metrics is not None:
-            metrics.record_model_failure()
+            metrics.record_model_failure("candidate_verification")
         return None, "missing keep_candidate_ids"
 
     keep_ids: set[int] = set()
@@ -812,6 +810,7 @@ def _normalize_general_description(finding: Finding, target_text: str) -> str:
 def _normalize_general_findings(
     semantic_findings: list[Finding],
     paragraphs: list[str],
+    source_kind: SourceKind = "docx",
 ) -> list[Finding]:
     """对通用审核 findings 做保守校验，只保留可定位的高置信结果."""
     normalized: list[Finding] = []
@@ -837,12 +836,21 @@ def _normalize_general_findings(
         } and not target_text:
             continue
 
+        evidence = build_paragraph_evidence(
+            paragraphs,
+            paragraph_index=finding.paragraph_index,
+            target_text=target_text,
+            source_kind=source_kind,
+        )
+        if evidence is None:
+            continue
+
         normalized.append(
             Finding(
                 rule_id=finding.rule_id,
                 paragraph_index=finding.paragraph_index,
                 line_number=finding.line_number,
-                original_text=paragraph,
+                original_text=evidence.context,
                 description=_normalize_general_description(finding, target_text),
                 target_text=target_text,
             )
@@ -995,8 +1003,8 @@ def _prune_logic_findings_covered_by_deterministic(
     return pruned
 
 
-def _general_total_rules() -> int:
-    return len(GENERAL_SEMANTIC_RULE_IDS) + 6 + len(GENERAL_DETERMINISTIC_RULE_IDS)
+def _general_total_rules(profile: ReviewProfile = GENERAL_DOCX_PROFILE) -> int:
+    return len(profile.rule_ids)
 
 
 async def review_general(
@@ -1006,6 +1014,7 @@ async def review_general(
     *,
     metrics: ReviewRunMetrics | None = None,
     whole_document_logic_min_chars: int = _GENERAL_WHOLE_DOCUMENT_MIN_CHARS,
+    profile: ReviewProfile = GENERAL_DOCX_PROFILE,
 ) -> ReviewResult:
     """通用文档单阶段审核入口.
 
@@ -1014,14 +1023,19 @@ async def review_general(
     if not paragraphs:
         return ReviewResult(
             findings=[],
-            total_rules=_general_total_rules(),
-            passed_rules=_general_total_rules(),
+            total_rules=_general_total_rules(profile),
+            passed_rules=_general_total_rules(profile),
             filename=filename,
         )
 
     # 1. 格式类规则(复用)
-    format_findings = check_all_format_rules(paragraphs)
-    deterministic_findings = check_general_document_rules(paragraphs)
+    format_findings = check_format_rules(paragraphs, profile.format_rule_ids)
+    enabled_deterministic_rules = frozenset(profile.deterministic_rule_ids)
+    deterministic_findings = [
+        finding
+        for finding in check_general_document_rules(paragraphs)
+        if finding.rule_id in enabled_deterministic_rules
+    ]
 
     whole_document_prompt = _build_whole_document_logic_prompt(
         paragraphs,
@@ -1034,6 +1048,7 @@ async def review_general(
                 whole_document_prompt,
                 paragraphs,
                 metrics,
+                profile.document_semantic_rule_ids,
             )
         )
         if whole_document_prompt
@@ -1048,7 +1063,12 @@ async def review_general(
     llm_errors: list[str] = []
 
     for chunk_idx, chunk in enumerate(chunks, 1):
-        prompt = _build_general_prompt(rules_text, chunk, filename)
+        prompt = _build_general_prompt(
+            rules_text,
+            chunk,
+            filename,
+            profile.local_semantic_rule_ids,
+        )
         print(
             f"  通用审核 chunk={chunk_idx}/{len(chunks)} prompt_chars={len(prompt)}",
             flush=True,
@@ -1057,8 +1077,9 @@ async def review_general(
         async def run_chunk_scan(
             scan_index: int,
         ) -> tuple[list[Finding], str | None]:
-            errors: list[str] = []
-            for attempt in range(2):
+            async def run_attempt(
+                attempt: int,
+            ) -> tuple[list[Finding], str | None]:
                 try:
                     loop = asyncio.get_running_loop()
                     llm_findings, err = await loop.run_in_executor(
@@ -1067,16 +1088,16 @@ async def review_general(
                         prompt,
                         paragraphs,
                         frozenset(index for index, _ in chunk),
+                        profile.local_semantic_rule_ids,
                         metrics,
                     )
                     if err:
-                        errors.append(err)
                         print(
                             f"  通用审核 chunk={chunk_idx} scan={scan_index + 1} "
                             f"第 {attempt + 1} 次失败: {err}",
                             flush=True,
                         )
-                        continue
+                        return [], err
 
                     print(
                         f"  通用审核 chunk={chunk_idx} scan={scan_index + 1}: "
@@ -1086,13 +1107,17 @@ async def review_general(
                     return llm_findings, None
                 except Exception as exc:
                     error = str(exc)
-                    errors.append(error)
                     print(
                         f"  通用审核 chunk={chunk_idx} scan={scan_index + 1} "
                         f"第 {attempt + 1} 次失败: {error}",
                         flush=True,
                     )
-            return [], "; ".join(errors)
+                    return [], error
+
+            outcome = await run_with_retries(run_attempt, max_attempts=2)
+            if outcome.succeeded:
+                return outcome.value or [], None
+            return [], "; ".join(outcome.errors)
 
         scan_results = await asyncio.gather(
             *(run_chunk_scan(scan_index) for scan_index in range(scans_per_chunk))
@@ -1129,24 +1154,26 @@ async def review_general(
                 original_text="(LLM 调用失败)",
                 description=f"通用审核 LLM 调用失败:{'; '.join(llm_errors)}",
             )],
-            total_rules=_general_total_rules(),
+            total_rules=_general_total_rules(profile),
             passed_rules=0,
             filename=filename,
         )
 
     # 3. 代码侧校验 + 去重
-    semantic_findings = _normalize_general_findings(semantic_findings, paragraphs)
+    semantic_findings = _normalize_general_findings(
+        semantic_findings,
+        paragraphs,
+        cast(SourceKind, profile.material_kind),
+    )
     semantic_findings = _prune_logic_findings_covered_by_deterministic(
         semantic_findings,
         deterministic_findings,
     )
 
-    merged: dict[tuple[str, int, str], Finding] = {}
-    for f in semantic_findings:
-        key = _semantic_identity(f)
-        if key not in merged or len(f.description) > len(merged[key].description):
-            merged[key] = f
-    semantic_findings = list(merged.values())
+    semantic_findings = dedupe_prefer_longer_description(
+        semantic_findings,
+        key=_semantic_identity,
+    )
     semantic_findings = _filter_low_confidence_long_logic_findings(
         semantic_findings,
         paragraphs,
@@ -1225,7 +1252,7 @@ async def review_general(
 
     # 5. 计算通过规则数
     hit_rule_ids = {f.rule_id for f in all_findings if not f.rule_id.startswith("__")}
-    total_rules = _general_total_rules()
+    total_rules = _general_total_rules(profile)
     passed_rules = max(0, total_rules - len(hit_rule_ids))
 
     return ReviewResult(

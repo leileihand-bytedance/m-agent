@@ -11,12 +11,13 @@ import tempfile
 
 from app.platform.models import UploadedFile
 
+from .core.models import Finding, ReviewResult
 from .document_type import DocumentType, detect_document_type
 from .general_reviewer import review_general
 from .halfmonthly_reviewer import review_halfmonthly
 from .model_config import build_anthropic_client
 from .parser import ParsedDocxResult, parse_docx
-from .reviewer import Finding, ReviewResult, review_phase1, review_phase2
+from .reviewer import review_phase1, review_phase2
 
 
 _MAX_CROSS_FILE_CHARS = 100_000

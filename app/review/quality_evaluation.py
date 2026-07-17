@@ -19,7 +19,7 @@ from .document_type import DocumentType, detect_document_type
 from .error_marker import mark_errors_in_docx
 from .parser import open_docx_sanitized, parse_docx
 from .review_metrics import ReviewRunMetrics
-from .reviewer import ReviewResult
+from .core.models import ReviewResult
 
 
 _ATTACHMENT_REFERENCE_RE = re.compile(

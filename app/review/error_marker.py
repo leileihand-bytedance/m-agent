@@ -22,7 +22,7 @@ from docx.shared import RGBColor
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
-from .reviewer import Finding
+from .core.models import Finding
 from .parser import iter_reviewable_paragraphs, paragraph_text, open_docx_sanitized
 
 

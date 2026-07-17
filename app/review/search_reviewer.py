@@ -59,7 +59,7 @@ async def review_with_search(
     print(f"  Phase 2 完成: {len(phase2_findings)} 条问题")
 
     # ④ 合并结果
-    from app.review.reviewer import ReviewResult
+    from app.review.core.models import ReviewResult
     all_findings = list(phase1_result.findings) + phase2_findings
     return ReviewResult(
         findings=all_findings,
@@ -82,7 +82,7 @@ async def _review_phase2_with_search(
     2. 识别内容主体（党政要闻/监管动态）→ 主动搜索
     3. 其他 → LLM 判断（复用现有）
     """
-    from app.review.reviewer import Finding
+    from app.review.core.models import Finding
 
     findings: list[Finding] = []
     current_section = None

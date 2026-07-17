@@ -20,7 +20,7 @@ from .general_term_checker import (
 )
 
 if TYPE_CHECKING:
-    from .reviewer import Finding
+    from .core.models import Finding
 
 
 GENERAL_DETERMINISTIC_RULE_IDS = (
@@ -240,7 +240,7 @@ def _parse_time_token(token: str) -> tuple[int, int] | None:
 
 def check_placeholder_content(paragraphs: list[str]) -> list["Finding"]:
     """检测明显未清理的占位内容."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     findings: list[Finding] = []
     for idx, paragraph in enumerate(paragraphs):
@@ -269,7 +269,7 @@ def check_placeholder_content(paragraphs: list[str]) -> list["Finding"]:
 
 def check_heading_sequence(paragraphs: list[str]) -> list["Finding"]:
     """检测同层级标题/列表编号跳号."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     findings: list[Finding] = []
     current_path: dict[int, int | None] = {1: None, 2: None, 3: None}
@@ -321,7 +321,7 @@ def check_heading_sequence(paragraphs: list[str]) -> list["Finding"]:
 
 def check_empty_headings(paragraphs: list[str]) -> list["Finding"]:
     """检测标题后没有正文."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     findings: list[Finding] = []
     is_questionnaire = any(
@@ -374,7 +374,7 @@ def check_empty_headings(paragraphs: list[str]) -> list["Finding"]:
 
 def check_missing_references(paragraphs: list[str]) -> list["Finding"]:
     """检测附件/附表引用悬空."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     declared_exact: set[str] = set()
     declared_kinds: set[str] = set()
@@ -417,7 +417,7 @@ def check_missing_references(paragraphs: list[str]) -> list["Finding"]:
 
 def check_attachment_name_mismatches(paragraphs: list[str]) -> list["Finding"]:
     """检测正文里引用的附件名称与附件标题不一致."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     declared_titles: dict[str, str] = {}
     for paragraph in paragraphs:
@@ -477,7 +477,7 @@ def check_attachment_name_mismatches(paragraphs: list[str]) -> list["Finding"]:
 
 def check_invalid_dates(paragraphs: list[str]) -> list["Finding"]:
     """检测明显不成立的日期表达."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     findings: list[Finding] = []
     for idx, paragraph in enumerate(paragraphs):
@@ -526,7 +526,7 @@ def check_invalid_dates(paragraphs: list[str]) -> list["Finding"]:
 
 def check_date_range_logic(paragraphs: list[str]) -> list["Finding"]:
     """检测同一句里显式起止日期的前后逻辑错误."""
-    from .reviewer import Finding
+    from .core.models import Finding
 
     findings: list[Finding] = []
     for idx, paragraph in enumerate(paragraphs):

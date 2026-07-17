@@ -128,6 +128,14 @@ uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform
 uv run --locked pytest tests/test_review_html.py tests/test_review_task_execution.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_intake.py tests/test_review_bot.py -v
 ```
 
+修改审核共享核心、规则目录或静态profile时，还要运行：
+
+```bash
+uv run --locked pytest tests/test_review_shared_core.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_html.py tests/test_review_halfmonthly.py tests/test_review_multi_file.py tests/test_official_format_review.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_task_execution.py tests/test_review_bot.py -v
+```
+
+重点验证旧 `Finding` 和输出兼容、专属规则隔离、单点与双边证据、相同输入的模型调用预算、失败和降级指标，以及未迁移审核器不受影响。任务分支不读取生产 `.env`；真实模型测试只能按生产与测试Bot隔离要求单独执行。
+
 修改 PPTX 低级错误审核时，还要运行：
 
 ```bash

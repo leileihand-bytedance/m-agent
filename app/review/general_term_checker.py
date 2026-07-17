@@ -12,7 +12,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .reviewer import Finding
+    from .core.models import Finding
 
 
 # 受保护术语规则 ID
@@ -224,7 +224,7 @@ def check_term_variants(
 
     当段落中命中 forbidden_variants 时,产出 general-term-variant Finding。
     """
-    from .reviewer import Finding
+    from .core.models import Finding
     from .term_loader import load_term_library
 
     if term_library is None:

@@ -7,7 +7,8 @@
 
 from .parser import parse_docx, ParsedDocxResult
 from .rule_loader import load_rules
-from .reviewer import ReviewResult, Finding, review_text
+from .core.models import Finding, ReviewResult
+from .reviewer import review_text
 from .format_checker import check_all_format_rules
 from .output_formatter import format_review_result
 from .document_type import detect_document_type, DocumentType, document_type_label

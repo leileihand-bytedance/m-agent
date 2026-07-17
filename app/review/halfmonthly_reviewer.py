@@ -18,8 +18,9 @@ from pathlib import Path
 
 from docx.oxml.ns import qn
 
+from .core.model_output import parse_paragraph_findings
+from .core.models import Finding, ReviewResult
 from .format_checker import check_all_format_rules
-from .reviewer import Finding, ReviewResult, _parse_llm_output
 from .model_config import build_anthropic_client
 
 
@@ -705,7 +706,11 @@ def _call_halfmonthly_llm(
             text_parts.append(block.text)
     output = "\n".join(text_parts)
 
-    findings, _ = _parse_llm_output(output, paragraphs, HALFMONTHLY_LLM_RULE_IDS)
+    findings, _ = parse_paragraph_findings(
+        output,
+        paragraphs,
+        HALFMONTHLY_LLM_RULE_IDS,
+    )
     return findings
 
 

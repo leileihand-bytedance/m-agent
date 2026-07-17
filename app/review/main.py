@@ -33,7 +33,12 @@ from app.review.bot_logging import setup_logging, redirect_stdout_to_logging, lo
 from app.review.notification import AdminNotifier, NotificationConfig
 from app.review.user_registry import UserRegistry, RegistrationFlow
 from app.review import load_rules, format_review_result  # noqa: E402
-from app.review.reviewer import ReviewResult, Finding  # noqa: E402
+from app.review.core.models import Finding, ReviewResult  # noqa: E402
+from app.review.rules.profiles import (  # noqa: E402
+    GENERAL_DOCX_PROFILE,
+    GENERAL_HTML_PROFILE,
+    GENERAL_TEXT_PROFILE,
+)
 from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
 from app.review.intake import ReviewIntakeStore, is_format_review_request  # noqa: E402
 from app.platform.models import UploadedFile  # noqa: E402
@@ -973,7 +978,12 @@ async def _review_text_result(
         )
 
     general_rules_text = load_rules("app/review/rules_general.md")
-    result = await review_general(paragraphs, general_rules_text, "文字消息")
+    result = await review_general(
+        paragraphs,
+        general_rules_text,
+        "文字消息",
+        profile=GENERAL_TEXT_PROFILE,
+    )
     return result, paragraphs
 
 
@@ -1120,6 +1130,7 @@ async def _process_queued_single_review(
             whole_document_logic_min_chars=(
                 0 if len(parsed_html.paragraphs) >= 2 else 200
             ),
+            profile=GENERAL_HTML_PROFILE,
         )
         file_bytes = await asyncio.to_thread(workspace.input_file.read_bytes)
         await asyncio.to_thread(
@@ -1158,6 +1169,7 @@ async def _process_queued_single_review(
             parsed.paragraphs,
             load_rules("app/review/rules_general.md"),
             workspace.filename,
+            profile=GENERAL_DOCX_PROFILE,
         )
     elif doc_type == DocumentType.HALF_MONTHLY:
         from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402

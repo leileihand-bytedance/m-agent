@@ -18,6 +18,8 @@ app/review/
 ├── main.py                     # 企业微信入口和任务分流
 ├── task_execution.py           # 审核持久任务适配
 ├── intake.py                   # 审核材料和操作组装
+├── core/                       # 共享问题、模型运行、证据、去重和指标
+├── rules/                      # 规则目录和各审核类型静态profile
 ├── reviewer.py                 # 内参审核
 ├── general_reviewer.py         # 通用文字和 Word 审核
 ├── halfmonthly_reviewer.py     # 半月报审核
@@ -30,7 +32,9 @@ app/review/
 └── bot_logging.py              # 按天和大小分片日志
 ```
 
-内参审核静态规则当前位于 `app/data/rules.md`。在规则架构治理完成前，不随意移动或复制该文件。
+内参审核静态规则当前位于 `app/data/rules.md`。通用语义规则文字位于 `rules_general.md`，规则ID、规则族、证据和定位政策统一登记在 `rules/catalog.py`；profile只选择规则，不复制完整规则或提示词。
+
+纯文字、通用Word和静态HTML分别使用 `general_text`、`general_docx` 和 `general_html` profile。三个profile当前启用与迁移前相同的规则集合，共享问题结构、模型结果解析、调用和重试指标、逐字证据及去重能力。内参、半月报、PPT、公文格式和多文件仍按各自流程运行，后续逐类迁移；PPT不会直接使用Word提示词。
 
 ## 配置
 
@@ -70,12 +74,12 @@ M-Agent-Files/runtime/logs/
 - Word 标记必须命中原文，模型伪造的证据和位置不能进入结果。
 - 用户侧只收到简洁结果和必要的处理编号；内部路径、堆栈和详细异常进入运维事件。
 - 单项审核已经使用持久任务；多文件联合审核仍保留独立路径。
-- 当前审核规则来源较多，统一规则核心按 `TODO-031` 分批建设，不把所有文种强行塞入同一提示词。
+- 共享核心不包含文种判断；结构敏感和类型专属规则必须由静态profile隔离，不能因为规则名称相近而全局启用。
 
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_review_bot.py tests/test_review_task_execution.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_halfmonthly.py tests/test_review_html.py tests/test_official_format_review.py tests/test_review_multi_file.py tests/test_review_ppt_*.py -v
+uv run --locked pytest tests/test_review_shared_core.py tests/test_review_bot.py tests/test_review_task_execution.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_halfmonthly.py tests/test_review_html.py tests/test_official_format_review.py tests/test_review_multi_file.py tests/test_review_ppt_*.py -v
 ```
 
 真实文件、企业微信附件、进程重启和重复发送验收按 `docs/development/testing-and-delivery.md` 执行。

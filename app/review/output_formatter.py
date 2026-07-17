@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import re
 
-from .reviewer import ReviewResult, Finding
+from .core.models import Finding, ReviewResult
 from .document_type import DocumentType, document_type_label
 
 # 敏感词列表（触发企业微信反垃圾检查的词）
