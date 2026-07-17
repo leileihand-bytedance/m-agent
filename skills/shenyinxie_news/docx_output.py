@@ -150,8 +150,12 @@ def _article_block_text(article: SelectedArticle) -> str:
         "",
         article.body,
         "",
-        f"原文链接：{article.original_url}",
     ]
+    if article.content_mode == "extract" and article.source_title:
+        lines.append(f"原报道标题：{article.source_title}")
+    lines.append(f"原文链接：{article.original_url}")
+    if article.content_mode == "extract" and article.editor_note:
+        lines.append(article.editor_note)
     return "\n".join(lines)
 
 
@@ -171,8 +175,14 @@ def _add_article_block(doc: Document, article: SelectedArticle, rules: dict[str,
         if clean:
             _add_formatted_paragraph(doc, clean, body_rules)
 
-    # 原文链接
+    # 摘编稿保留原报道标题，便于用户核对标题调整。
+    if article.content_mode == "extract" and article.source_title:
+        _add_formatted_paragraph(doc, f"原报道标题：{article.source_title}", body_rules)
+
+    # 原文链接与摘编说明
     _add_formatted_paragraph(doc, f"原文链接：{article.original_url}", body_rules)
+    if article.content_mode == "extract" and article.editor_note:
+        _add_formatted_paragraph(doc, article.editor_note, body_rules)
 
 
 def _apply_page_rules(document: Document, rules: dict[str, object]) -> None:

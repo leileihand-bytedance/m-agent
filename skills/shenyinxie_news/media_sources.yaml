@@ -45,6 +45,12 @@ sources:
       - chinadaily.com.cn
     tier: 1
 
+  - name: 央广网
+    category: 中央级媒体
+    domains:
+      - cnr.cn
+    tier: 1
+
   - name: 工人日报
     category: 中央级媒体
     domains:
@@ -164,6 +170,34 @@ sources:
     category: 全国主流财经媒体
     domains:
       - money.163.com
+    tier: 2
+
+  # 经核验的全国金融行业媒体（首轮信源不足时启用）
+  - name: 金融时报-中国金融新闻网
+    category: 全国金融行业媒体
+    domains:
+      - financialnews.com.cn
+    tier: 2
+
+  - name: 中国电子银行网
+    category: 全国金融行业媒体
+    domains:
+      - cebnet.com.cn
+    tier: 2
+
+  # 广东主流媒体（首轮信源不足时启用）
+  - name: 南方日报-南方+
+    category: 广东主流媒体
+    domains:
+      - nfnews.com
+      - southcn.com
+      - nfapp.southcn.com
+    tier: 2
+
+  - name: 羊城晚报-金羊网
+    category: 广东主流媒体
+    domains:
+      - ycwb.com
     tier: 2
 
   # 深圳主流党媒

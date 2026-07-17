@@ -160,3 +160,74 @@ def test_docx_output_path_issue_number_formatting(tmp_path):
         template_path=tmp_path / "nonexistent.docx",
     )
     assert path.name == "深银协动态202614.docx"
+
+
+def test_docx_excerpt_includes_source_title_and_editor_note(tmp_path):
+    article = _article(
+        title="微众银行连续两年实施利润分配",
+        source_title="民营银行利润分配观察",
+        content_mode="extract",
+        editor_note="说明：本文根据原报道中微众银行相关内容摘编。",
+    )
+
+    path = write_shenyinxie_docx(
+        title="T",
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 15),
+        issue_number="2026-14",
+        articles=[article],
+        output_dir=tmp_path / "out",
+        template_path=tmp_path / "nonexistent.docx",
+    )
+
+    doc = Document(str(path))
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "原报道标题：民营银行利润分配观察" in full_text
+    assert "原文链接：https://people.com.cn/1" in full_text
+    assert "说明：本文根据原报道中微众银行相关内容摘编。" in full_text
+
+
+def test_docx_full_text_does_not_include_excerpt_disclosure(tmp_path):
+    path = write_shenyinxie_docx(
+        title="T",
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 15),
+        issue_number="2026-14",
+        articles=[_article(content_mode="full_text", source_title="微众银行发布年报")],
+        output_dir=tmp_path / "out",
+        template_path=tmp_path / "nonexistent.docx",
+    )
+
+    doc = Document(str(path))
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    assert "原报道标题：" not in full_text
+    assert "摘编" not in full_text
+
+
+def test_docx_placeholder_template_includes_excerpt_disclosure(tmp_path):
+    template = tmp_path / "template.docx"
+    doc = Document()
+    doc.add_paragraph("{{TITLE}}")
+    doc.add_paragraph("{{ARTICLE_1}}")
+    doc.save(str(template))
+    article = _article(
+        title="微众银行连续两年实施利润分配",
+        source_title="民营银行利润分配观察",
+        content_mode="extract",
+        editor_note="说明：本文根据原报道中微众银行相关内容摘编。",
+    )
+
+    path = write_shenyinxie_docx(
+        title="T",
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 15),
+        issue_number="2026-14",
+        articles=[article],
+        output_dir=tmp_path / "out",
+        template_path=template,
+    )
+
+    full_text = "\n".join(p.text for p in Document(str(path)).paragraphs)
+    assert "原报道标题：民营银行利润分配观察" in full_text
+    assert "原文链接：https://people.com.cn/1" in full_text
+    assert "说明：本文根据原报道中微众银行相关内容摘编。" in full_text

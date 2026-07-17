@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -22,6 +24,22 @@ class NewsCandidate(BaseModel):
     originality_score: float = Field(default=0.0)
     total_score: float = Field(default=0.0)
     select_reason: str = Field(default="", description="入选或淘汰理由")
+    content_mode: Literal["", "full_text", "extract"] = Field(default="")
+    source_title: str = Field(default="", description="原报道标题")
+    editor_note: str = Field(default="", description="摘编说明，全文稿为空")
+    achievement_types: list[str] = Field(default_factory=list)
+
+
+class ArticleAssessment(BaseModel):
+    """模型对单篇候选的报送价值和可用方式判断。"""
+
+    decision: Literal["full_text", "extract", "reject"]
+    is_positive_achievement: bool
+    subject_strength: Literal["primary", "substantial", "mention"]
+    reason: str
+    suggested_title: str = ""
+    excerpt_paragraphs: list[str] = Field(default_factory=list)
+    achievement_types: list[str] = Field(default_factory=list)
 
 
 class SelectedArticle(BaseModel):
@@ -32,6 +50,9 @@ class SelectedArticle(BaseModel):
     publish_date: str
     body: str
     original_url: str
+    content_mode: Literal["full_text", "extract"] = "full_text"
+    source_title: str = ""
+    editor_note: str = ""
 
 
 class ShenyinxieNewsResult(BaseModel):

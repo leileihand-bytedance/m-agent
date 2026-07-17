@@ -62,6 +62,10 @@ def test_whitelist_loads_from_yaml():
     whitelist = MediaWhitelist.from_yaml(path)
     assert whitelist.is_allowed("https://www.people.com.cn/article/1")
     assert whitelist.is_allowed("https://finance.qq.com/a/1")
+    assert whitelist.is_allowed("https://www.cnr.cn/jrpd/1")
+    assert whitelist.is_allowed("https://www.nfnews.com/content/1.html")
+    assert whitelist.is_allowed("https://app.financialnews.com.cn/detailArticle/1.html")
+    assert whitelist.is_allowed("https://www.cebnet.com.cn/20260701/1.html")
     assert not whitelist.is_allowed("https://www.webank.com/news/1")
 
 

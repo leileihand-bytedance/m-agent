@@ -3,19 +3,23 @@ from datetime import date
 import pytest
 
 from app.platform.tools import ToolGateway
-from skills.shenyinxie_news.schema import NewsCandidate
+from skills.shenyinxie_news.schema import ArticleAssessment, NewsCandidate
 from skills.shenyinxie_news.selection import (
     MediaSource,
     MediaWhitelist,
+    apply_editorial_assessment,
     apply_rule_relevance,
     dedupe_by_url,
     dedupe_same_article,
     extract_publish_date,
+    generate_expanded_search_queries,
+    generate_primary_search_queries,
     hard_gate,
     is_body_readable,
     is_date_in_period,
     score_candidates_rule_based,
     select_top_candidates,
+    validate_excerpt_paragraphs,
 )
 
 
@@ -166,6 +170,104 @@ def test_apply_rule_relevance():
     assert candidates[1].is_core_subject is False
 
 
+def test_roundup_title_containing_weizhong_is_not_enough_for_full_text():
+    body = "\n\n".join(
+        [
+            "全国多家民营银行陆续披露利润分配方案，行业整体仍以留存利润补充资本为主。",
+            "微众银行连续两年实施利润分配，相关方案已经股东会批准并完成现金股利派发。",
+            "其他多家民营银行也披露了分红安排，部分机构则继续保留利润补充资本。",
+        ]
+    )
+    candidate = NewsCandidate(
+        url="https://people.com.cn/roundup",
+        canonical_url="https://people.com.cn/roundup",
+        title="民营银行也分红，微众等已连续两年派现",
+        site="people.com.cn",
+        body=body,
+    )
+
+    apply_rule_relevance([candidate])
+
+    assert candidate.is_core_subject is not True
+
+
+def test_primary_positive_assessment_keeps_full_text():
+    body = "微众银行发布普惠金融年度成果。" * 20
+    candidate = NewsCandidate(
+        url="https://people.com.cn/feature",
+        canonical_url="https://people.com.cn/feature",
+        title="微众银行发布普惠金融年度成果",
+        site="people.com.cn",
+        body=body,
+    )
+    assessment = ArticleAssessment(
+        decision="full_text",
+        is_positive_achievement=True,
+        subject_strength="primary",
+        reason="全文聚焦微众银行普惠金融成果。",
+        achievement_types=["普惠金融成果"],
+    )
+
+    selected = apply_editorial_assessment(candidate, assessment)
+
+    assert selected is candidate
+    assert selected.body == body
+    assert selected.content_mode == "full_text"
+    assert selected.source_title == candidate.title
+
+
+def test_substantial_positive_assessment_accepts_exact_ordered_excerpt():
+    paragraph_one = "微众银行连续两年实施利润分配，相关方案已经股东会批准。"
+    paragraph_two = "该行本次派发现金股利，并继续保持稳健的资本补充安排。"
+    body = "\n\n".join(
+        [
+            "全国民营银行经营情况出现分化。",
+            paragraph_one,
+            paragraph_two,
+            "其他银行也披露了各自的利润分配安排。",
+        ]
+    )
+    candidate = NewsCandidate(
+        url="https://people.com.cn/roundup",
+        canonical_url="https://people.com.cn/roundup",
+        title="民营银行利润分配观察",
+        site="people.com.cn",
+        body=body,
+    )
+    assessment = ArticleAssessment(
+        decision="extract",
+        is_positive_achievement=True,
+        subject_strength="substantial",
+        suggested_title="微众银行连续两年实施利润分配",
+        excerpt_paragraphs=[paragraph_one, paragraph_two],
+        achievement_types=["经营成果"],
+        reason="综合稿包含可独立成立的微众银行成果段落。",
+    )
+
+    selected = apply_editorial_assessment(candidate, assessment)
+
+    assert selected is candidate
+    assert selected.title == "微众银行连续两年实施利润分配"
+    assert selected.body == f"{paragraph_one}\n\n{paragraph_two}"
+    assert selected.content_mode == "extract"
+    assert selected.source_title == "民营银行利润分配观察"
+    assert "摘编" in selected.editor_note
+
+
+@pytest.mark.parametrize(
+    "paragraphs",
+    [
+        ["模型改写出来、并不存在于原文中的微众银行成果段落。"],
+        ["第二段微众银行成果。", "第一段微众银行成果。"],
+        ["包括微众银行在内的多家机构参加活动。"],
+    ],
+)
+def test_excerpt_validation_rejects_missing_reordered_or_list_only_text(paragraphs):
+    source = "第一段微众银行成果。\n\n第二段微众银行成果。\n\n包括微众银行在内的多家机构参加活动。"
+
+    assert validate_excerpt_paragraphs(source, paragraphs) is None
+
+
 def test_score_candidates_rule_based():
     candidates = [
         NewsCandidate(
@@ -222,3 +324,18 @@ def test_select_top_candidates_falls_back_to_one():
     score_candidates_rule_based(candidates)
     selected = select_top_candidates(candidates, target=3)
     assert len(selected) == 1
+
+
+def test_search_queries_include_exact_publication_period_and_are_staged():
+    period_start = date(2026, 7, 1)
+    period_end = date(2026, 7, 15)
+
+    primary = generate_primary_search_queries(period_start, period_end)
+    expanded = generate_expanded_search_queries(period_start, period_end)
+
+    assert primary
+    assert expanded
+    assert all("2026年7月1日至2026年7月15日" in query for query in primary + expanded)
+    assert any("人民网" in query for query in primary)
+    assert any("央广网" in query for query in expanded)
+    assert any("南方" in query for query in expanded)

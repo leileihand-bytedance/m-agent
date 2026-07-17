@@ -188,7 +188,7 @@ handle_text_frame_with_app # 直接调用 PlatformApp
   -> 结果主动回企业微信对话
 ```
 
-当前写作 Bot 已经通过 `app/writing/bot.py` 接入真实 AiBotSDK 长连接，并调用 `PlatformApp`。材料润色另设 `app/rewrite_bot/` 作为过渡期独立入口，但业务逻辑仍只保留在 `skills/rewrite/`，底座、权限和工具层全部复用。该入口自己的纯文字 intake 只负责保存“尚未说明要求的原文”并追问一次，不包含润色规则，也不能接收其他 Skill。长期方向仍是统一入口，不把每个新 Skill 都复制成一套独立业务实现。
+当前写作 Bot 已经通过 `app/writing/bot.py` 接入真实 AiBotSDK 长连接，并调用 `PlatformApp`。深银协动态复用底座的 `search`、`web_reader` 和 `llm_writer`：DeepSeek 搜索仅建立候选池，Skill 自己维护分阶段媒体白名单和结构化选稿口径，工具仍须经过 `ToolGateway`。材料润色另设 `app/rewrite_bot/` 作为过渡期独立入口，但业务逻辑仍只保留在 `skills/rewrite/`，底座、权限和工具层全部复用。该入口自己的纯文字 intake 只负责保存“尚未说明要求的原文”并追问一次，不包含润色规则，也不能接收其他 Skill。长期方向仍是统一入口，不把每个新 Skill 都复制成一套独立业务实现。
 
 写作 Bot 当前还具备短任务组装 v1：
 

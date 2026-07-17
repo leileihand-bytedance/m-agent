@@ -1,7 +1,7 @@
 id: shenyinxie_news
 name: 深银协动态
 enabled: true
-description: 根据指定半月时间范围，通过 DeepSeek 原生联网搜索检索权威媒体发布的微众银行相关新闻，筛选 2 至 3 篇后按固定案例格式生成 Word 文档，并附原文链接供用户核对。
+description: 根据指定半月时间范围，通过 DeepSeek 分阶段检索权威媒体，用结构化模型判断微众银行正面新闻与成果；优先采用专题全文，必要时对综合报道做原文摘编，生成带原文链接和摘编说明的 Word 文档。
 triggers:
   - 深银协动态
   - 生成深银协动态

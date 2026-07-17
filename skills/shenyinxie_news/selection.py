@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import re
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import yaml
 
-from skills.shenyinxie_news.schema import NewsCandidate
+from skills.shenyinxie_news.schema import ArticleAssessment, NewsCandidate
+
+
+EXCERPT_EDITOR_NOTE = "说明：本文根据原报道中微众银行相关内容摘编。"
 
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -180,16 +184,82 @@ def hard_gate(candidate: NewsCandidate, period_start: date, period_end: date, wh
 
 
 def is_likely_core_subject(title: str, body: str) -> bool:
-    """确定性规则判断微众银行是否为核心主体。"""
+    """只做保守的规则预判，最终报送价值必须由结构化模型判断。"""
     full_text = f"{title}\n{body}".lower()
     keywords = ("微众银行", "深圳前海微众银行", "webank", "微粒贷", "微业贷", "微众")
     if not any(kw in full_text for kw in keywords):
         return False
-    # 简单启发式：微众相关词出现在前 500 字符中，或标题中
-    if "微众" in title.lower():
-        return True
-    head = full_text[:500]
-    return any(kw in head for kw in keywords)
+
+    roundup_hints = ("等", "多家", "民营银行", "银行业", "行业观察", "行业综述", "盘点")
+    if any(hint in title for hint in roundup_hints):
+        return False
+
+    mentions = len(re.findall(r"深圳前海微众银行|微众银行|webank|微粒贷|微业贷", full_text, re.I))
+    return "微众" in title.lower() and mentions >= 3
+
+
+def validate_excerpt_paragraphs(source_body: str, paragraphs: list[str]) -> str | None:
+    """校验摘编段落逐字存在、顺序一致且足以独立成篇。"""
+    source = source_body.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = [paragraph.strip() for paragraph in paragraphs if paragraph.strip()]
+    if not cleaned or len(cleaned) > 8:
+        return None
+    if any(len(paragraph) < 20 for paragraph in cleaned):
+        return None
+
+    cursor = 0
+    for paragraph in cleaned:
+        position = source.find(paragraph, cursor)
+        if position < 0:
+            return None
+        cursor = position + len(paragraph)
+
+    combined = "\n\n".join(cleaned)
+    if "微众" not in combined:
+        return None
+
+    if len(cleaned) == 1:
+        fact_markers = len(re.findall(r"\d|年|月|日|亿元|万元|%|成果|服务|发布|实施", combined))
+        if len(combined) < 120 or fact_markers < 2:
+            return None
+
+    return combined
+
+
+def apply_editorial_assessment(
+    candidate: NewsCandidate,
+    assessment: ArticleAssessment,
+) -> NewsCandidate | None:
+    """把模型决定转成受代码约束的全文或摘编候选。"""
+    candidate.source_title = candidate.source_title or candidate.title
+    candidate.select_reason = assessment.reason.strip()
+    candidate.achievement_types = list(dict.fromkeys(assessment.achievement_types))
+
+    if not assessment.is_positive_achievement:
+        return None
+
+    if assessment.decision == "full_text" and assessment.subject_strength == "primary":
+        candidate.content_mode = "full_text"
+        candidate.editor_note = ""
+        candidate.is_core_subject = True
+        return candidate
+
+    if assessment.decision != "extract" or assessment.subject_strength != "substantial":
+        return None
+
+    title = assessment.suggested_title.strip()
+    if not title or "微众" not in title or len(title) > 60:
+        return None
+    excerpt = validate_excerpt_paragraphs(candidate.body, assessment.excerpt_paragraphs)
+    if excerpt is None:
+        return None
+
+    candidate.title = title
+    candidate.body = excerpt
+    candidate.content_mode = "extract"
+    candidate.editor_note = EXCERPT_EDITOR_NOTE
+    candidate.is_core_subject = True
+    return candidate
 
 
 def is_likely_repost(body: str) -> bool:
@@ -299,17 +369,41 @@ def finalize_selected_articles(candidates: list[NewsCandidate]) -> list[dict[str
 
 
 
-def generate_search_queries(period_start: date, period_end: date) -> list[str]:
-    """生成多组搜索查询。"""
-    date_hint = f"{period_start.year}年{period_start.month}月"
+def _publication_period_hint(period_start: date, period_end: date) -> str:
+    return (
+        f"{period_start.year}年{period_start.month}月{period_start.day}日"
+        f"至{period_end.year}年{period_end.month}月{period_end.day}日"
+    )
+
+
+def generate_primary_search_queries(period_start: date, period_end: date) -> list[str]:
+    """生成首轮权威媒体检索词，并明确要求按发布日期限定区间。"""
+    date_hint = _publication_period_hint(period_start, period_end)
     return [
-        "微众银行",
-        "深圳前海微众银行",
         f"微众银行 {date_hint}",
-        "微众银行 site:gov.cn",
-        "微众银行 人民网",
-        "微众银行 深圳特区报",
+        f"深圳前海微众银行 {date_hint}",
+        f"微众银行 正面新闻 成果 {date_hint}",
+        f"微众银行 site:gov.cn {date_hint}",
+        f"微众银行 人民网 新华网 {date_hint}",
+        f"微众银行 深圳特区报 深圳商报 {date_hint}",
     ]
+
+
+def generate_expanded_search_queries(period_start: date, period_end: date) -> list[str]:
+    """首轮信源不足时，检索已核验的行业媒体和广东主流媒体。"""
+    date_hint = _publication_period_hint(period_start, period_end)
+    return [
+        f"微众银行 央广网 中国金融新闻网 电子银行网 {date_hint}",
+        f"微众银行 南方日报 南方+ 南方网 {date_hint}",
+        f"微众银行 羊城晚报 金羊网 {date_hint}",
+    ]
+
+
+def generate_search_queries(period_start: date, period_end: date) -> list[str]:
+    """兼容调用方：返回首轮与扩展轮的全部检索词。"""
+    return generate_primary_search_queries(period_start, period_end) + generate_expanded_search_queries(
+        period_start, period_end
+    )
 
 
 def normalize_url(url: str) -> str:
