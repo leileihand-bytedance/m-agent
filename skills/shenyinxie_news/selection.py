@@ -488,8 +488,8 @@ def _text_similarity(a: str, b: str) -> float:
     return len(intersection) / len(union)
 
 
-def _normalize_article_title(title: str) -> str:
-    """移除媒体站点追加的标题尾缀，再统一空白和标点。"""
+def strip_trailing_media_title_suffix(title: str) -> str:
+    """移除网页标题末尾由媒体站点自动追加的媒体名。"""
     normalized = title.strip()
     for separator in (" - ", "-", "—", "_", "|"):
         head, found, tail = normalized.rpartition(separator)
@@ -502,6 +502,12 @@ def _normalize_article_title(title: str) -> str:
         ):
             normalized = head.strip()
             break
+    return normalized
+
+
+def _normalize_article_title(title: str) -> str:
+    """移除媒体站点追加的标题尾缀，再统一空白和标点。"""
+    normalized = strip_trailing_media_title_suffix(title)
     return re.sub(r"[\W_]+", "", normalized.lower())
 
 

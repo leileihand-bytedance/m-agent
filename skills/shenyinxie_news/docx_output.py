@@ -1,31 +1,59 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 import shutil
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from docx import Document
 from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.shared import Cm, Pt
+from docx.text.paragraph import Paragraph
 
 from app.review.official_format_checker import load_official_format_rules
 from skills.shenyinxie_news.schema import SelectedArticle
 
 
-OUTPUT_FILENAME = "深银协动态{issue}.docx"
-_TEMPLATE_PLACEHOLDERS = (
+OUTPUT_FILENAME = "【深银协】微众银行{year}年{month}月第{monthly_issue}期信息动态.docx"
+_REQUIRED_TEMPLATE_PLACEHOLDERS = (
     "{{TITLE}}",
-    "{{YEAR}}",
-    "{{MONTH}}",
-    "{{ISSUE}}",
     "{{PERIOD_RANGE}}",
-    "{{ARTICLE_1}}",
-    "{{ARTICLE_2}}",
-    "{{ARTICLE_3}}",
+    "{{ARTICLE_1_TITLE}}",
+    "{{ARTICLE_1_BODY}}",
+    "{{ARTICLE_1_SOURCE}}",
+    "{{ARTICLE_2_TITLE}}",
+    "{{ARTICLE_2_BODY}}",
+    "{{ARTICLE_2_SOURCE}}",
+    "{{ARTICLE_3_TITLE}}",
+    "{{ARTICLE_3_BODY}}",
+    "{{ARTICLE_3_SOURCE}}",
 )
+_WEB_PAGE_CHROME_PATTERNS = (
+    re.compile(r"\d{4}-\d{1,2}-\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?"),
+    re.compile(r"第\d{1,2}版[:：].*"),
+    re.compile(r"人民日报\s+\d{4}年\d{1,2}月\d{1,2}日"),
+)
+_NEWSPAPER_METADATA_SUFFIX = re.compile(
+    r"\s*《[^》]{1,30}》\s*[（(]\s*\d{4}年\d{1,2}月\d{1,2}日\s*"
+    r"第\s*\d{1,2}\s*版\s*[）)]\s*$"
+)
+_WEB_PAGE_CHROME_EXACT = {
+    "+",
+    "-",
+    "本版新闻",
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun",
+}
 
 
 def _default_template_path() -> Path:
@@ -44,18 +72,25 @@ def write_shenyinxie_docx(
 ) -> Path:
     """生成深银协动态 Word 文档。
 
-    如果提供真实模板且包含约定占位符，会按占位符替换；
-    否则用代码按公文格式新建文档。
+    默认使用 Skill 自有的案例净化母版并按占位符替换。正式母版不可用时
+    直接停止；只有调用方显式传入兼容模板时，才保留旧版代码生成兜底。
     """
     target_dir = Path(output_dir).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    issue_part = issue_number.replace("-", "")
-    target = target_dir / OUTPUT_FILENAME.format(issue=issue_part)
+    monthly_issue = _monthly_issue(period_start)
+    target = target_dir / OUTPUT_FILENAME.format(
+        year=period_start.year,
+        month=period_start.month,
+        monthly_issue=monthly_issue,
+    )
 
+    using_default_template = template_path is None
     template = template_path or _default_template_path()
     if template.exists() and _looks_like_real_template(template):
         _fill_template(template, target, title, period_start, period_end, issue_number, articles)
+    elif using_default_template:
+        raise RuntimeError("深银协正式模板不可用，已停止生成，避免交付错误版式")
     else:
         _build_from_scratch(target, title, period_start, period_end, issue_number, articles)
 
@@ -63,11 +98,11 @@ def write_shenyinxie_docx(
 
 
 def _looks_like_real_template(template_path: Path) -> bool:
-    """模板文件若包含任意占位符，视为真实模板；否则视为空白占位。"""
+    """只有包含完整保真槽位的模板才允许进入原位替换流程。"""
     try:
         doc = Document(str(template_path))
-        full_text = "\n".join(p.text for p in doc.paragraphs)
-        return any(ph in full_text for ph in _TEMPLATE_PLACEHOLDERS)
+        paragraph_texts = {paragraph.text.strip() for paragraph in doc.paragraphs}
+        return all(placeholder in paragraph_texts for placeholder in _REQUIRED_TEMPLATE_PLACEHOLDERS)
     except Exception:
         return False
 
@@ -81,32 +116,52 @@ def _fill_template(
     issue_number: str,
     articles: list[SelectedArticle],
 ) -> None:
-    """基于模板占位符替换生成文档。"""
+    """复制案例净化模板，在原位置填入标题、日期和逐段正文。"""
     shutil.copy(str(template_path), str(target))
     doc = Document(str(target))
-
     period_range = _format_period_range(period_start, period_end)
 
-    for para in doc.paragraphs:
-        text = para.text
-        if not any(ph in text for ph in _TEMPLATE_PLACEHOLDERS):
-            continue
-        new_text = text
-        new_text = new_text.replace("{{TITLE}}", title)
-        new_text = new_text.replace("{{YEAR}}", str(period_start.year))
-        new_text = new_text.replace("{{MONTH}}", str(period_start.month))
-        new_text = new_text.replace("{{ISSUE}}", issue_number)
-        new_text = new_text.replace("{{PERIOD_RANGE}}", period_range)
-        for idx in range(3):
-            placeholder = f"{{{{ARTICLE_{idx + 1}}}}}"
-            if placeholder in new_text:
-                if idx < len(articles):
-                    new_text = new_text.replace(placeholder, _article_block_text(articles[idx]))
-                else:
-                    new_text = new_text.replace(placeholder, "")
-        para.clear()
-        para.add_run(new_text)
+    _replace_paragraph_text(_find_placeholder(doc, "{{TITLE}}"), title)
+    _replace_paragraph_text(
+        _find_placeholder(doc, "{{PERIOD_RANGE}}"),
+        f"（{period_range}）",
+    )
 
+    labels = ("一", "二", "三")
+    for index in range(1, 4):
+        heading = _find_placeholder(doc, f"{{{{ARTICLE_{index}_TITLE}}}}")
+        body_marker = _find_placeholder(doc, f"{{{{ARTICLE_{index}_BODY}}}}")
+        source = _find_placeholder(doc, f"{{{{ARTICLE_{index}_SOURCE}}}}")
+        if index > len(articles):
+            _remove_paragraph(heading)
+            _remove_paragraph(body_marker)
+            _remove_paragraph(source)
+            continue
+
+        article = articles[index - 1]
+        _replace_paragraph_text(heading, f"【动态{labels[index - 1]}】{article.title}")
+        _expand_body_paragraphs(
+            body_marker,
+            _article_body_paragraphs(article.body, article.title),
+        )
+        source_prototype = deepcopy(source._p)
+        _set_source_paragraph(source, article)
+
+        insertion_point = source
+        if article.content_mode == "extract" and article.source_title:
+            insertion_point = _insert_cloned_paragraph_after(
+                insertion_point,
+                source_prototype,
+                f"原报道标题：{article.source_title}",
+            )
+        if article.content_mode == "extract" and article.editor_note:
+            _insert_cloned_paragraph_after(
+                insertion_point,
+                source_prototype,
+                article.editor_note,
+            )
+
+    doc.core_properties.title = title.strip() or "深银协动态"
     doc.save(str(target))
 
 
@@ -125,10 +180,16 @@ def _build_from_scratch(
     doc.core_properties.title = title.strip() or "深银协动态"
 
     _add_formatted_paragraph(doc, title, rules["roles"]["title"])
-    _add_formatted_paragraph(doc, f"（{_format_period_range(period_start, period_end)}）", rules["roles"]["body"])
+    period = _add_formatted_paragraph(
+        doc,
+        f"（{_format_period_range(period_start, period_end)}）",
+        rules["roles"]["body"],
+    )
+    period.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    period.paragraph_format.first_line_indent = Pt(0)
 
     for idx, article in enumerate(articles, start=1):
-        heading = f"动态{['一', '二', '三'][idx - 1]}"
+        heading = f"【动态{['一', '二', '三'][idx - 1]}】{article.title}"
         _add_formatted_paragraph(doc, heading, rules["roles"]["heading1"])
         _add_article_block(doc, article, rules)
 
@@ -137,50 +198,149 @@ def _build_from_scratch(
 
 def _format_period_range(period_start: date, period_end: date) -> str:
     if period_start.year == period_end.year and period_start.month == period_end.month:
-        return f"{period_start.year}年{period_start.month}月{period_start.day}日—{period_end.day}日"
+        return (
+            f"{period_start.year}年{period_start.month}月{period_start.day}日-"
+            f"{period_end.month}月{period_end.day}日"
+        )
     if period_start.year == period_end.year:
-        return f"{period_start.year}年{period_start.month}月{period_start.day}日—{period_end.month}月{period_end.day}日"
-    return f"{period_start.year}年{period_start.month}月{period_start.day}日—{period_end.year}年{period_end.month}月{period_end.day}日"
+        return (
+            f"{period_start.year}年{period_start.month}月{period_start.day}日-"
+            f"{period_end.month}月{period_end.day}日"
+        )
+    return (
+        f"{period_start.year}年{period_start.month}月{period_start.day}日-"
+        f"{period_end.year}年{period_end.month}月{period_end.day}日"
+    )
 
 
-def _article_block_text(article: SelectedArticle) -> str:
-    lines = [
-        f"标题：{article.title}",
-        f"来源：{article.media_name}　发布时间：{article.publish_date}",
-        "",
-        article.body,
-        "",
-    ]
-    if article.content_mode == "extract" and article.source_title:
-        lines.append(f"原报道标题：{article.source_title}")
-    lines.append(f"原文链接：{article.original_url}")
-    if article.content_mode == "extract" and article.editor_note:
-        lines.append(article.editor_note)
-    return "\n".join(lines)
+def _monthly_issue(period_start: date) -> int:
+    return 1 if period_start.day <= 15 else 2
+
+
+def _find_placeholder(doc: Document, placeholder: str) -> Paragraph:
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip() == placeholder:
+            return paragraph
+    raise ValueError(f"深银协模板缺少占位符：{placeholder}")
+
+
+def _replace_paragraph_text(paragraph: Paragraph, text: str) -> None:
+    for hyperlink in list(paragraph._p.xpath("./w:hyperlink")):
+        hyperlink.getparent().remove(hyperlink)
+
+    runs = list(paragraph.runs)
+    keep = next((run for run in runs if run.text.strip()), runs[0] if runs else None)
+    if keep is None:
+        keep = paragraph.add_run()
+    for run in runs:
+        if run._element is not keep._element:
+            run._element.getparent().remove(run._element)
+    keep.text = text
+
+
+def _remove_paragraph(paragraph: Paragraph) -> None:
+    parent = paragraph._p.getparent()
+    if parent is not None:
+        parent.remove(paragraph._p)
+
+
+def _insert_cloned_paragraph_after(
+    paragraph: Paragraph,
+    prototype: object,
+    text: str,
+) -> Paragraph:
+    clone = deepcopy(prototype)
+    paragraph._p.addnext(clone)
+    inserted = Paragraph(clone, paragraph._parent)
+    _replace_paragraph_text(inserted, text)
+    return inserted
+
+
+def _expand_body_paragraphs(marker: Paragraph, paragraphs: list[str]) -> None:
+    paragraph_texts = paragraphs or [""]
+    prototype = deepcopy(marker._p)
+    _replace_paragraph_text(marker, paragraph_texts[0])
+    current = marker
+    for text in paragraph_texts[1:]:
+        current = _insert_cloned_paragraph_after(current, prototype, text)
+
+
+def _article_body_paragraphs(body: str, article_title: str = "") -> list[str]:
+    paragraphs: list[str] = []
+    for raw_line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        clean = raw_line.replace("\u200b", "").replace("\ufeff", "").strip()
+        clean = _NEWSPAPER_METADATA_SUFFIX.sub("", clean).strip()
+        clean = re.sub(r"[\t ]+", " ", clean)
+        if not clean or clean in _WEB_PAGE_CHROME_EXACT:
+            continue
+        if article_title and clean == article_title.strip():
+            continue
+        if any(pattern.fullmatch(clean) for pattern in _WEB_PAGE_CHROME_PATTERNS):
+            continue
+        paragraphs.append(clean)
+    return paragraphs
+
+
+def _format_publish_date(value: str) -> str:
+    clean = value.strip()
+    try:
+        parsed = datetime.strptime(clean, "%Y-%m-%d").date()
+    except ValueError:
+        return clean
+    return f"{parsed.year}年{parsed.month}月{parsed.day}日"
+
+
+def _set_source_paragraph(paragraph: Paragraph, article: SelectedArticle) -> None:
+    prefix = (
+        f"来源：{article.media_name}　"
+        f"发布时间：{_format_publish_date(article.publish_date)}　"
+        "原文链接："
+    )
+    _replace_paragraph_text(paragraph, prefix)
+    _append_hyperlink(paragraph, article.original_url)
+
+
+def _append_hyperlink(paragraph: Paragraph, url: str) -> None:
+    relationship_id = paragraph.part.relate_to(
+        url,
+        RELATIONSHIP_TYPE.HYPERLINK,
+        is_external=True,
+    )
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+
+    run = OxmlElement("w:r")
+    run_properties = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0563C1")
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    run_properties.extend((color, underline))
+    run.append(run_properties)
+
+    text = OxmlElement("w:t")
+    text.text = url
+    run.append(text)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
 
 
 def _add_article_block(doc: Document, article: SelectedArticle, rules: dict[str, object]) -> None:
     body_rules = rules["roles"]["body"]
 
-    # 报道标题
-    para = _add_formatted_paragraph(doc, f"标题：{article.title}", body_rules)
-    para.runs[0].bold = True
-
-    # 来源与日期
-    _add_formatted_paragraph(doc, f"来源：{article.media_name}　发布时间：{article.publish_date}", body_rules)
-
     # 正文
-    for line in article.body.replace("\r\n", "\n").split("\n"):
-        clean = line.strip()
-        if clean:
-            _add_formatted_paragraph(doc, clean, body_rules)
+    for paragraph_text in _article_body_paragraphs(article.body, article.title):
+        _add_formatted_paragraph(doc, paragraph_text, body_rules)
 
     # 摘编稿保留原报道标题，便于用户核对标题调整。
     if article.content_mode == "extract" and article.source_title:
         _add_formatted_paragraph(doc, f"原报道标题：{article.source_title}", body_rules)
 
-    # 原文链接与摘编说明
-    _add_formatted_paragraph(doc, f"原文链接：{article.original_url}", body_rules)
+    # 来源、日期、原文链接与摘编说明
+    source = _add_formatted_paragraph(doc, "", body_rules)
+    source.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    source.paragraph_format.first_line_indent = Pt(0)
+    _set_source_paragraph(source, article)
     if article.content_mode == "extract" and article.editor_note:
         _add_formatted_paragraph(doc, article.editor_note, body_rules)
 

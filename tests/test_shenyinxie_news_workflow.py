@@ -131,7 +131,7 @@ def test_workflow_returns_three_selected_articles(tmp_path):
     assert len(result.sources) == 3
     assert result.output_file != ""
     assert Path(result.output_file).exists()
-    assert "深圳银行业协会工作动态" in result.title
+    assert result.title == "微众银行2026年7月第2期信息动态"
     assert "动态一" in result.body
     assert "微众银行" in result.body
     # 验证搜索和网页读取都被调用
@@ -211,6 +211,8 @@ def test_workflow_honors_explicit_upper_half_month_instruction(tmp_path):
 
     assert result.period_start == "2026-07-01"
     assert result.period_end == "2026-07-15"
+    assert result.title == "微众银行2026年7月第1期信息动态"
+    assert Path(result.output_file).name == "【深银协】微众银行2026年7月第1期信息动态.docx"
     assert len(result.articles) == 1
     search_calls = [query for kind, query in calls if kind == "search"]
     assert any("2026年7月1日至2026年7月15日" in query for query in search_calls)

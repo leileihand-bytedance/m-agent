@@ -19,6 +19,7 @@ from skills.shenyinxie_news.selection import (
     is_date_in_period,
     score_candidates_rule_based,
     select_top_candidates,
+    strip_trailing_media_title_suffix,
     validate_excerpt_paragraphs,
 )
 
@@ -177,6 +178,16 @@ def test_dedupe_same_article_ignores_trailing_media_title_suffix():
 
     assert len(result) == 1
     assert result[0].url == "http://m.eeo.com.cn/original"
+
+
+def test_strip_trailing_media_title_suffix_preserves_article_title():
+    assert (
+        strip_trailing_media_title_suffix(
+            "微众银行：以党建引领金融高质量发展 - 21世纪经济报道"
+        )
+        == "微众银行：以党建引领金融高质量发展"
+    )
+    assert strip_trailing_media_title_suffix("微众银行发布新成果") == "微众银行发布新成果"
 
 
 def test_apply_rule_relevance():

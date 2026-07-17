@@ -23,6 +23,7 @@ from skills.shenyinxie_news.selection import (
     normalize_url,
     score_candidates_rule_based,
     select_top_candidates,
+    strip_trailing_media_title_suffix,
 )
 
 
@@ -68,12 +69,14 @@ def _build_candidate(search_item: dict[str, str], page: dict[str, str]) -> NewsC
     """把搜索结果和网页读取结果合并为 NewsCandidate。"""
     url = str(page.get("url") or search_item.get("url", ""))
     canonical = str(page.get("canonical_url") or url)
-    title = str(page.get("title") or search_item.get("title", ""))
+    source_title = str(page.get("title") or search_item.get("title", ""))
+    title = strip_trailing_media_title_suffix(source_title)
     site = str(page.get("site", ""))
     return NewsCandidate(
         url=url,
         canonical_url=canonical,
         title=title,
+        source_title=source_title,
         site=site,
         publish_date=str(page.get("publish_date", "")),
         date_extracted_from=str(page.get("date_extracted_from", "")),
@@ -309,7 +312,11 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             body_lines.append(f"【摘编说明】{article.editor_note}")
         body_lines.append("")
 
-    title = f"深圳银行业协会工作动态（{period_start.year}年{period_start.month}月第{int(issue_number.split('-')[1])}期）"
+    monthly_issue = 1 if period_start.day <= 15 else 2
+    title = (
+        f"微众银行{period_start.year}年{period_start.month}月"
+        f"第{monthly_issue}期信息动态"
+    )
     body = "\n".join(body_lines).strip()
 
     output_file = ""
