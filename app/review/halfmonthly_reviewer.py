@@ -18,10 +18,19 @@ from pathlib import Path
 
 from docx.oxml.ns import qn
 
-from .core.model_output import parse_paragraph_findings
+from .core.dedupe import dedupe_prefer_longer_description
+from .core.evidence import canonicalize_paragraph_finding
+from .core.metrics import ReviewRunMetrics
+from .core.model_output import (
+    collect_message_text,
+    looks_like_valid_issue_json,
+    parse_paragraph_findings,
+)
+from .core.model_runtime import create_model_message, run_with_retries
 from .core.models import Finding, ReviewResult
-from .format_checker import check_all_format_rules
+from .format_checker import check_format_rules
 from .model_config import build_anthropic_client
+from .rules.profiles import HALFMONTHLY_PROFILE, ReviewProfile
 
 
 # 半月报标准一级标题顺序(可部分出现,但相对顺序不能乱)
@@ -108,6 +117,9 @@ HALFMONTHLY_LLM_RULE_IDS = (
     "halfmonthly-section-mismatch",
     "content-duplicate",
 )
+
+_HALFMONTHLY_QUOTED_TEXT_RE = re.compile(r"[“\"'《【]([^”\"'》】]{1,30})[”\"'》】]")
+_HALFMONTHLY_RETRY_EMPTY = "__empty_or_invalid_issues__"
 
 
 @dataclass(frozen=True)
@@ -602,6 +614,7 @@ def _build_halfmonthly_prompt(
     paragraphs: list[str],
     filename: str,
     date_range: DateRange | None,
+    allowed_rules: tuple[str, ...] = HALFMONTHLY_LLM_RULE_IDS,
 ) -> str:
     """构造半月报审核 prompt."""
     paras_text = "\n\n".join(
@@ -677,7 +690,7 @@ def _build_halfmonthly_prompt(
 
 **关键规则:**
 - paragraph_index 从 0 开始
-- rule_id 必须是以下之一:{", ".join(HALFMONTHLY_LLM_RULE_IDS)}
+- rule_id 必须是以下之一:{", ".join(allowed_rules)}
 - target_text 必须是原文里真实出现的短片段(如日期、人名、职务、短语),用于精确定位标红位置
 - original_text 必须是该段的**完整原文**,不要截断
 - **不确定的问题不要写,宁可漏报不要误报**
@@ -690,28 +703,66 @@ def _build_halfmonthly_prompt(
 def _call_halfmonthly_llm(
     prompt: str,
     paragraphs: list[str],
-) -> list[Finding]:
+    allowed_rules: tuple[str, ...] = HALFMONTHLY_LLM_RULE_IDS,
+    metrics: ReviewRunMetrics | None = None,
+) -> tuple[list[Finding], str | None]:
     """调用 LLM 做半月报语义审核."""
     client, model_name = build_anthropic_client()
-    message = client.messages.create(
+    message = create_model_message(
+        client,
+        metrics=metrics,
+        stage="halfmonthly_semantic",
         model=model_name,
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
         timeout=180.0,
     )
-
-    text_parts = []
-    for block in message.content:
-        if hasattr(block, "text") and block.text:
-            text_parts.append(block.text)
-    output = "\n".join(text_parts)
+    output = collect_message_text(message)
+    if not looks_like_valid_issue_json(output):
+        if metrics is not None:
+            metrics.record_model_failure("halfmonthly_semantic")
+        return [], _HALFMONTHLY_RETRY_EMPTY
 
     findings, _ = parse_paragraph_findings(
         output,
         paragraphs,
-        HALFMONTHLY_LLM_RULE_IDS,
+        allowed_rules,
     )
-    return findings
+    if not findings:
+        return [], _HALFMONTHLY_RETRY_EMPTY
+    return findings, None
+
+
+def _normalize_halfmonthly_target_text(finding: Finding, paragraph: str) -> str:
+    target = finding.target_text.strip()
+    if target and target in paragraph:
+        return target
+    for quoted in _HALFMONTHLY_QUOTED_TEXT_RE.findall(finding.description):
+        candidate = quoted.strip()
+        if candidate and candidate in paragraph:
+            return candidate
+    if finding.rule_id == "content-incomplete":
+        stripped = paragraph.strip().rstrip("。！？?!；;")
+        return stripped[-min(len(stripped), 12):]
+    stripped = paragraph.strip()
+    return stripped if len(stripped) <= 30 else stripped[:20]
+
+
+def _normalize_halfmonthly_model_findings(
+    findings: list[Finding],
+    paragraphs: list[str],
+) -> list[Finding]:
+    normalized: list[Finding] = []
+    for finding in findings:
+        canonical = canonicalize_paragraph_finding(
+            finding,
+            paragraphs,
+            source_kind="docx",
+            target_resolver=_normalize_halfmonthly_target_text,
+        )
+        if canonical is not None:
+            normalized.append(canonical)
+    return normalized
 
 
 async def review_halfmonthly(
@@ -720,6 +771,9 @@ async def review_halfmonthly(
     filename: str,
     numbering: tuple[int | None, ...] = (),
     file_path: Path | None = None,
+    *,
+    metrics: ReviewRunMetrics | None = None,
+    profile: ReviewProfile = HALFMONTHLY_PROFILE,
 ) -> ReviewResult:
     """半月报单阶段审核入口.
 
@@ -728,53 +782,103 @@ async def review_halfmonthly(
     if not paragraphs:
         return ReviewResult(
             findings=[],
-            total_rules=len(HALFMONTHLY_SEMANTIC_RULE_IDS) + 6,
-            passed_rules=len(HALFMONTHLY_SEMANTIC_RULE_IDS) + 6,
+            total_rules=len(profile.rule_ids),
+            passed_rules=len(profile.rule_ids),
             filename=filename,
         )
+
+    enabled_specialized_rules = frozenset(profile.specialized_rule_ids)
+    active_llm_rules = tuple(
+        rule_id
+        for rule_id in HALFMONTHLY_LLM_RULE_IDS
+        if rule_id in enabled_specialized_rules
+    )
 
     date_range = parse_halfmonthly_date_range(paragraphs)
 
     # 1. 格式类规则(复用)
-    format_findings = check_all_format_rules(paragraphs)
+    format_findings = check_format_rules(paragraphs, profile.format_rule_ids)
 
     # 2. 时间范围代码预检
-    date_findings = _check_date_range(paragraphs, date_range)
+    date_findings = (
+        _check_date_range(paragraphs, date_range)
+        if "halfmonthly-date-mismatch" in enabled_specialized_rules
+        else []
+    )
 
     # 3. 领导职务与排序代码预检
-    leader_findings = _check_leader_title(paragraphs)
+    leader_findings = (
+        _check_leader_title(paragraphs)
+        if "halfmonthly-leader-title" in enabled_specialized_rules
+        else []
+    )
 
     # 4. 一级标题顺序代码预检
-    section_order_findings = _check_section_order(paragraphs)
+    section_order_findings = (
+        _check_section_order(paragraphs)
+        if "halfmonthly-section-order" in enabled_specialized_rules
+        else []
+    )
 
     # 5. 编号连续性代码预检
-    numbering_findings = _check_numbering_continuity(paragraphs, numbering)
+    numbering_findings = (
+        _check_numbering_continuity(paragraphs, numbering)
+        if "halfmonthly-numbering" in enabled_specialized_rules
+        else []
+    )
 
     # 6. 正文格式代码预检（字体、字号、行距、首行缩进）
     body_format_findings: list[Finding] = []
-    if file_path is not None and file_path.exists():
+    if (
+        "halfmonthly-body-format" in enabled_specialized_rules
+        and file_path is not None
+        and file_path.exists()
+    ):
         body_format_findings = _check_body_format(paragraphs, file_path)
 
     # 7. LLM 语义审核
-    prompt = _build_halfmonthly_prompt(rules_text, paragraphs, filename, date_range)
+    prompt = _build_halfmonthly_prompt(
+        rules_text,
+        paragraphs,
+        filename,
+        date_range,
+        active_llm_rules,
+    )
     print(f"  半月报 prompt_chars={len(prompt)}", flush=True)
 
     semantic_findings: list[Finding] = []
     llm_errors: list[str] = []
 
-    for attempt in range(2):
+    async def run_attempt(attempt: int) -> tuple[list[Finding], str | None]:
         try:
             loop = asyncio.get_running_loop()
-            llm_findings = await loop.run_in_executor(
-                None, _call_halfmonthly_llm, prompt, paragraphs
+            llm_findings, error = await loop.run_in_executor(
+                None,
+                _call_halfmonthly_llm,
+                prompt,
+                paragraphs,
+                active_llm_rules,
+                metrics,
             )
-            semantic_findings.extend(llm_findings)
             print(f"  半月报 LLM 第 {attempt + 1} 次: {len(llm_findings)} 条", flush=True)
-            if llm_findings:
-                break
+            return llm_findings, error
         except Exception as exc:
-            llm_errors.append(str(exc))
             print(f"  半月报 LLM 第 {attempt + 1} 次失败: {exc}", flush=True)
+            return [], str(exc)
+
+    outcome = await run_with_retries(run_attempt, max_attempts=2)
+    if outcome.succeeded:
+        semantic_findings.extend(
+            _normalize_halfmonthly_model_findings(outcome.value or [], paragraphs)
+        )
+    else:
+        llm_errors.extend(
+            error
+            for error in outcome.errors
+            if error != _HALFMONTHLY_RETRY_EMPTY
+        )
+        if metrics is not None:
+            metrics.record_degraded_stage("halfmonthly_semantic")
 
     # 8. 合并:所有代码预检结果加入语义结果
     semantic_findings.extend(date_findings)
@@ -799,12 +903,14 @@ async def review_halfmonthly(
         )
 
     # 9. 去重（含 target_text 以区分同段落不同人物/问题）
-    merged: dict[tuple[str, int, str], Finding] = {}
-    for f in semantic_findings:
-        key = (f.rule_id, f.paragraph_index, f.target_text)
-        if key not in merged or len(f.description) > len(merged[key].description):
-            merged[key] = f
-    semantic_findings = list(merged.values())
+    semantic_findings = dedupe_prefer_longer_description(
+        semantic_findings,
+        key=lambda finding: (
+            finding.rule_id,
+            finding.paragraph_index,
+            finding.target_text,
+        ),
+    )
 
     # 10. 合并格式类 + 语义类
     all_findings = list(semantic_findings)
@@ -813,7 +919,7 @@ async def review_halfmonthly(
 
     # 11. 计算通过规则数
     hit_rule_ids = {f.rule_id for f in all_findings if not f.rule_id.startswith("__")}
-    total_rules = len(HALFMONTHLY_SEMANTIC_RULE_IDS) + 6  # N条语义 + 6条全局格式
+    total_rules = len(profile.rule_ids)
     passed_rules = max(0, total_rules - len(hit_rule_ids))
 
     return ReviewResult(

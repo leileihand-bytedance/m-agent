@@ -34,7 +34,7 @@ app/review/
 
 内参审核静态规则当前位于 `app/data/rules.md`。通用语义规则文字位于 `rules_general.md`，规则ID、规则族、证据和定位政策统一登记在 `rules/catalog.py`；profile只选择规则，不复制完整规则或提示词。
 
-纯文字、通用Word和静态HTML分别使用 `general_text`、`general_docx` 和 `general_html` profile。三个profile当前启用与迁移前相同的规则集合，共享问题结构、模型结果解析、调用和重试指标、逐字证据及去重能力。内参、半月报、PPT、公文格式和多文件仍按各自流程运行，后续逐类迁移；PPT不会直接使用Word提示词。
+纯文字、通用Word和静态HTML分别使用 `general_text`、`general_docx` 和 `general_html` profile。内参和半月报分别使用 `neican_docx`、`halfmonthly_docx` profile，并复用共享模型调用、固定预算重试、阶段指标、逐字证据和去重；内参两阶段结构、半月报领导职务与板块顺序等专属判断仍留在原模块。PPT、公文格式和多文件继续按各自流程运行；PPT不会直接使用Word提示词。
 
 ## 配置
 

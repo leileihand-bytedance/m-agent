@@ -22,6 +22,8 @@ from app.review.rules.profiles import (
     GENERAL_DOCX_PROFILE,
     GENERAL_HTML_PROFILE,
     GENERAL_TEXT_PROFILE,
+    HALFMONTHLY_PROFILE,
+    NEICAN_PROFILE,
     REVIEW_PROFILES,
 )
 
@@ -65,6 +67,21 @@ class _JsonMessages:
 class _JsonClient:
     def __init__(self):
         self.messages = _JsonMessages()
+
+
+class _PayloadMessages:
+    def __init__(self, counter: dict[str, int], payload: str):
+        self._counter = counter
+        self._payload = payload
+
+    def create(self, **kwargs: object) -> _Message:
+        self._counter["calls"] += 1
+        return _Message(self._payload)
+
+
+class _PayloadClient:
+    def __init__(self, counter: dict[str, int], payload: str):
+        self.messages = _PayloadMessages(counter, payload)
 
 
 def test_shared_models_keep_legacy_paragraph_contract() -> None:
@@ -269,3 +286,116 @@ def test_rule_catalog_and_profiles_are_static_and_isolate_specialized_rules() ->
     assert RULE_CATALOG["quote-pair"].scope == RuleScope.COMMON
     assert RULE_CATALOG["general-incomplete"].scope == RuleScope.CONDITIONAL
     assert RULE_CATALOG["halfmonthly-leader-title"].scope == RuleScope.SPECIALIZED
+
+
+def test_neican_phases_use_shared_runtime_metrics_without_extra_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.review.reviewer import review_phase1, review_phase2
+
+    output = """{
+      "issues": [
+        {
+          "paragraph_index": 0,
+          "rule_id": "title-truncated",
+          "target_text": "模型虚构片段",
+          "original_text": "模型虚构原文",
+          "description": "“测试标题”语义不完整"
+        }
+      ]
+    }"""
+    counter = {"calls": 0}
+    client = _PayloadClient(counter, output)
+    metrics = ReviewRunMetrics()
+    monkeypatch.setattr(
+        "app.review.reviewer._get_anthropic_client",
+        lambda: (client, "fake-model"),
+    )
+
+    async def run_phases() -> tuple[ReviewResult, ReviewResult]:
+        phase1 = await review_phase1(
+            ["测试标题", "测试正文。"],
+            "",
+            "内参.docx",
+            metrics=metrics,
+            profile=NEICAN_PROFILE,
+        )
+        phase2 = await review_phase2(
+            ["测试标题", "测试正文。"],
+            "",
+            "内参.docx",
+            metrics=metrics,
+            profile=NEICAN_PROFILE,
+        )
+        return phase1, phase2
+
+    phase1, phase2 = asyncio.run(run_phases())
+
+    phase1_finding = next(
+        finding
+        for finding in phase1.findings
+        if finding.rule_id == "title-truncated"
+    )
+    assert counter["calls"] == 2
+    assert metrics.model_calls == 2
+    assert metrics.model_calls_by_stage == {
+        "neican_phase1": 1,
+        "neican_phase2": 1,
+    }
+    assert phase1.total_rules + phase2.total_rules == len(NEICAN_PROFILE.rule_ids)
+    assert phase1_finding.original_text == "测试标题"
+    assert phase1_finding.target_text == "测试标题"
+
+
+def test_halfmonthly_uses_shared_profile_metrics_and_exact_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.review.halfmonthly_reviewer import review_halfmonthly
+
+    output = """{
+      "issues": [
+        {
+          "paragraph_index": 4,
+          "rule_id": "halfmonthly-section-mismatch",
+          "target_text": "模型虚构片段",
+          "original_text": "模型虚构原文",
+          "description": "“项目”内容应归入工作动态及成果"
+        }
+      ]
+    }"""
+    counter = {"calls": 0}
+    metrics = ReviewRunMetrics()
+    monkeypatch.setattr(
+        "app.review.halfmonthly_reviewer.build_anthropic_client",
+        lambda: (_PayloadClient(counter, output), "fake-model"),
+    )
+    paragraphs = [
+        "内部资料",
+        "微众银行信息动态半月报",
+        "（2026年4月1日-4月15日）",
+        "业务动态及成果",
+        "4月3日，我行完成项目。",
+    ]
+
+    result = asyncio.run(
+        review_halfmonthly(
+            paragraphs,
+            "",
+            "半月报.docx",
+            metrics=metrics,
+            profile=HALFMONTHLY_PROFILE,
+        )
+    )
+
+    model_finding = next(
+        finding
+        for finding in result.findings
+        if finding.rule_id == "halfmonthly-section-mismatch"
+    )
+    assert counter["calls"] == 1
+    assert metrics.model_calls == 1
+    assert metrics.model_calls_by_stage == {"halfmonthly_semantic": 1}
+    assert result.total_rules == len(HALFMONTHLY_PROFILE.rule_ids)
+    assert model_finding.original_text == paragraphs[4]
+    assert model_finding.target_text == "项目"
+    assert model_finding.target_text in model_finding.original_text

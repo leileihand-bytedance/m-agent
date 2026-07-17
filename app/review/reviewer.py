@@ -17,15 +17,20 @@ from pathlib import Path
 
 from docx.oxml.ns import qn
 
+from .core.dedupe import dedupe_prefer_longer_description
+from .core.evidence import canonicalize_paragraph_finding
+from .core.metrics import ReviewRunMetrics
 from .core.model_output import (
     collect_message_text,
     looks_like_valid_issue_json,
     parse_paragraph_findings,
 )
+from .core.model_runtime import create_model_message, run_with_retries
 from .core.models import Finding, ReviewResult
-from .format_checker import check_all_format_rules
+from .format_checker import check_all_format_rules, check_format_rules
 from .model_config import build_anthropic_client
 from .parser import iter_reviewable_paragraphs, open_docx_sanitized
+from .rules.profiles import NEICAN_PROFILE, ReviewProfile
 from .toc_utils import (
     find_toc_range,
     normalize_toc_entry_text,
@@ -1043,27 +1048,24 @@ def _normalize_neican_findings(
                     )
                 )
 
-    deduped: dict[tuple[str, int], Finding] = {}
-    for finding in processed:
-        key = (finding.rule_id, finding.paragraph_index)
-        if key not in deduped or len(finding.description) > len(deduped[key].description):
-            deduped[key] = finding
-
     normalized: list[Finding] = []
 
-    for finding in deduped.values():
+    for finding in dedupe_prefer_longer_description(
+        processed,
+        key=lambda item: (item.rule_id, item.paragraph_index),
+    ):
         paragraph = paragraphs[finding.paragraph_index]
-        target_text = _normalize_neican_target_text(finding, paragraph)
-        normalized.append(
-            Finding(
-                rule_id=finding.rule_id,
-                paragraph_index=finding.paragraph_index,
-                line_number=finding.line_number,
-                original_text=paragraph,
-                description=finding.description,
-                target_text=target_text,
-            )
+        canonical = canonicalize_paragraph_finding(
+            finding,
+            paragraphs,
+            source_kind="docx",
+            target_resolver=lambda item, context: _normalize_neican_target_text(
+                item,
+                context,
+            ),
         )
+        if canonical is not None:
+            normalized.append(canonical)
 
     return normalized
 
@@ -1083,12 +1085,16 @@ async def _call_phase_llm_once(
     allowed_rules: tuple[str, ...],
     label: str,
     attempt: int,
+    metrics: ReviewRunMetrics | None = None,
 ) -> tuple[list[Finding], str, str | None]:
     """执行一次阶段化 LLM 调用。"""
     try:
         client, model_name = _get_anthropic_client()
         message = await asyncio.to_thread(
-            client.messages.create,
+            create_model_message,
+            client,
+            metrics=metrics,
+            stage=label,
             model=model_name,
             max_tokens=8192,
             messages=[{"role": "user", "content": prompt}],
@@ -1097,6 +1103,8 @@ async def _call_phase_llm_once(
         output = _collect_message_text(message)
         findings_part, reasoning = _parse_llm_output(output, paragraphs, allowed_rules)
         if not _looks_like_valid_issue_json(output):
+            if metrics is not None:
+                metrics.record_model_failure(label)
             print(f"  {label} 第 {attempt + 1} 次失败: invalid JSON", flush=True)
             return [], "", "invalid JSON"
         reason_preview = reasoning[:40] if reasoning else "(无)"
@@ -1115,6 +1123,9 @@ async def review_phase1(
     rules_text: str,
     filename: str,
     file_path: Path | None = None,
+    *,
+    metrics: ReviewRunMetrics | None = None,
+    profile: ReviewProfile = NEICAN_PROFILE,
 ) -> ReviewResult:
     """第一阶段审核：格式正则 + 基础语义（title-truncated/content-mismatch/content-incomplete）。
 
@@ -1124,16 +1135,24 @@ async def review_phase1(
     Returns:
         ReviewResult（含格式类 findings + phase1 语义 findings + 正文格式 findings）
     """
-    TOTAL_PHASE1_RULES = len(PHASE1_RULES) + 7  # 3 语义 + 6 全局格式 + 1 正文格式
+    active_rules = tuple(
+        rule_id for rule_id in PHASE1_RULES if rule_id in profile.specialized_rule_ids
+    )
+    has_body_format_rule = "weekly-body-format" in profile.specialized_rule_ids
+    total_phase1_rules = (
+        len(active_rules)
+        + len(profile.format_rule_ids)
+        + int(has_body_format_rule)
+    )
     if not paragraphs:
-        return ReviewResult(findings=[], total_rules=TOTAL_PHASE1_RULES, passed_rules=TOTAL_PHASE1_RULES, filename=filename)
+        return ReviewResult(findings=[], total_rules=total_phase1_rules, passed_rules=total_phase1_rules, filename=filename)
 
     # 格式类规则（正则，秒级）
-    format_findings = check_all_format_rules(paragraphs)
+    format_findings = check_format_rules(paragraphs, profile.format_rule_ids)
 
     # 内参周报正文格式检查（需要 docx 文件）
     weekly_format_findings: list[Finding] = []
-    if file_path is not None and file_path.exists():
+    if has_body_format_rule and file_path is not None and file_path.exists():
         weekly_format_findings = _check_weekly_body_format(paragraphs, file_path)
 
     # 基础语义 LLM（默认 1 次，失败时重试 1 次）
@@ -1142,30 +1161,24 @@ async def review_phase1(
     prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=1, file_path=file_path)
     print(f"  phase1 prompt_chars={len(prompt)}", flush=True)
 
-    results = [
-        await _call_phase_llm_once(
+    async def run_attempt(attempt: int) -> tuple[list[Finding], str | None]:
+        findings_part, _, error = await _call_phase_llm_once(
             prompt=prompt,
             paragraphs=paragraphs,
-            allowed_rules=PHASE1_RULES,
-            label="phase1",
-            attempt=0,
+            allowed_rules=active_rules,
+            label="neican_phase1",
+            attempt=attempt,
+            metrics=metrics,
         )
-    ]
-    if results[0][2]:
-        results.append(
-            await _call_phase_llm_once(
-                prompt=prompt,
-                paragraphs=paragraphs,
-                allowed_rules=PHASE1_RULES,
-                label="phase1",
-                attempt=1,
-            )
-        )
+        return findings_part, error
 
-    for findings_part, reasoning, err in results:
-        if err:
-            llm_errors.append(err)
-        semantic_findings.extend(findings_part)
+    outcome = await run_with_retries(run_attempt, max_attempts=2)
+    if outcome.succeeded:
+        semantic_findings.extend(outcome.value or [])
+    else:
+        llm_errors.extend(outcome.errors)
+        if metrics is not None:
+            metrics.record_degraded_stage("neican_phase1")
 
     # 全部失败
     if not semantic_findings and llm_errors:
@@ -1177,23 +1190,18 @@ async def review_phase1(
                 original_text="(LLM 调用失败)",
                 description=f"LLM phase1 调用失败:{'; '.join(llm_errors)}",
             )],
-            total_rules=TOTAL_PHASE1_RULES,
+            total_rules=total_phase1_rules,
             passed_rules=0,
             filename=filename,
         )
 
     # 语义 findings 去重
-    merged: dict[tuple[str, int], Finding] = {}
-    for f in semantic_findings:
-        key = (f.rule_id, f.paragraph_index)
-        if key not in merged or len(f.description) > len(merged[key].description):
-            merged[key] = f
     review_document = _build_review_document(paragraphs, file_path)
     semantic_findings = _normalize_neican_findings(
-        list(merged.values()),
+        semantic_findings,
         paragraphs,
         document=review_document,
-        active_rules=PHASE1_RULES,
+        active_rules=active_rules,
     )
 
     # 格式类 + 语义类 + 正文格式
@@ -1204,11 +1212,11 @@ async def review_phase1(
 
     # 计算通过规则数
     hit_rule_ids = {f.rule_id for f in all_findings if not f.rule_id.startswith("__")}
-    passed_rules = TOTAL_PHASE1_RULES - len(hit_rule_ids)
+    passed_rules = total_phase1_rules - len(hit_rule_ids)
 
     return ReviewResult(
         findings=all_findings,
-        total_rules=TOTAL_PHASE1_RULES,
+        total_rules=total_phase1_rules,
         passed_rules=max(0, passed_rules),
         filename=filename,
     )
@@ -1219,44 +1227,44 @@ async def review_phase2(
     rules_text: str,
     filename: str,
     file_path: Path | None = None,
+    *,
+    metrics: ReviewRunMetrics | None = None,
+    profile: ReviewProfile = NEICAN_PROFILE,
 ) -> ReviewResult:
     """第二阶段审核：深度内容（toc-mismatch/content-out-of-scope/content-duplicate/content-outdated）。
 
     Returns:
         ReviewResult（含 phase2 语义 findings）
     """
+    active_rules = tuple(
+        rule_id for rule_id in PHASE2_RULES if rule_id in profile.specialized_rule_ids
+    )
     if not paragraphs:
-        return ReviewResult(findings=[], total_rules=len(PHASE2_RULES), passed_rules=len(PHASE2_RULES), filename=filename)
+        return ReviewResult(findings=[], total_rules=len(active_rules), passed_rules=len(active_rules), filename=filename)
 
     semantic_findings: list[Finding] = []
     llm_errors: list[str] = []
     prompt = _build_phase_prompt(rules_text, paragraphs, filename, phase=2, file_path=file_path)
     print(f"  phase2 prompt_chars={len(prompt)}", flush=True)
 
-    results = [
-        await _call_phase_llm_once(
+    async def run_attempt(attempt: int) -> tuple[list[Finding], str | None]:
+        findings_part, _, error = await _call_phase_llm_once(
             prompt=prompt,
             paragraphs=paragraphs,
-            allowed_rules=PHASE2_RULES,
-            label="phase2",
-            attempt=0,
+            allowed_rules=active_rules,
+            label="neican_phase2",
+            attempt=attempt,
+            metrics=metrics,
         )
-    ]
-    if results[0][2]:
-        results.append(
-            await _call_phase_llm_once(
-                prompt=prompt,
-                paragraphs=paragraphs,
-                allowed_rules=PHASE2_RULES,
-                label="phase2",
-                attempt=1,
-            )
-        )
+        return findings_part, error
 
-    for findings_part, reasoning, err in results:
-        if err:
-            llm_errors.append(err)
-        semantic_findings.extend(findings_part)
+    outcome = await run_with_retries(run_attempt, max_attempts=2)
+    if outcome.succeeded:
+        semantic_findings.extend(outcome.value or [])
+    else:
+        llm_errors.extend(outcome.errors)
+        if metrics is not None:
+            metrics.record_degraded_stage("neican_phase2")
 
     # ===== 代码化预检测（确定性高）=====
     from .section_entities import (
@@ -1278,32 +1286,27 @@ async def review_phase2(
                 original_text="(LLM 调用失败)",
                 description=f"LLM phase2 调用失败:{'; '.join(llm_errors)}",
             )],
-            total_rules=len(PHASE2_RULES),
+            total_rules=len(active_rules),
             passed_rules=0,
             filename=filename,
         )
 
     # 去重
-    merged: dict[tuple[str, int], Finding] = {}
-    for f in semantic_findings:
-        key = (f.rule_id, f.paragraph_index)
-        if key not in merged or len(f.description) > len(merged[key].description):
-            merged[key] = f
     semantic_findings = _normalize_neican_findings(
-        list(merged.values()),
+        semantic_findings,
         paragraphs,
         document=review_document,
-        active_rules=PHASE2_RULES,
+        active_rules=active_rules,
     )
     semantic_findings.sort(key=lambda f: f.paragraph_index)
 
     # 计算通过规则数
     hit_rule_ids = {f.rule_id for f in semantic_findings if not f.rule_id.startswith("__")}
-    passed_rules = len(PHASE2_RULES) - len(hit_rule_ids)
+    passed_rules = len(active_rules) - len(hit_rule_ids)
 
     return ReviewResult(
         findings=semantic_findings,
-        total_rules=len(PHASE2_RULES),
+        total_rules=len(active_rules),
         passed_rules=max(0, passed_rules),
         filename=filename,
     )

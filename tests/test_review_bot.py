@@ -59,6 +59,7 @@ from app.review.main import (  # noqa: E402
     ReviewDeliveryStatusUncertain,
 )
 from app.review.document_type import DocumentType  # noqa: E402
+from app.review.core.metrics import ReviewRunMetrics  # noqa: E402
 from app.review.task_execution import (  # noqa: E402
     GENERAL_TEXT_REVIEW_TASK_TYPE,
     GENERAL_REVIEW_TASK_TYPE,
@@ -437,16 +438,22 @@ def test_persistent_single_review_routes_to_existing_engine(
         assert kwargs["profile"].profile_id == "general_docx"
         return passed_result(name)
 
-    async def fake_halfmonthly(_paragraphs, _rules, name, **_kwargs):
+    async def fake_halfmonthly(_paragraphs, _rules, name, **kwargs):
         calls.append("halfmonthly")
+        assert kwargs["profile"].profile_id == "halfmonthly_docx"
+        assert isinstance(kwargs["metrics"], ReviewRunMetrics)
         return passed_result(name)
 
-    async def fake_phase1(_paragraphs, _rules, name, **_kwargs):
+    async def fake_phase1(_paragraphs, _rules, name, **kwargs):
         calls.append("neican-phase1")
+        assert kwargs["profile"].profile_id == "neican_docx"
+        assert isinstance(kwargs["metrics"], ReviewRunMetrics)
         return passed_result(name)
 
-    async def fake_phase2(_paragraphs, _rules, name, **_kwargs):
+    async def fake_phase2(_paragraphs, _rules, name, **kwargs):
         calls.append("neican-phase2")
+        assert kwargs["profile"].profile_id == "neican_docx"
+        assert isinstance(kwargs["metrics"], ReviewRunMetrics)
         return passed_result(name)
 
     def fake_official_format(_path, name):

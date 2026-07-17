@@ -134,7 +134,7 @@ uv run --locked pytest tests/test_review_html.py tests/test_review_task_executio
 uv run --locked pytest tests/test_review_shared_core.py tests/test_review_general.py tests/test_review_general_rules.py tests/test_review_html.py tests/test_review_halfmonthly.py tests/test_review_multi_file.py tests/test_official_format_review.py tests/test_review_ppt_rules.py tests/test_review_ppt_reviewer.py tests/test_review_task_execution.py tests/test_review_bot.py -v
 ```
 
-重点验证旧 `Finding` 和输出兼容、专属规则隔离、单点与双边证据、相同输入的模型调用预算、失败和降级指标，以及未迁移审核器不受影响。任务分支不读取生产 `.env`；真实模型测试只能按生产与测试Bot隔离要求单独执行。
+重点验证旧 `Finding` 和输出兼容、专属规则隔离、单点与双边证据、相同输入的模型调用预算、失败和降级指标，以及未迁移审核器不受影响。内参必须保持第一阶段一次有效调用、第二阶段一次有效调用，只有失败或无效JSON才在各阶段预算内重试；半月报保持发现问题后停止、空结果最多调用两次。两类模型候选的 `original_text` 和 `target_text` 都要回填为真实段落证据。任务分支不读取生产 `.env`；真实模型测试只能按生产与测试Bot隔离要求单独执行。
 
 修改 PPTX 低级错误审核时，还要运行：
 

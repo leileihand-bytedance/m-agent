@@ -33,11 +33,15 @@ from app.review.bot_logging import setup_logging, redirect_stdout_to_logging, lo
 from app.review.notification import AdminNotifier, NotificationConfig
 from app.review.user_registry import UserRegistry, RegistrationFlow
 from app.review import load_rules, format_review_result  # noqa: E402
+from app.review.core.metrics import ReviewRunMetrics  # noqa: E402
 from app.review.core.models import Finding, ReviewResult  # noqa: E402
 from app.review.rules.profiles import (  # noqa: E402
     GENERAL_DOCX_PROFILE,
     GENERAL_HTML_PROFILE,
     GENERAL_TEXT_PROFILE,
+    HALFMONTHLY_PROFILE,
+    NEICAN_PROFILE,
+    ReviewProfile,
 )
 from app.review.document_type import detect_document_type, DocumentType, document_type_label  # noqa: E402
 from app.review.intake import ReviewIntakeStore, is_format_review_request  # noqa: E402
@@ -995,6 +999,8 @@ async def _start_neican_review(
     rules_text: str,
     filename: str,
     file_path: Path | None,
+    metrics: ReviewRunMetrics | None = None,
+    profile: ReviewProfile = NEICAN_PROFILE,
 ) -> tuple[ReviewResult, asyncio.Task[tuple[ReviewResult, float]], dict[str, float]]:
     """启动内参两阶段审核。
 
@@ -1005,23 +1011,34 @@ async def _start_neican_review(
     """
     wall_start = perf_counter()
 
-    def _runner_accepts_file_path(runner) -> bool:
+    def _runner_accepts_keyword(runner, name: str) -> bool:
         try:
-            return "file_path" in inspect.signature(runner).parameters
+            parameters = inspect.signature(runner).parameters
+            return name in parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
         except (TypeError, ValueError):
             return False
 
+    def _runner_kwargs(runner) -> dict[str, object]:
+        kwargs: dict[str, object] = {}
+        if _runner_accepts_keyword(runner, "file_path"):
+            kwargs["file_path"] = file_path
+        if metrics is not None and _runner_accepts_keyword(runner, "metrics"):
+            kwargs["metrics"] = metrics
+        if _runner_accepts_keyword(runner, "profile"):
+            kwargs["profile"] = profile
+        return kwargs
+
     async def _timed_phase2() -> tuple[ReviewResult, float]:
         phase2_started_at = perf_counter()
-        if _runner_accepts_file_path(phase2_runner):
-            result = await phase2_runner(
-                paragraphs,
-                rules_text,
-                filename,
-                file_path=file_path,
-            )
-        else:
-            result = await phase2_runner(paragraphs, rules_text, filename)
+        result = await phase2_runner(
+            paragraphs,
+            rules_text,
+            filename,
+            **_runner_kwargs(phase2_runner),
+        )
         return result, (perf_counter() - phase2_started_at) * 1000
 
     phase2_task = asyncio.create_task(_timed_phase2(), name="review-neican-phase2")
@@ -1029,15 +1046,12 @@ async def _start_neican_review(
 
     phase1_started_at = perf_counter()
     try:
-        if _runner_accepts_file_path(phase1_runner):
-            phase1_result = await phase1_runner(
-                paragraphs,
-                rules_text,
-                filename,
-                file_path=file_path,
-            )
-        else:
-            phase1_result = await phase1_runner(paragraphs, rules_text, filename)
+        phase1_result = await phase1_runner(
+            paragraphs,
+            rules_text,
+            filename,
+            **_runner_kwargs(phase1_runner),
+        )
     except Exception:
         phase2_task.cancel()
         await asyncio.gather(phase2_task, return_exceptions=True)
@@ -1174,12 +1188,23 @@ async def _process_queued_single_review(
     elif doc_type == DocumentType.HALF_MONTHLY:
         from app.review.halfmonthly_reviewer import review_halfmonthly  # noqa: E402
 
+        metrics = ReviewRunMetrics()
         result = await review_halfmonthly(
             parsed.paragraphs,
             load_rules("app/review/rules_halfmonthly.md"),
             workspace.filename,
             numbering=parsed.numbering,
             file_path=workspace.input_file,
+            metrics=metrics,
+            profile=HALFMONTHLY_PROFILE,
+        )
+        logger.info(
+            "半月报模型调用: calls=%s failures=%s stages=%s task_id=%s",
+            metrics.model_calls,
+            metrics.model_failures,
+            metrics.model_calls_by_stage,
+            workspace.task_id,
+            extra=log_extra(workspace.sender_userid, workspace.sender_name),
         )
     elif doc_type == DocumentType.OFFICIAL_FORMAT:
         from app.review.official_format_checker import review_official_format  # noqa: E402
@@ -1192,6 +1217,7 @@ async def _process_queued_single_review(
     else:
         from app.review.reviewer import review_phase1, review_phase2  # noqa: E402
 
+        metrics = ReviewRunMetrics()
         phase1_result, phase2_task, timings = await _start_neican_review(
             phase1_runner=review_phase1,
             phase2_runner=review_phase2,
@@ -1199,6 +1225,8 @@ async def _process_queued_single_review(
             rules_text=neican_rules_text,
             filename=workspace.filename,
             file_path=workspace.input_file,
+            metrics=metrics,
+            profile=NEICAN_PROFILE,
         )
         phase2_result, phase2_ms = await phase2_task
         findings = [*phase1_result.findings, *phase2_result.findings]
@@ -1210,9 +1238,13 @@ async def _process_queued_single_review(
             filename=workspace.filename,
         )
         logger.info(
-            "内参持久任务阶段耗时: phase1=%.1fms phase2=%.1fms task_id=%s",
+            "内参持久任务阶段耗时: phase1=%.1fms phase2=%.1fms "
+            "model_calls=%s model_failures=%s stages=%s task_id=%s",
             timings["phase1_ms"],
             phase2_ms,
+            metrics.model_calls,
+            metrics.model_failures,
+            metrics.model_calls_by_stage,
             workspace.task_id,
             extra=log_extra(workspace.sender_userid, workspace.sender_name),
         )
