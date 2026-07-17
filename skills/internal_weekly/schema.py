@@ -41,8 +41,9 @@ class MarketSeriesEvidence(BaseModel):
     index_name: str
     start_date: str
     end_date: str
-    start_close: float = Field(gt=0)
-    end_close: float = Field(gt=0)
+    start_close: float | None = Field(default=None, gt=0)
+    end_close: float | None = Field(default=None, gt=0)
+    reported_change_pct: float | None = None
     source_url: str
     source_title: str
     evidence_excerpt: str
