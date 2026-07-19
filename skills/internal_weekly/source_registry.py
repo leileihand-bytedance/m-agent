@@ -52,6 +52,33 @@ def peer_query_names(category: str) -> tuple[str, ...]:
     )
 
 
+def section_domain_rules(section: str) -> tuple[tuple[str, str], ...]:
+    """返回板块自己的域名匹配规则；同业同时包含已登记机构官网。"""
+    payload = load_source_registry()
+    values: list[tuple[str, str]] = []
+    section_sources = payload.get("section_sources", {})
+    if isinstance(section_sources, dict):
+        entries = section_sources.get(section, [])
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            domain = str(entry.get("domain") or "").strip().lower()
+            match = str(entry.get("match") or "suffix").strip().lower()
+            if domain:
+                values.append((domain, "exact" if match == "exact" else "suffix"))
+    if section == "同业动向":
+        peer_groups = payload.get("peer_entities", {})
+        if isinstance(peer_groups, dict):
+            for entries in peer_groups.values():
+                for entry in entries if isinstance(entries, list) else []:
+                    if not isinstance(entry, dict):
+                        continue
+                    domain = str(entry.get("official_domain") or "").strip().lower()
+                    if domain:
+                        values.append((domain, "suffix"))
+    return tuple(dict.fromkeys(values))
+
+
 def registered_domains() -> frozenset[str]:
     payload = load_source_registry()
     values: set[str] = set()

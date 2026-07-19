@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.platform.tools import ToolGateway
+from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.output import render_review_markdown, write_review_bundle
 from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
@@ -37,6 +38,7 @@ from skills.internal_weekly.source_policy import (
     candidate_allowed,
     date_in_period,
     domain_allowed,
+    domain_allowed_for_section,
     hostname,
     is_research_source,
 )
@@ -46,6 +48,16 @@ MAX_PAGES_PER_GROUP = 30
 MAX_ITEMS_PER_ORDINARY_SECTION = 6
 MARKET_CLOSE_TIME = time(15, 0)
 _INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
+_WEEKLY_MARKET_MARKERS = (
+    "上周",
+    "本周",
+    "一周",
+    "单周",
+    "周涨",
+    "周跌",
+    "weekly",
+    "week",
+)
 
 
 def _evidence_in_body(excerpt: str, body: str) -> bool:
@@ -105,6 +117,35 @@ def _normalize_market_evidence_mode(
     return evidence.model_copy(update={"start_close": None, "end_close": None})
 
 
+def _last_weekday(period_end: date) -> date:
+    return period_end - timedelta(days=max(0, period_end.weekday() - 4))
+
+
+def _normalize_reported_market_period(
+    evidence: MarketSeriesEvidence,
+    page: WebCandidate,
+    *,
+    publication_date: date,
+    period_start: date,
+    period_end: date,
+) -> MarketSeriesEvidence:
+    """直接披露的周涨跌幅使用任务统计周，不能误用周评文章发布日期。"""
+    if evidence.reported_change_pct is None or not evidence.scope.startswith("weekly_"):
+        return evidence
+    context = f"{page.title}\n{evidence.evidence_excerpt}".lower()
+    if not any(marker in context for marker in _WEEKLY_MARKET_MARKERS):
+        return evidence
+    weekly_end = _last_weekday(period_end)
+    if weekly_end >= publication_date:
+        return evidence
+    return evidence.model_copy(
+        update={
+            "start_date": period_start.isoformat(),
+            "end_date": weekly_end.isoformat(),
+        }
+    )
+
+
 def _now(inputs: dict[str, object]) -> datetime:
     override = inputs.get("now")
     if isinstance(override, datetime):
@@ -140,6 +181,7 @@ def _collect_pages(
     period_start: date | None = None,
     period_end: date | None = None,
     require_research: bool = False,
+    source_section: str | None = None,
 ) -> tuple[list[WebCandidate], list[str]]:
     search_results: list[dict[str, object]] = []
     warnings: list[str] = []
@@ -161,6 +203,8 @@ def _collect_pages(
         seen.add(url)
         if not domain_allowed(url):
             continue
+        if source_section and not domain_allowed_for_section(url, source_section):
+            continue
         if require_research and not is_research_source(url):
             continue
         try:
@@ -172,6 +216,11 @@ def _collect_pages(
             warnings.append(f"网页读取结果格式无效：{url}")
             continue
         candidate = _build_candidate(item, page)
+        if source_section and not domain_allowed_for_section(
+            candidate.canonical_url or candidate.url,
+            source_section,
+        ):
+            continue
         allowed, _ = candidate_allowed(
             candidate,
             period_start=period_start,
@@ -215,19 +264,27 @@ def _ordinary_query_groups(
         (
             "党政要闻",
             (
-                "中国政府网 新华网 人民网 中共中央 国务院 宏观经济 金融 "
-                f"银行经营 重要会议 政策 原文 {date_range}",
-                "党中央 中共中央 习近平 金融系统 党的建设 党建 "
-                f"原文 {date_range}",
+                "中国政府网 国务院常务会议 宏观经济 金融 银行经营 "
+                f"重要政策 原文 {date_range}",
+                "新华社 中共中央 中央政治局 国务院 宏观经济 金融 "
+                f"重要部署 原文 {date_range}",
+                "人民网 中共中央 习近平 金融工作 党的建设 "
+                f"重要部署 原文 {date_range}",
             ),
         ),
         (
             "监管动态",
             (
-                "中国人民银行 金融监管总局 证监会 外汇局 金融政策 "
-                f"监管规则 风险提示 统计口径 原文 {date_range}",
-                "中国人民银行党委 金融监管总局党委 证监会党委 外汇局党组 "
-                f"党建 全面从严治党 原文 {date_range}",
+                "中国人民银行 金融政策 监管规则 金融统计 风险提示 "
+                f"原文 {date_range}",
+                "国家金融监督管理总局 银行监管 监管规则 风险提示 "
+                f"原文 {date_range}",
+                "中国证监会 资本市场 监管规则 风险提示 "
+                f"原文 {date_range}",
+                "国家外汇管理局 外汇政策 跨境资金 监管统计 "
+                f"原文 {date_range}",
+                "金融监管部门 党委 党组 党建 全面从严治党 "
+                f"原文 {date_range}",
             ),
         ),
         (
@@ -277,10 +334,12 @@ def _market_query_groups(
     )
     return [
         (
-            ("weekly_a", "weekly_us"),
+            ("weekly_a",),
             (
-                "新华财经 一周要闻 全球市场 本周回顾 A股 美股 上证指数 "
-                f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}",
+                "新华财经 A股一周回顾 上证指数 深证成指 创业板指 "
+                f"周涨跌幅 {market_close} {weekly_range}",
+                "中国证券报 证券时报 A股一周 上证指数 深证成指 创业板指 "
+                f"收盘 周涨跌幅 {market_close}",
             ),
         ),
         (
@@ -297,6 +356,15 @@ def _market_query_groups(
                 "恒生中国企业指数 周涨跌幅",
                 "港股一周复盘 恒生指数 恒生科技指数 恒生中国企业指数 "
                 f"{market_close} 周涨幅",
+            ),
+        ),
+        (
+            ("weekly_us",),
+            (
+                "美股一周回顾 道琼斯指数 纳斯达克指数 标普500指数 "
+                f"周涨跌幅 {market_close} {weekly_range}",
+                "美联社 新华财经 美股一周 道琼斯 纳斯达克 标普500 "
+                f"收盘 周涨跌幅 {market_close}",
             ),
         ),
     ]
@@ -494,6 +562,8 @@ def _market_item(
                     f"weekly_a、weekly_hk、weekly_us 使用 {period_start.isoformat()} "
                     f"至 {period_end.isoformat()} 内实际交易日；"
                     f"monday_a 必须使用 {publication_date.isoformat()} 当日数据。"
+                    "网页发布日期不能当作行情结束日期；周评在周一发布时，"
+                    "仍应填写它实际描述的上一周交易日期。"
                     "所有 start_date、end_date 必须输出 YYYY-MM-DD。"
                 ),
                 "materials": _materials(pages),
@@ -523,8 +593,15 @@ def _market_item(
             excerpt = _resolve_market_evidence_excerpt(evidence, page.body)
             if excerpt is None:
                 raise ValueError(f"行情证据无法在原页面逐字核对：{evidence.index_name}")
+            evidence = evidence.model_copy(update={"evidence_excerpt": excerpt})
             validated_series.append(
-                evidence.model_copy(update={"evidence_excerpt": excerpt})
+                _normalize_reported_market_period(
+                    evidence,
+                    page,
+                    publication_date=publication_date,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
             )
         for context in group_bundle.contexts:
             page = group_page_map.get(context.source_url)
@@ -567,6 +644,8 @@ def _frontier_item(
     tools: ToolGateway,
     *,
     retrieved_at: str,
+    period_start: date,
+    period_end: date,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
     if not pages:
         return None, [], ["前沿观点未找到统计期内或近30日可核验的研究报告"]
@@ -586,6 +665,21 @@ def _frontier_item(
     page = page_map.get(selection.source_url)
     if page is None:
         raise ValueError("前沿观点返回了候选集外的研报来源")
+    try:
+        selected_date = parse_flexible_date(
+            selection.publish_date,
+            default_year=period_end.year,
+        )
+        page_date = parse_flexible_date(
+            page.publish_date,
+            default_year=period_end.year,
+        )
+    except ValueError as exc:
+        raise ValueError("前沿观点发布日期无法核验") from exc
+    if selected_date != page_date:
+        raise ValueError("前沿观点发布日期与来源页面不一致")
+    if not period_start <= selected_date <= period_end:
+        raise ValueError("前沿观点发布日期超出允许的报告窗口")
     passages = validate_frontier_selection(selection, page.body)
     record = _record_from_page(
         page,
@@ -669,7 +763,11 @@ def _run_market_update(
             for scopes, queries in _market_query_groups(target_date, period_start, period_end)
             if scopes == ("monday_a",)
         )
-        pages, search_warnings = _collect_pages(list(monday_queries), tools)
+        pages, search_warnings = _collect_pages(
+            list(monday_queries),
+            tools,
+            source_section="市场观察",
+        )
         warnings.extend(search_warnings)
         try:
             item, records, item_warnings = _market_item(
@@ -775,6 +873,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             tools,
             period_start=period_start,
             period_end=period_end,
+            source_section=section_name,
         )
         ordinary_page_groups.append((section_name, pages))
         warnings.extend(group_warnings)
@@ -785,16 +884,21 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     ):
         if monday_pending and required_scopes == ("monday_a",):
             continue
-        group_pages, group_warnings = _collect_pages(queries, tools)
+        group_pages, group_warnings = _collect_pages(
+            queries,
+            tools,
+            source_section="市场观察",
+        )
         market_page_groups.append((required_scopes, group_pages))
         market_search_warnings.extend(group_warnings)
-    frontier_window_start = publication_date - timedelta(days=30)
+    frontier_window_start = period_end - timedelta(days=29)
     frontier_pages, frontier_search_warnings = _collect_pages(
-        _frontier_queries(frontier_window_start, publication_date, fallback=True),
+        _frontier_queries(frontier_window_start, period_end, fallback=True),
         tools,
         period_start=frontier_window_start,
-        period_end=publication_date,
+        period_end=period_end,
         require_research=True,
+        source_section="前沿观点",
     )
     weekly_frontier_pages = [
         page
@@ -803,6 +907,8 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     ]
     if weekly_frontier_pages:
         frontier_pages = weekly_frontier_pages
+    elif frontier_pages:
+        warnings.append("前沿观点使用近30日兜底报告，发布日期不在本期统计周")
     warnings.extend(market_search_warnings)
     warnings.extend(frontier_search_warnings)
     if monday_pending:
@@ -843,7 +949,11 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     frontier_item: WeeklyItem | None = None
     try:
         frontier_item, records, item_warnings = _frontier_item(
-            frontier_pages, tools, retrieved_at=retrieved_at
+            frontier_pages,
+            tools,
+            retrieved_at=retrieved_at,
+            period_start=frontier_window_start,
+            period_end=period_end,
         )
         source_records.extend(records)
         warnings.extend(item_warnings)

@@ -5,24 +5,43 @@ updated_on: "2026-07-19"
 # 和研究报告应优先回到原发布主体。域名同时进入运行时网页读取白名单。
 section_sources:
   党政要闻:
-    - {name: 中国政府网, domain: gov.cn, tier: primary}
+    # gov.cn 必须精确匹配中央政府门户，不能把任意地方 *.gov.cn 当作党中央/国务院信源。
+    - {name: 中国政府网, domain: gov.cn, tier: primary, match: exact}
     - {name: 新华社, domain: xinhuanet.com, tier: primary}
+    - {name: 新华社, domain: news.cn, tier: primary}
     - {name: 人民网, domain: people.com.cn, tier: primary}
   监管动态:
     - {name: 中国人民银行, domain: pbc.gov.cn, tier: primary}
     - {name: 国家金融监督管理总局, domain: nfra.gov.cn, tier: primary}
     - {name: 中国证监会, domain: csrc.gov.cn, tier: primary}
     - {name: 国家外汇管理局, domain: safe.gov.cn, tier: primary}
+  同业动向:
+    - {name: 新华财经, domain: cnfin.com, tier: secondary}
+    - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
+    - {name: 上海证券报, domain: cnstock.com, tier: secondary}
+    - {name: 证券时报, domain: stcn.com, tier: secondary}
+    - {name: 21世纪经济报道, domain: 21jingji.com, tier: secondary}
+    - {name: 第一财经, domain: yicai.com, tier: secondary}
+    - {name: 财新, domain: caixin.com, tier: secondary}
+    - {name: 每日经济新闻, domain: nbd.com.cn, tier: secondary}
   市场观察:
     - {name: 上海证券交易所, domain: sse.com.cn, tier: primary}
     - {name: 深圳证券交易所, domain: szse.cn, tier: primary}
+    - {name: 中证指数, domain: cnindex.com.cn, tier: primary}
+    - {name: 香港交易所, domain: hkex.com.hk, tier: primary}
     - {name: 恒生指数公司, domain: hsi.com.hk, tier: primary}
     - {name: 标普道琼斯指数, domain: spglobal.com, tier: primary}
     - {name: 纳斯达克, domain: nasdaq.com, tier: primary}
     - {name: 新华财经, domain: cnfin.com, tier: secondary}
     - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
+    - {name: 上海证券报, domain: cnstock.com, tier: secondary}
     - {name: 证券时报, domain: stcn.com, tier: secondary}
+    - {name: 21世纪经济报道, domain: 21jingji.com, tier: secondary}
     - {name: 第一财经, domain: yicai.com, tier: secondary}
+    - {name: 东方财富, domain: eastmoney.com, tier: secondary}
+    - {name: 新京报, domain: bjd.com.cn, tier: secondary}
+    - {name: 南方财经, domain: sfccn.com, tier: secondary}
+    - {name: 美联社, domain: apnews.com, tier: secondary}
   前沿观点:
     - {name: 国际清算银行, domain: bis.org, tier: primary}
     - {name: 国际货币基金组织, domain: imf.org, tier: primary}

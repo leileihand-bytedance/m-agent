@@ -20,7 +20,7 @@ from skills.internal_weekly.selection import (
     is_allowed_party_building_content,
     validate_frontier_selection,
 )
-from skills.internal_weekly.source_policy import candidate_allowed
+from skills.internal_weekly.source_policy import candidate_allowed, domain_allowed_for_section
 from skills.internal_weekly.source_registry import load_source_registry
 
 
@@ -354,6 +354,15 @@ def test_source_policy_accepts_common_chinese_publication_date():
 
     assert allowed is True
     assert reason == ""
+
+
+def test_party_source_policy_accepts_central_portals_but_rejects_local_gov_subdomains():
+    assert domain_allowed_for_section("https://www.gov.cn/meeting.htm", "党政要闻")
+    assert domain_allowed_for_section("https://www.news.cn/politics/item.htm", "党政要闻")
+    assert not domain_allowed_for_section(
+        "https://gzw.hlj.gov.cn/local-party.htm",
+        "党政要闻",
+    )
 
 
 @pytest.mark.parametrize(

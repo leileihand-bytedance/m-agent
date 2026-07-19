@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.schema import WebCandidate
-from skills.internal_weekly.source_registry import registered_domains
+from skills.internal_weekly.source_registry import registered_domains, section_domain_rules
 
 
 ALLOWED_DOMAINS = {
@@ -61,6 +61,18 @@ def hostname(url: str) -> str:
 def domain_allowed(url: str) -> bool:
     host = hostname(url)
     return any(host == domain or host.endswith(f".{domain}") for domain in ALLOWED_DOMAINS)
+
+
+def domain_allowed_for_section(url: str, section: str) -> bool:
+    """限制候选只能来自目标板块登记信源，避免宽泛白名单跨板块污染。"""
+    host = hostname(url)
+    rules = section_domain_rules(section)
+    if not rules:
+        return domain_allowed(url)
+    return any(
+        host == domain if match == "exact" else host == domain or host.endswith(f".{domain}")
+        for domain, match in rules
+    )
 
 
 def is_research_source(url: str) -> bool:

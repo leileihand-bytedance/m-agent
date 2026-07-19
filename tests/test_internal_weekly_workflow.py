@@ -10,11 +10,13 @@ from skills.internal_weekly.schema import (
     MarketContextEvidence,
     MarketEvidenceBundle,
     MarketSeriesEvidence,
+    WebCandidate,
 )
 from skills.internal_weekly.workflow import (
     _collect_pages,
     _evidence_in_body,
     _normalize_market_evidence_mode,
+    _normalize_reported_market_period,
     _ordinary_query_groups,
     _resolve_market_evidence_excerpt,
     is_market_update_request,
@@ -62,6 +64,7 @@ class FakeTools:
     def __init__(self):
         self.search_calls: list[str] = []
         self.market_required_scopes: list[tuple[str, ...]] = []
+        self.market_instructions: list[str] = []
         self.pages = {
             "https://www.gov.cn/meeting.htm": {
                 "url": "https://www.gov.cn/meeting.htm",
@@ -187,6 +190,7 @@ class FakeTools:
         if payload["task"] == "internal_weekly_market_extraction":
             required_scopes = tuple(payload["required_scopes"])
             self.market_required_scopes.append(required_scopes)
+            self.market_instructions.append(payload["instruction"])
             return MarketEvidenceBundle(
                 series=[
                     item for item in _market_series() if item.scope in required_scopes
@@ -296,10 +300,19 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert any("港股一周复盘" in query for query in hk_queries)
     assert all("2026年7月10日" in query for query in hk_queries)
     assert fake.market_required_scopes == [
-        ("weekly_a", "weekly_us"),
+        ("weekly_a",),
         ("monday_a",),
         ("weekly_hk",),
+        ("weekly_us",),
     ]
+    weekly_instructions = [
+        instruction
+        for scopes, instruction in zip(
+            fake.market_required_scopes, fake.market_instructions, strict=True
+        )
+        if scopes[0].startswith("weekly_")
+    ]
+    assert all("网页发布日期不能当作行情结束日期" in item for item in weekly_instructions)
 
 
 def test_workflow_drops_invalid_optional_market_context_but_keeps_fixed_summary(tmp_path):
@@ -355,8 +368,9 @@ def test_workflow_generates_previous_week_before_monday_close_with_pending_marke
     assert result.output_file.endswith(".md")
     assert all("A股收评" not in query for query in fake.search_calls)
     assert fake.market_required_scopes == [
-        ("weekly_a", "weekly_us"),
+        ("weekly_a",),
         ("weekly_hk",),
+        ("weekly_us",),
     ]
 
 
@@ -438,6 +452,15 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     groups = dict(_ordinary_query_groups(datetime(2026, 7, 6).date(), datetime(2026, 7, 12).date()))
 
     assert set(groups) == {"党政要闻", "监管动态", "同业动向", "市场观察"}
+    party_queries = groups["党政要闻"]
+    regulatory_queries = groups["监管动态"]
+    assert any(query.startswith("中国政府网") for query in party_queries)
+    assert any(query.startswith("新华社") for query in party_queries)
+    assert any(query.startswith("人民网") for query in party_queries)
+    assert any(query.startswith("中国人民银行") for query in regulatory_queries)
+    assert any(query.startswith("国家金融监督管理总局") for query in regulatory_queries)
+    assert any(query.startswith("中国证监会") for query in regulatory_queries)
+    assert any(query.startswith("国家外汇管理局") for query in regulatory_queries)
     peer_queries = "\n".join(groups["同业动向"])
     assert "Monzo" in peer_queries
     assert "ZA Bank" in peer_queries
@@ -476,6 +499,37 @@ def test_collect_pages_filters_unlisted_search_results_before_web_reader():
         gateway,
         period_start=datetime(2026, 7, 6).date(),
         period_end=datetime(2026, 7, 12).date(),
+    )
+
+    assert read_urls == ["https://www.gov.cn/meeting.htm"]
+    assert [page.canonical_url for page in pages] == ["https://www.gov.cn/meeting.htm"]
+    assert warnings == []
+
+
+def test_collect_pages_uses_section_source_policy_before_reading_local_government_pages():
+    read_urls: list[str] = []
+
+    def search(query: str, max_results: int = 5):
+        return [
+            {"url": "https://gzw.hlj.gov.cn/local-party.htm", "title": "地方部门党建"},
+            {"url": "https://www.gov.cn/meeting.htm", "title": "国务院常务会议"},
+        ]
+
+    def web_reader(url: str):
+        read_urls.append(url)
+        return FakeTools().pages[url]
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader"),
+        tools={"search": search, "web_reader": web_reader},
+    )
+
+    pages, warnings = _collect_pages(
+        ["测试"],
+        gateway,
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+        source_section="党政要闻",
     )
 
     assert read_urls == ["https://www.gov.cn/meeting.htm"]
@@ -547,6 +601,39 @@ def test_market_evidence_prefers_source_reported_change_over_extra_close_values(
     assert normalized.end_close is None
 
 
+def test_reported_weekly_change_uses_requested_week_instead_of_page_publication_date():
+    evidence = MarketSeriesEvidence(
+        scope="weekly_a",
+        index_code="000001",
+        index_name="上证指数",
+        start_date="2026-07-06",
+        end_date="2026-07-13",
+        reported_change_pct=-1.17,
+        source_url="https://www.cnfin.com/market/weekly.html",
+        source_title="一周市场回顾",
+        evidence_excerpt="上周上证指数下跌1.17%。",
+    )
+    page = WebCandidate(
+        url=evidence.source_url,
+        canonical_url=evidence.source_url,
+        title="一周市场回顾",
+        site="cnfin.com",
+        publish_date="2026-07-13",
+        body=evidence.evidence_excerpt,
+    )
+
+    normalized = _normalize_reported_market_period(
+        evidence,
+        page,
+        publication_date=datetime(2026, 7, 13).date(),
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+    )
+
+    assert normalized.start_date == "2026-07-06"
+    assert normalized.end_date == "2026-07-10"
+
+
 def test_collect_pages_does_not_expose_raw_reader_exception():
     def search(query: str, max_results: int = 5):
         return [{"url": "https://www.gov.cn/unreachable.htm", "title": "国务院页面"}]
@@ -583,6 +670,12 @@ class FrontierFallbackTools(FakeTools):
             return []
         return super().search(query, max_results=max_results)
 
+    def llm_writer(self, payload):
+        result = super().llm_writer(payload)
+        if payload["task"] == "internal_weekly_frontier_selection":
+            result.publish_date = "2026-06-25"
+        return result
+
 
 def test_workflow_frontier_falls_back_to_recent_30_days(tmp_path):
     fake = FrontierFallbackTools()
@@ -608,3 +701,68 @@ def test_workflow_frontier_falls_back_to_recent_30_days(tmp_path):
     assert frontier.items[0].title == "利率传导与银行净息差"
     assert result.ready_for_approval is True
     assert any("近30日补充" in query for query in fake.search_calls)
+    assert "前沿观点使用近30日兜底报告，发布日期不在本期统计周" in result.warnings
+
+
+class PublicationDayFrontierTools(FakeTools):
+    def __init__(self):
+        super().__init__()
+        self.pages["https://www.bis.org/publ/work999.htm"]["publish_date"] = "2026-07-13"
+
+
+def test_workflow_does_not_use_publication_day_report_as_previous_week_frontier(tmp_path):
+    fake = PublicationDayFrontierTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    frontier = next(section for section in result.sections if section.name == "前沿观点")
+    assert frontier.items == []
+    assert any("前沿观点未找到" in warning for warning in result.warnings)
+
+
+class WrongFrontierDateTools(FakeTools):
+    def llm_writer(self, payload):
+        result = super().llm_writer(payload)
+        if payload["task"] == "internal_weekly_frontier_selection":
+            result.publish_date = "2026-07-08"
+        return result
+
+
+def test_workflow_rejects_frontier_date_that_differs_from_source_page(tmp_path):
+    fake = WrongFrontierDateTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    frontier = next(section for section in result.sections if section.name == "前沿观点")
+    assert frontier.items == []
+    assert any("发布日期与来源页面不一致" in warning for warning in result.warnings)
