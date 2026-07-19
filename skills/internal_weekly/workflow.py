@@ -108,6 +108,20 @@ PARTY_FEED_CENTRAL_MARKERS = (
     "全国政协",
 )
 PARTY_FEED_SECONDARY_MARKERS = ("评论员", "述评", "学习快评", "解读")
+PARTY_EVENT_TITLE_NOISE = (
+    "人民日报评论员",
+    "学习贯彻",
+    "习近平总书记",
+    "习近平",
+    "重要讲话",
+    "讲话",
+    "侧记",
+    "纪实",
+    "反响",
+    "评论员",
+    "第十一次",
+    "十一大",
+)
 _INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
 _WEEKLY_MARKET_MARKERS = (
     "上周",
@@ -340,6 +354,42 @@ def _party_feed_link_score(title: str) -> int:
     score += 2 * sum(marker in title for marker in PARTY_FEED_CENTRAL_MARKERS)
     score -= 3 * sum(marker in title for marker in PARTY_FEED_SECONDARY_MARKERS)
     return max(score, 1)
+
+
+def _party_assessment_rank(assessment: ContentCandidateAssessment) -> float:
+    """同一事件跨批次比较时，中央正式原文优先于评论、侧记和解读。"""
+    title = assessment.title.strip()
+    preference = 0
+    if re.match(r"^(习近平[:：]|中共中央(?:\s+国务院)?|国务院(?:关于|办公厅))", title):
+        preference += 3
+    elif title.startswith("习近平"):
+        preference += 2
+    if any(marker in title for marker in PARTY_FEED_SECONDARY_MARKERS + ("侧记", "纪实", "反响")):
+        preference -= 3
+    return assessment.score + preference
+
+
+def _normalized_party_event_title(title: str) -> str:
+    normalized = title
+    for marker in PARTY_EVENT_TITLE_NOISE:
+        normalized = normalized.replace(marker, "")
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", normalized)
+
+
+def _party_titles_describe_same_event(left: str, right: str) -> bool:
+    """用标题二元片段识别同一中央事件的正式稿、评论稿和侧记稿。"""
+    normalized_left = _normalized_party_event_title(left)
+    normalized_right = _normalized_party_event_title(right)
+    if min(len(normalized_left), len(normalized_right)) < 12:
+        return False
+    left_pairs = {normalized_left[index : index + 2] for index in range(len(normalized_left) - 1)}
+    right_pairs = {
+        normalized_right[index : index + 2] for index in range(len(normalized_right) - 1)
+    }
+    union = left_pairs | right_pairs
+    if not union:
+        return False
+    return len(left_pairs & right_pairs) / len(union) >= 0.30
 
 
 def _collect_source_feed_pages(
@@ -735,9 +785,14 @@ def _ordinary_items(
     items: list[WeeklyItem] = []
     records: list[SourceRecord] = []
     seen_urls: set[str] = set()
+    selected_party_event_titles: list[str] = []
     for assessment, page_map in sorted(
         assessed,
-        key=lambda pair: pair[0].score,
+        key=lambda pair: (
+            _party_assessment_rank(pair[0])
+            if expected_section == "党政要闻"
+            else pair[0].score
+        ),
         reverse=True,
     ):
         if not assessment.include:
@@ -770,6 +825,11 @@ def _ordinary_items(
         ):
             warnings.append(f"《{assessment.title}》属于微众银行自身动态，不作为同业收录")
             continue
+        if expected_section == "党政要闻" and any(
+            _party_titles_describe_same_event(assessment.title, selected_title)
+            for selected_title in selected_party_event_titles
+        ):
+            continue
         source_record = _record_from_page(
             page,
             retrieved_at=retrieved_at,
@@ -791,6 +851,8 @@ def _ordinary_items(
         )
         records.append(source_record)
         seen_urls.add(page.canonical_url)
+        if expected_section == "党政要闻":
+            selected_party_event_titles.append(assessment.title)
         if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
             break
     return items, records, warnings

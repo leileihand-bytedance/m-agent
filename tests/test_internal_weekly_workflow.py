@@ -560,6 +560,87 @@ def test_party_assessment_instruction_covers_broad_management_relevance():
     assert warnings == []
 
 
+def test_party_items_dedupe_same_event_and_prefer_formal_central_source():
+    speech = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/speech.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/speech.htm",
+        title="习近平：在国家科学技术奖励大会、两院院士大会、中国科协第十一次全国代表大会上的讲话",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-08",
+        body="习近平发表重要讲话，强调加快推进高水平科技自立自强。",
+    )
+    commentary = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/commentary.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/commentary.htm",
+        title="人民日报评论员：向着科技强国目标坚定迈进——论学习贯彻习近平总书记在国家科学技术奖励大会、两院院士大会、中国科协十一大上重要讲话",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-10",
+        body="人民日报评论员文章阐释习近平总书记重要讲话，提出建设科技强国。",
+    )
+    decision = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/decision.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/decision.htm",
+        title="中共中央 国务院关于2025年度国家科学技术奖励的决定",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-08",
+        body="中共中央、国务院决定授予国家科学技术奖励，推动科技创新发展。",
+    )
+
+    def assessment(page, *, score, summary, evidence):
+        return ContentCandidateAssessment(
+            source_url=page.canonical_url,
+            include=True,
+            section="党政要闻",
+            title=page.title,
+            summary=summary,
+            evidence_excerpt=evidence,
+            score=score,
+            reason="中央科技创新重要信息",
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: ContentAssessmentBatch(
+                items=[
+                    assessment(
+                        commentary,
+                        score=10,
+                        summary="评论员文章阐释科技强国部署。",
+                        evidence="提出建设科技强国",
+                    ),
+                    assessment(
+                        speech,
+                        score=8,
+                        summary="习近平强调推进高水平科技自立自强。",
+                        evidence="加快推进高水平科技自立自强",
+                    ),
+                    assessment(
+                        decision,
+                        score=9,
+                        summary="中央发布国家科学技术奖励决定。",
+                        evidence="推动科技创新发展",
+                    ),
+                ]
+            )
+        },
+    )
+
+    items, records, warnings = _ordinary_items(
+        [speech, commentary, decision],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    assert {item.title for item in items} == {speech.title, decision.title}
+    assert len(records) == 2
+    assert warnings == []
+
+
 def test_ordinary_assessment_retries_when_model_omits_the_whole_batch():
     page = WebCandidate(
         url="https://www.gov.cn/yaowen/liebiao/202607/content_456.htm",
