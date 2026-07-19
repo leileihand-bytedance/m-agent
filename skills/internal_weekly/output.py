@@ -21,6 +21,8 @@ def render_review_markdown(result: InternalWeeklyResult) -> str:
     ]
     for section in result.sections:
         lines.extend([f"## {section.name}", ""])
+        if not section.items:
+            lines.extend(["_本板块暂无通过筛选和溯源校验的条目。_", ""])
         for index, item in enumerate(section.items, start=1):
             lines.extend([f"### {index}. {item.title}", "", item.body, "", "核对信息："])
             for source_id in item.source_ids:
@@ -43,11 +45,16 @@ def render_review_markdown(result: InternalWeeklyResult) -> str:
 def write_review_bundle(result: InternalWeeklyResult, output_dir: str) -> tuple[str, str]:
     target = Path(output_dir).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
-    stem = f"内参周报-{result.publication_date}"
+    stem = (
+        f"内参周报-{result.publication_date}-今日资本市场更新"
+        if result.generation_mode == "market_update"
+        else f"内参周报-{result.publication_date}"
+    )
     review_path = target / f"{stem}-内容核对稿.md"
     manifest_path = target / f"{stem}-溯源清单.json"
     review_path.write_text(render_review_markdown(result), encoding="utf-8")
     manifest = {
+        "generation_mode": result.generation_mode,
         "title": result.title,
         "publication_date": result.publication_date,
         "period_start": result.period_start,

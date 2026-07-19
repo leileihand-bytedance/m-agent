@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.schema import WebCandidate
+from skills.internal_weekly.source_registry import registered_domains
 
 
 ALLOWED_DOMAINS = {
@@ -40,7 +41,7 @@ ALLOWED_DOMAINS = {
     "cf40.org.cn",
     "federalreserve.gov",
     "ecb.europa.eu",
-}
+} | set(registered_domains())
 RESEARCH_DOMAINS = {
     "bis.org",
     "imf.org",
@@ -48,6 +49,8 @@ RESEARCH_DOMAINS = {
     "cf40.org.cn",
     "federalreserve.gov",
     "ecb.europa.eu",
+    "fsb.org",
+    "bankofengland.co.uk",
 }
 
 

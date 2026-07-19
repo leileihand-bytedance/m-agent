@@ -1,12 +1,15 @@
 id: internal_weekly
 name: 内参周报
 enabled: true
-description: 独立生成周一出版的内参周报内容核对稿。按固定五类板块筛选上一自然周信息；市场观察首项包含上周A股、周一A股收盘、上周港股和上周美股，周一收盘前先生成上周综述并在当天行情位置标注待更新；前沿观点只摘录可核验研究报告原文。第一阶段输出 Markdown 核对稿与 JSON 溯源清单，不生成 Word。
+description: 独立生成供微众银行内部管理团队和部门参考的内参周报内容核对稿，重点筛选银行经营管理与宏观经济金融信息。按固定五类板块筛选上一自然周信息；市场观察首项包含上周A股、周一A股收盘、上周港股和上周美股，15:00收盘前先生成上周综述并用红色粗体标注待更新，收盘后可单独生成今日资本市场更新块；前沿观点只摘录可核验研究报告原文。第一阶段输出 Markdown 核对稿与 JSON 溯源清单，不生成 Word。
 triggers:
   - 内参周报
   - 生成内参周报
   - 整理内参周报
   - 内参周报内容稿
+  - 今天的资本市场综述
+  - 今日资本市场综述
+  - 更新今日资本市场综述
 allowed_tools:
   - search
   - web_reader
@@ -16,6 +19,7 @@ supports_revision: false
 inputs:
   - text
 outputs:
+  - generation_mode
   - title
   - body
   - sources

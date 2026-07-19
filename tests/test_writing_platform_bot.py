@@ -605,6 +605,20 @@ def test_writing_intake_runs_internal_weekly_without_materials():
     assert "内参周报" in decision.ack_message
 
 
+def test_writing_intake_routes_current_day_market_summary_update_to_internal_weekly():
+    intake_store = WritingIntakeStore()
+
+    decision = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="生成一下今天的资本市场综述",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "internal_weekly"
+    assert "资本市场" in decision.ack_message
+
+
 def test_shenyinxie_news_clarification_keeps_skill_and_user_period(tmp_path):
     intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
 

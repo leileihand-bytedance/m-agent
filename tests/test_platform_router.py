@@ -127,3 +127,12 @@ def test_router_matches_internal_weekly_from_trigger_words():
 
     assert route.skill_id == "internal_weekly"
     assert route.needs_clarification is False
+
+
+def test_router_matches_current_day_market_summary_update_to_internal_weekly():
+    registry = SkillRegistry.from_directory(Path("skills"))
+
+    route = route_message("生成一下今天的资本市场综述", registry)
+
+    assert route.skill_id == "internal_weekly"
+    assert route.needs_clarification is False

@@ -22,12 +22,17 @@ from skills.internal_weekly.schema import (
 from skills.internal_weekly.selection import (
     CANONICAL_MARKET_NAMES,
     SECTION_ORDER,
+    build_monday_market_update,
     build_market_item,
+    build_pending_market_update,
     calculate_weekly_window,
     classify_section,
     extract_requested_publication_date,
+    is_allowed_party_building_content,
+    is_self_bank_content,
     validate_frontier_selection,
 )
+from skills.internal_weekly.source_registry import peer_query_names
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
     date_in_period,
@@ -38,6 +43,8 @@ from skills.internal_weekly.source_policy import (
 
 
 MAX_PAGES_PER_GROUP = 30
+MAX_ITEMS_PER_ORDINARY_SECTION = 6
+MARKET_CLOSE_TIME = time(15, 0)
 _INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
 
 
@@ -185,21 +192,63 @@ def _format_date_range(period_start: date, period_end: date) -> str:
     )
 
 
-def _ordinary_queries(period_start: date, period_end: date) -> list[str]:
+def _ordinary_query_groups(
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, tuple[str, ...]]]:
     date_range = _format_date_range(period_start, period_end)
+    peer_queries: list[str] = []
+    for category, suffix in (
+        ("domestic_digital_banks", "经营 产品 科技 风险管理 合作"),
+        (
+            "international_digital_banks",
+            "digital bank earnings product technology risk management",
+        ),
+        ("bank_technology_subsidiaries", "银行科技子公司 产品 技术 经营 合作"),
+    ):
+        names = peer_query_names(category)
+        for offset in range(0, len(names), 5):
+            peer_queries.append(
+                f"{' '.join(names[offset:offset + 5])} {suffix} {date_range}"
+            )
     return [
-        f"中国政府网 人民网 新华网 国务院 金融 重要会议 政策 原文 {date_range}",
         (
-            f"中国人民银行 发布 金融政策 公开市场 金融统计 原文 {date_range}"
+            "党政要闻",
+            (
+                "中国政府网 新华网 人民网 中共中央 国务院 宏观经济 金融 "
+                f"银行经营 重要会议 政策 原文 {date_range}",
+                "党中央 中共中央 习近平 金融系统 党的建设 党建 "
+                f"原文 {date_range}",
+            ),
         ),
         (
-            "国家金融监督管理总局 中国证监会 国家外汇管理局 "
-            f"发布 金融政策 监管动态 原文 {date_range}"
+            "监管动态",
+            (
+                "中国人民银行 金融监管总局 证监会 外汇局 金融政策 "
+                f"监管规则 风险提示 统计口径 原文 {date_range}",
+                "中国人民银行党委 金融监管总局党委 证监会党委 外汇局党组 "
+                f"党建 全面从严治党 原文 {date_range}",
+            ),
         ),
         (
-            "中国证券报 证券时报 第一财经 银行业 民营银行 数字银行 "
-            f"同业动向 市场动态 {date_range}"
+            "同业动向",
+            tuple(peer_queries),
         ),
+        (
+            "市场观察",
+            (
+                "中国证券报 证券时报 第一财经 宏观经济 金融市场 利率 汇率 "
+                f"债券 理财 资管 银行业影响 {date_range}",
+            ),
+        ),
+    ]
+
+
+def _ordinary_queries(period_start: date, period_end: date) -> list[str]:
+    return [
+        query
+        for _, queries in _ordinary_query_groups(period_start, period_end)
+        for query in queries
     ]
 
 
@@ -323,10 +372,11 @@ def _ordinary_items(
     pages: list[WebCandidate],
     tools: ToolGateway,
     *,
+    expected_section: str,
     retrieved_at: str,
 ) -> tuple[list[WeeklyItem], list[SourceRecord], list[str]]:
     if not pages:
-        return [], [], ["未找到通过日期和来源校验的普通板块材料"]
+        return [], [], [f"{expected_section}未找到通过日期和来源校验的候选材料"]
     result = tools.call(
         "llm_writer",
         {
@@ -334,7 +384,14 @@ def _ordinary_items(
             "skill_id": "internal_weekly",
             "output_type": ContentAssessmentBatch,
             "prompt_path": "prompts/assess.md",
-            "instruction": "只评估材料是否入选并形成事实摘要；必须返回可在原文逐字核对的证据句。",
+            "target_section": expected_section,
+            "instruction": (
+                f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
+                "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
+                "宏观经济金融、风险管理、数字化经营直接相关的信息。"
+                "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
+                "只形成事实摘要，并返回可在原文逐字核对的证据句。"
+            ),
             "materials": _materials(pages),
         },
     )
@@ -346,6 +403,8 @@ def _ordinary_items(
     for assessment in sorted(batch.items, key=lambda item: item.score, reverse=True):
         if not assessment.include:
             continue
+        if assessment.section != expected_section:
+            continue
         page = page_map.get(assessment.source_url)
         if page is None:
             warnings.append(f"模型返回了候选集外的来源：{assessment.source_url}")
@@ -355,8 +414,20 @@ def _ordinary_items(
             warnings.append(f"《{assessment.title}》缺少可逐字核验的证据句，已排除")
             continue
         section = classify_section(assessment.title, page.body)
-        if section == "前沿观点":
-            warnings.append(f"《{assessment.title}》不能作为普通材料进入前沿观点")
+        if section != expected_section:
+            warnings.append(
+                f"《{assessment.title}》无法通过{expected_section}确定性分类校验，已排除"
+            )
+            continue
+        if not is_allowed_party_building_content(
+            assessment.title, page.body, expected_section
+        ):
+            warnings.append(f"《{assessment.title}》不符合党建收录边界，已排除")
+            continue
+        if expected_section == "同业动向" and is_self_bank_content(
+            assessment.title, page.body
+        ):
+            warnings.append(f"《{assessment.title}》属于微众银行自身动态，不作为同业收录")
             continue
         source_record = _record_from_page(
             page,
@@ -378,6 +449,8 @@ def _ordinary_items(
             )
         )
         records.append(source_record)
+        if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
+            break
     return items, records, warnings
 
 
@@ -390,6 +463,7 @@ def _market_item(
     period_end: date,
     retrieved_at: str,
     monday_pending: bool = False,
+    update_only: bool = False,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
     missing_page_groups = ["/".join(scopes) for scopes, pages in page_groups if not pages]
     if missing_page_groups:
@@ -463,12 +537,19 @@ def _market_item(
         series.extend(validated_series)
 
     bundle = MarketEvidenceBundle(series=series, contexts=contexts)
-    item, records = build_market_item(
-        bundle,
-        publication_date=publication_date,
-        retrieved_at=retrieved_at,
-        monday_pending=monday_pending,
-    )
+    if update_only:
+        item, records = build_monday_market_update(
+            bundle,
+            publication_date=publication_date,
+            retrieved_at=retrieved_at,
+        )
+    else:
+        item, records = build_market_item(
+            bundle,
+            publication_date=publication_date,
+            retrieved_at=retrieved_at,
+            monday_pending=monday_pending,
+        )
     for index, record in enumerate(records):
         page = page_map[record.url]
         records[index] = record.model_copy(
@@ -532,6 +613,7 @@ def _frontier_item(
 
 def _digest(result: InternalWeeklyResult) -> str:
     payload = {
+        "generation_mode": result.generation_mode,
         "publication_date": result.publication_date,
         "period_start": result.period_start,
         "period_end": result.period_end,
@@ -555,11 +637,110 @@ def _clarification(message: str, publication_date: date, period_start: date, per
     )
 
 
+def is_market_update_request(text: str) -> bool:
+    normalized = re.sub(r"[\s，。！？,.!?；;:：]+", "", text)
+    return (
+        "资本市场综述" in normalized
+        and any(marker in normalized for marker in ("今天", "今日", "当日"))
+        and any(marker in normalized for marker in ("生成", "更新", "补充", "补一下"))
+    )
+
+
+def _run_market_update(
+    inputs: dict[str, object],
+    tools: ToolGateway,
+    *,
+    current: datetime,
+    target_date: date,
+) -> InternalWeeklyResult:
+    period_end = target_date - timedelta(days=1)
+    period_start = period_end - timedelta(days=6)
+    retrieved_at = current.astimezone().isoformat()
+    pending = target_date == current.date() and current.time() < MARKET_CLOSE_TIME
+    warnings: list[str] = []
+    source_records: list[SourceRecord] = []
+    item: WeeklyItem | None
+    if pending:
+        item = build_pending_market_update(target_date)
+        warnings.append("今日A股收盘数据待15:00收盘后更新")
+    else:
+        monday_queries = next(
+            queries
+            for scopes, queries in _market_query_groups(target_date, period_start, period_end)
+            if scopes == ("monday_a",)
+        )
+        pages, search_warnings = _collect_pages(list(monday_queries), tools)
+        warnings.extend(search_warnings)
+        try:
+            item, records, item_warnings = _market_item(
+                [(("monday_a",), pages)],
+                tools,
+                publication_date=target_date,
+                period_start=period_start,
+                period_end=period_end,
+                retrieved_at=retrieved_at,
+                update_only=True,
+            )
+            source_records.extend(records)
+            warnings.extend(item_warnings)
+        except Exception as exc:
+            item = None
+            warnings.append(f"今日资本市场综述未通过完整性校验：{exc}")
+
+    section_items = [item] if item is not None else []
+    ready = item is not None and not pending
+    result = InternalWeeklyResult(
+        generation_mode="market_update",
+        title=f"今日资本市场综述更新（{target_date.isoformat()}）",
+        publication_date=target_date.isoformat(),
+        period_start=period_start.isoformat(),
+        period_end=period_end.isoformat(),
+        sections=[WeeklySection(name="市场观察", items=section_items)],
+        source_records=source_records,
+        sources=[record.url for record in source_records],
+        warnings=warnings,
+        ready_for_approval=ready,
+        message=(
+            "已生成今日资本市场综述更新块和溯源清单，可人工核对后替换原占位。"
+            if ready
+            else (
+                "当前尚未收盘，已生成醒目待更新占位；请15:00收盘后再次生成。"
+                if pending
+                else "今日行情资料或校验项不完整，已保留待核事项。"
+            )
+        ),
+    )
+    result.draft_version = _digest(result)
+    result.body = render_review_markdown(result)
+    output_dir = str(inputs.get("output_dir") or "").strip()
+    if output_dir:
+        result.output_file, result.manifest_file = write_review_bundle(result, output_dir)
+    return result
+
+
 def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     """生成可人工核对的内参周报内容稿和溯源清单，不生成 Word。"""
     current = _now(inputs)
     instruction = str(inputs.get("text") or "").strip()
     requested = extract_requested_publication_date(instruction)
+    if is_market_update_request(instruction):
+        target_date = requested or current.date()
+        period_end = target_date - timedelta(days=1)
+        period_start = period_end - timedelta(days=6)
+        if target_date > current.date():
+            return _clarification(
+                "不能生成未来日期的资本市场综述，请改为已经到达的日期。",
+                target_date,
+                period_start,
+                period_end,
+            )
+        return _run_market_update(
+            inputs,
+            tools,
+            current=current,
+            target_date=target_date,
+        )
+
     if requested is not None:
         publication_date = requested
         period_end = publication_date - timedelta(days=1)
@@ -581,15 +762,22 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     else:
         publication_date, period_start, period_end = calculate_weekly_window(current)
 
-    monday_pending = current.date() == publication_date and current.time() < time(15, 30)
+    monday_pending = (
+        current.date() == publication_date and current.time() < MARKET_CLOSE_TIME
+    )
 
     retrieved_at = current.astimezone().isoformat()
-    ordinary_pages, warnings = _collect_pages(
-        _ordinary_queries(period_start, period_end),
-        tools,
-        period_start=period_start,
-        period_end=period_end,
-    )
+    ordinary_page_groups: list[tuple[str, list[WebCandidate]]] = []
+    warnings: list[str] = []
+    for section_name, queries in _ordinary_query_groups(period_start, period_end):
+        pages, group_warnings = _collect_pages(
+            list(queries),
+            tools,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        ordinary_page_groups.append((section_name, pages))
+        warnings.extend(group_warnings)
     market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []
     market_search_warnings: list[str] = []
     for required_scopes, queries in _market_query_groups(
@@ -618,19 +806,23 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     warnings.extend(market_search_warnings)
     warnings.extend(frontier_search_warnings)
     if monday_pending:
-        warnings.append("周一A股收盘数据待当日15:30后更新")
+        warnings.append("今日A股收盘数据待15:00收盘后更新")
 
     ordinary_items: list[WeeklyItem] = []
     source_records: list[SourceRecord] = []
-    try:
-        items, records, item_warnings = _ordinary_items(
-            ordinary_pages, tools, retrieved_at=retrieved_at
-        )
-        ordinary_items.extend(items)
-        source_records.extend(records)
-        warnings.extend(item_warnings)
-    except Exception as exc:
-        warnings.append(f"普通板块内容评估失败：{exc}")
+    for section_name, pages in ordinary_page_groups:
+        try:
+            items, records, item_warnings = _ordinary_items(
+                pages,
+                tools,
+                expected_section=section_name,
+                retrieved_at=retrieved_at,
+            )
+            ordinary_items.extend(items)
+            source_records.extend(records)
+            warnings.extend(item_warnings)
+        except Exception as exc:
+            warnings.append(f"{section_name}内容评估失败：{exc}")
 
     market_item: WeeklyItem | None = None
     try:
@@ -666,16 +858,18 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     if frontier_item is not None:
         items_by_section["前沿观点"].append(frontier_item)
     sections = [
-        WeeklySection(name=name, items=items_by_section[name])
-        for name in SECTION_ORDER
-        if items_by_section[name]
+        WeeklySection(name=name, items=items_by_section[name]) for name in SECTION_ORDER
     ]
+
+    for section_name in ("党政要闻", "监管动态", "同业动向"):
+        if not items_by_section[section_name]:
+            warnings.append(f"{section_name}暂无通过筛选和溯源校验的条目")
 
     deduped_records: dict[str, SourceRecord] = {}
     for record in source_records:
         deduped_records[record.source_id] = record
     ready = (
-        bool(ordinary_items)
+        all(items_by_section[name] for name in ("党政要闻", "监管动态", "同业动向"))
         and market_item is not None
         and frontier_item is not None
         and not monday_pending
@@ -694,7 +888,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             "已生成内容核对稿和溯源清单，请完成人工核对。"
             if ready
             else (
-                "已生成上周内容核对稿；周一A股收盘数据待15:30后更新，"
+                "已生成上周内容核对稿；今日A股收盘数据待15:00收盘后更新，"
                 "暂不生成洁净版本。"
                 if monday_pending
                 else "资料或校验项不完整，已保留待核事项，暂不生成洁净版本。"
