@@ -178,6 +178,17 @@ CANONICAL_MARKET_NAMES = {
     "COMP": "纳斯达克指数",
     "SPX": "标普500指数",
 }
+MARKET_NAME_ALIASES = {
+    "000001": ("上证指数", "沪指"),
+    "399001": ("深证成指", "深成指"),
+    "399006": ("创业板指",),
+    "HSI": ("恒生指数", "Hang Seng Index"),
+    "HSTECH": ("恒生科技指数", "Hang Seng TECH Index"),
+    "HSCEI": ("恒生中国企业指数", "Hang Seng China Enterprises Index"),
+    "DJIA": ("道琼斯指数", "道琼斯工业平均指数", "Dow", "Dow Jones"),
+    "COMP": ("纳斯达克指数", "纳斯达克综合指数", "Nasdaq"),
+    "SPX": ("标普500指数", "标准普尔500指数", "S&P 500"),
+}
 
 
 def calculate_weekly_window(value: date | datetime) -> tuple[date, date, date]:
