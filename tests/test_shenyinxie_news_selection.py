@@ -259,20 +259,20 @@ def test_primary_positive_assessment_keeps_full_text():
 
 
 def test_substantial_positive_assessment_accepts_exact_ordered_excerpt():
-    paragraph_one = "微众银行连续两年实施利润分配，相关方案已经股东会批准。"
-    paragraph_two = "该行本次派发现金股利，并继续保持稳健的资本补充安排。"
+    paragraph_one = "微众银行持续推进数字普惠金融服务，进一步扩大对小微企业的服务覆盖。"
+    paragraph_two = "该行依托金融科技降低服务成本，并形成了可核验的普惠金融服务成果。"
     body = "\n\n".join(
         [
-            "全国民营银行经营情况出现分化。",
+            "多家银行近期披露数字普惠金融实践。",
             paragraph_one,
             paragraph_two,
-            "其他银行也披露了各自的利润分配安排。",
+            "其他银行也介绍了各自的服务举措。",
         ]
     )
     candidate = NewsCandidate(
         url="https://people.com.cn/roundup",
         canonical_url="https://people.com.cn/roundup",
-        title="民营银行利润分配观察",
+        title="银行业数字普惠金融实践观察",
         site="people.com.cn",
         body=body,
     )
@@ -280,20 +280,64 @@ def test_substantial_positive_assessment_accepts_exact_ordered_excerpt():
         decision="extract",
         is_positive_achievement=True,
         subject_strength="substantial",
-        suggested_title="微众银行连续两年实施利润分配",
+        suggested_title="微众银行持续提升数字普惠金融服务质效",
         excerpt_paragraphs=[paragraph_one, paragraph_two],
-        achievement_types=["经营成果"],
+        achievement_types=["普惠金融成果"],
         reason="综合稿包含可独立成立的微众银行成果段落。",
     )
 
     selected = apply_editorial_assessment(candidate, assessment)
 
     assert selected is candidate
-    assert selected.title == "微众银行连续两年实施利润分配"
+    assert selected.title == "微众银行持续提升数字普惠金融服务质效"
     assert selected.body == f"{paragraph_one}\n\n{paragraph_two}"
     assert selected.content_mode == "extract"
-    assert selected.source_title == "民营银行利润分配观察"
+    assert selected.source_title == "银行业数字普惠金融实践观察"
     assert "摘编" in selected.editor_note
+
+
+def test_dividend_roundup_is_not_reportable_even_when_model_marks_it_positive():
+    paragraph_one = "微众银行连续两年实施利润分配，相关方案已经股东会批准。"
+    paragraph_two = "该行本次派发现金股利，并继续保持稳健的资本补充安排。"
+    candidate = NewsCandidate(
+        url="https://stcn.com/dividend-roundup",
+        canonical_url="https://stcn.com/dividend-roundup",
+        title="民营银行也分红，微众等已连续两年派现",
+        source_title="民营银行也分红，微众等已连续两年派现",
+        site="stcn.com",
+        body="\n\n".join((paragraph_one, paragraph_two)),
+    )
+    assessment = ArticleAssessment(
+        decision="extract",
+        is_positive_achievement=True,
+        subject_strength="substantial",
+        suggested_title="微众银行连续两年实施现金分红",
+        excerpt_paragraphs=[paragraph_one, paragraph_two],
+        achievement_types=["经营成果"],
+        reason="模型认为分红反映经营情况。",
+    )
+
+    assert apply_editorial_assessment(candidate, assessment) is None
+
+
+def test_reportable_technology_story_is_not_rejected_for_incidental_dividend_mention():
+    body = "微众银行发布金融科技创新成果，并在报道末尾披露年度分红安排。" * 10
+    candidate = NewsCandidate(
+        url="https://people.com.cn/technology-feature",
+        canonical_url="https://people.com.cn/technology-feature",
+        title="微众银行金融科技创新成果落地并披露分红安排",
+        site="people.com.cn",
+        body=body,
+    )
+    assessment = ArticleAssessment(
+        decision="full_text",
+        is_positive_achievement=True,
+        subject_strength="primary",
+        achievement_types=["科技创新成果"],
+        reason="全文核心是金融科技创新成果，分红只是附带信息。",
+    )
+
+    assert apply_editorial_assessment(candidate, assessment) is candidate
 
 
 @pytest.mark.parametrize(
