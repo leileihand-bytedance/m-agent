@@ -33,6 +33,7 @@ ALLOWED_DOMAINS = {
     "apnews.com",
     "cnfin.com",
     "sfccn.com",
+    "bjd.com.cn",
     "bis.org",
     "imf.org",
     "worldbank.org",

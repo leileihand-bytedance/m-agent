@@ -149,7 +149,8 @@ def _market_queries(
 ) -> list[str]:
     return [
         query
-        for _, query in _market_query_groups(publication_date, period_start, period_end)
+        for _, queries in _market_query_groups(publication_date, period_start, period_end)
+        for query in queries
     ]
 
 
@@ -157,24 +158,36 @@ def _market_query_groups(
     publication_date: date,
     period_start: date,
     period_end: date,
-) -> list[tuple[tuple[str, ...], str]]:
+) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
     weekly_range = _format_date_range(period_start, period_end)
     monday = f"{publication_date.year}年{publication_date.month}月{publication_date.day}日"
+    last_trading_day = period_end - timedelta(days=max(0, period_end.weekday() - 4))
+    market_close = (
+        f"{last_trading_day.year}年{last_trading_day.month}月{last_trading_day.day}日"
+    )
     return [
         (
             ("weekly_a", "weekly_us"),
-            "新华财经 一周要闻 全球市场 本周回顾 A股 美股 上证指数 "
-            f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}",
+            (
+                "新华财经 一周要闻 全球市场 本周回顾 A股 美股 上证指数 "
+                f"深证成指 创业板指 道琼斯 纳斯达克 标普500 {weekly_range}",
+            ),
         ),
         (
             ("monday_a",),
-            "证券时报 中国证券报 第一财经 A股收评 上证指数 深证成指 "
-            f"创业板指 收盘 涨跌幅 {monday}",
+            (
+                "证券时报 中国证券报 第一财经 A股收评 上证指数 深证成指 "
+                f"创业板指 收盘 涨跌幅 {monday}",
+            ),
         ),
         (
             ("weekly_hk",),
-            "21世纪经济报道 上海证券报 南方财经 港股周评 恒生指数 "
-            f"恒生科技指数 恒生中国企业指数 周涨跌幅 {weekly_range}",
+            (
+                f"港股 {market_close} 收盘 本周 恒生指数 恒生科技指数 "
+                "恒生中国企业指数 周涨跌幅",
+                "港股一周复盘 恒生指数 恒生科技指数 恒生中国企业指数 "
+                f"{market_close} 周涨幅",
+            ),
         ),
     ]
 
@@ -509,10 +522,10 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     )
     market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []
     market_search_warnings: list[str] = []
-    for required_scopes, query in _market_query_groups(
+    for required_scopes, queries in _market_query_groups(
         publication_date, period_start, period_end
     ):
-        group_pages, group_warnings = _collect_pages([query], tools)
+        group_pages, group_warnings = _collect_pages(queries, tools)
         market_page_groups.append((required_scopes, group_pages))
         market_search_warnings.extend(group_warnings)
     frontier_window_start = publication_date - timedelta(days=30)

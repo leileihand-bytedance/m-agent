@@ -224,6 +224,10 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert any("BIS" in query for query in fake.search_calls)
     assert all("site:" not in query for query in fake.search_calls)
     assert all(" OR " not in query for query in fake.search_calls)
+    hk_queries = [query for query in fake.search_calls if "恒生中国企业指数" in query]
+    assert len(hk_queries) == 2
+    assert any("港股一周复盘" in query for query in hk_queries)
+    assert all("2026年7月10日" in query for query in hk_queries)
     assert fake.market_required_scopes == [
         ("weekly_a", "weekly_us"),
         ("monday_a",),

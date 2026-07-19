@@ -273,6 +273,7 @@ def test_source_policy_accepts_common_chinese_publication_date():
         "https://apnews.com/article/market-weekly",
         "https://www.cnfin.com/market/weekly.html",
         "https://www.sfccn.com/market/weekly.html",
+        "https://news.bjd.com.cn/2026/07/13/11862144.shtml",
     ],
 )
 def test_source_policy_accepts_registered_market_report_domains(url):
