@@ -267,25 +267,25 @@ def test_workflow_extracts_only_weizhong_paragraphs_from_roundup(tmp_path):
     today = date(2026, 7, 16)
     url = "https://people.com.cn/roundup"
     paragraph_one = (
-        "微众银行连续两年实施利润分配，相关方案已经股东会批准，"
-        "体现出该行持续稳健的经营能力和较好的盈利基础。"
+        "微众银行持续推进数字普惠金融服务，进一步扩大对小微企业的服务覆盖，"
+        "形成了可核验的服务成效。"
     )
     paragraph_two = (
-        "该行完成现金股利派发，并继续保持稳健的资本补充安排，"
-        "在实施利润分配的同时兼顾后续业务发展需要。"
+        "该行依托金融科技降低服务成本，并持续提升数字化服务能力，"
+        "相关实践取得了明确进展。"
     )
     body = "\n\n".join(
         [
-            "多家民营银行近期披露经营情况。",
+            "多家银行近期披露数字普惠金融实践。",
             paragraph_one,
             paragraph_two,
-            "其他银行也分别披露利润分配和资本补充安排。",
+            "其他银行也分别介绍了服务举措。",
         ]
     )
-    search_results = {"微众银行": [_search_result(url, "民营银行也分红，微众等连续派现")]}
+    search_results = {"微众银行": [_search_result(url, "银行业数字普惠金融实践观察")]}
     web_pages = {
         url: _web_page(
-            title="民营银行也分红，微众等连续派现",
+            title="银行业数字普惠金融实践观察",
             body=body,
             publish_date="2026-07-10",
             site="people.com.cn",
@@ -297,9 +297,9 @@ def test_workflow_extracts_only_weizhong_paragraphs_from_roundup(tmp_path):
             decision="extract",
             is_positive_achievement=True,
             subject_strength="substantial",
-            suggested_title="微众银行连续两年实施利润分配",
+            suggested_title="微众银行持续提升数字普惠金融服务质效",
             excerpt_paragraphs=[paragraph_one, paragraph_two],
-            achievement_types=["经营成果"],
+            achievement_types=["普惠金融成果"],
             reason="综合稿中存在可独立成立的微众银行成果段落。",
         )
     }
@@ -312,12 +312,118 @@ def test_workflow_extracts_only_weizhong_paragraphs_from_roundup(tmp_path):
     result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
 
     assert len(result.articles) == 1
-    assert result.articles[0].title == "微众银行连续两年实施利润分配"
+    assert result.articles[0].title == "微众银行持续提升数字普惠金融服务质效"
     assert result.articles[0].body == f"{paragraph_one}\n\n{paragraph_two}"
     assert result.articles[0].content_mode == "extract"
-    assert "【原报道标题】民营银行也分红，微众等连续派现" in result.body
+    assert "【原报道标题】银行业数字普惠金融实践观察" in result.body
     assert "【摘编说明】说明：本文根据原报道中微众银行相关内容摘编。" in result.body
     assert any(call == ("llm_writer", url) for call in calls)
+
+
+def test_workflow_keeps_two_full_reports_instead_of_adding_third_excerpt(tmp_path):
+    today = date(2026, 7, 16)
+    first_url = "https://people.com.cn/full-one"
+    second_url = "https://people.com.cn/full-two"
+    excerpt_url = "https://people.com.cn/roundup"
+    excerpt_one = "微众银行持续推进数字普惠金融服务，进一步扩大对小微企业的服务覆盖。"
+    excerpt_two = "该行依托金融科技降低服务成本，并形成了可核验的普惠金融服务成果。"
+    search_results = {
+        "微众银行": [
+            _search_result(first_url, "微众银行发布普惠金融年度成果"),
+            _search_result(second_url, "微众银行科技创新取得新进展"),
+            _search_result(excerpt_url, "银行业数字普惠金融实践观察"),
+        ]
+    }
+    web_pages = {
+        first_url: _web_page(
+            title="微众银行发布普惠金融年度成果",
+            body="微众银行发布普惠金融年度成果，服务小微企业的覆盖范围持续扩大。" * 15,
+            publish_date="2026-07-10",
+            site="people.com.cn",
+            canonical_url=first_url,
+        ),
+        second_url: _web_page(
+            title="微众银行科技创新取得新进展",
+            body="微众银行科技创新取得新进展，数字金融服务能力持续增强。" * 15,
+            publish_date="2026-07-11",
+            site="people.com.cn",
+            canonical_url=second_url,
+        ),
+        excerpt_url: _web_page(
+            title="银行业数字普惠金融实践观察",
+            body="\n\n".join(
+                (
+                    "多家银行近期介绍数字普惠金融实践和服务实体经济的阶段性进展。" * 4,
+                    excerpt_one,
+                    excerpt_two,
+                    "报道还介绍了其他银行的相关服务举措和后续安排。" * 4,
+                )
+            ),
+            publish_date="2026-07-12",
+            site="people.com.cn",
+            canonical_url=excerpt_url,
+        ),
+    }
+    assessments = {
+        excerpt_url: ArticleAssessment(
+            decision="extract",
+            is_positive_achievement=True,
+            subject_strength="substantial",
+            suggested_title="微众银行持续提升数字普惠金融服务质效",
+            excerpt_paragraphs=[excerpt_one, excerpt_two],
+            achievement_types=["普惠金融成果"],
+            reason="综合稿中存在可独立成立的微众银行成果段落。",
+        )
+    }
+    gateway, _ = _make_gateway(
+        search_results=search_results,
+        web_pages=web_pages,
+        assessments=assessments,
+    )
+
+    result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
+
+    assert [article.original_url for article in result.articles] == [first_url, second_url]
+    assert excerpt_url not in result.sources
+    assert result.message == "本期已整理 2 篇报道。"
+
+
+def test_workflow_rejects_dividend_roundup_even_if_model_marks_it_positive(tmp_path):
+    today = date(2026, 7, 16)
+    url = "https://stcn.com/dividend-roundup"
+    paragraph_one = "微众银行连续两年实施利润分配，相关方案已经股东会批准。"
+    paragraph_two = "该行本次派发现金股利，并继续保持稳健的资本补充安排。"
+    search_results = {"微众银行": [_search_result(url, "民营银行也分红，微众等连续派现")]}
+    web_pages = {
+        url: _web_page(
+            title="民营银行也分红，微众等连续派现",
+            body="\n\n".join((paragraph_one, paragraph_two)) * 3,
+            publish_date="2026-07-10",
+            site="stcn.com",
+            canonical_url=url,
+        )
+    }
+    assessments = {
+        url: ArticleAssessment(
+            decision="extract",
+            is_positive_achievement=True,
+            subject_strength="substantial",
+            suggested_title="微众银行连续两年实施现金分红",
+            excerpt_paragraphs=[paragraph_one, paragraph_two],
+            achievement_types=["经营成果"],
+            reason="模型认为分红反映经营情况。",
+        )
+    }
+    gateway, _ = _make_gateway(
+        search_results=search_results,
+        web_pages=web_pages,
+        assessments=assessments,
+    )
+
+    result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
+
+    assert result.articles == []
+    assert result.output_file == ""
 
 
 def test_workflow_searches_expanded_sources_only_when_primary_full_text_is_insufficient(tmp_path):

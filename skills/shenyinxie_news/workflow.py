@@ -22,7 +22,7 @@ from skills.shenyinxie_news.selection import (
     hard_gate,
     normalize_url,
     score_candidates_rule_based,
-    select_top_candidates,
+    select_submission_candidates,
     strip_trailing_media_title_suffix,
 )
 
@@ -258,13 +258,10 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             message="本期未检索到符合当前权威媒体和日期条件的微众银行报道。",
         )
 
-    # 2. 全文专题稿优先；两轮信源仍不足时才用逐字校验过的综合稿摘编补位。
+    # 2. 专题全文最多选 3 篇；只有不足 2 篇时才用摘编稿补到最多 2 篇。
     full_text_candidates = score_candidates_rule_based(dedupe_same_article(full_text_candidates))
     excerpt_candidates = score_candidates_rule_based(dedupe_same_article(excerpt_candidates))
-    selected = select_top_candidates(full_text_candidates, target=3)
-    if len(selected) < 3:
-        excerpt_selected = select_top_candidates(excerpt_candidates, target=3 - len(selected))
-        selected.extend(excerpt_selected)
+    selected = select_submission_candidates(full_text_candidates, excerpt_candidates)
 
     # 8. 构造输出
     if not selected:

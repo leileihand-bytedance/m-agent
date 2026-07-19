@@ -13,6 +13,29 @@ from skills.shenyinxie_news.schema import ArticleAssessment, NewsCandidate
 
 EXCERPT_EDITOR_NOTE = "说明：本文根据原报道中微众银行相关内容摘编。"
 
+_FINANCIAL_DISTRIBUTION_TITLE_MARKERS = (
+    "分红",
+    "派现",
+    "利润分配",
+    "现金股利",
+    "股东回报",
+)
+_REPORTABLE_ACHIEVEMENT_TITLE_MARKERS = (
+    "普惠",
+    "科技",
+    "创新",
+    "服务实体",
+    "小微",
+    "社会责任",
+    "社会价值",
+    "ESG",
+    "乡村振兴",
+    "党建",
+    "合作成果",
+    "获奖",
+    "荣誉",
+)
+
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -283,6 +306,10 @@ def apply_editorial_assessment(
     if not assessment.is_positive_achievement:
         return None
 
+    if is_financial_distribution_only_story(candidate):
+        candidate.select_reason = "不采用：报道核心是分红、派现或利润分配，不属于本动态报送的正面成果。"
+        return None
+
     if assessment.decision == "full_text" and assessment.subject_strength == "primary":
         candidate.content_mode = "full_text"
         candidate.editor_note = ""
@@ -305,6 +332,19 @@ def apply_editorial_assessment(
     candidate.editor_note = EXCERPT_EDITOR_NOTE
     candidate.is_core_subject = True
     return candidate
+
+
+def is_financial_distribution_only_story(candidate: NewsCandidate) -> bool:
+    """拒绝只讲股东分配事项、没有可报送业务成果的报道。"""
+    title = (candidate.source_title or candidate.title).strip()
+    has_distribution_topic = any(
+        marker in title for marker in _FINANCIAL_DISTRIBUTION_TITLE_MARKERS
+    )
+    has_reportable_achievement = any(
+        marker.lower() in title.lower()
+        for marker in _REPORTABLE_ACHIEVEMENT_TITLE_MARKERS
+    )
+    return has_distribution_topic and not has_reportable_achievement
 
 
 def is_likely_repost(body: str) -> bool:
@@ -395,6 +435,20 @@ def select_top_candidates(candidates: list[NewsCandidate], target: int = 3) -> l
             selected.append(candidate)
 
     return selected
+
+
+def select_submission_candidates(
+    full_text_candidates: list[NewsCandidate],
+    excerpt_candidates: list[NewsCandidate],
+) -> list[NewsCandidate]:
+    """按质量而非配额选稿：只有专题全文允许组成三篇。"""
+    selected_full = select_top_candidates(full_text_candidates, target=3)
+    if len(selected_full) >= 2:
+        return selected_full
+
+    excerpt_limit = 2 - len(selected_full)
+    selected_excerpts = select_top_candidates(excerpt_candidates, target=excerpt_limit)
+    return selected_full + selected_excerpts
 
 
 def finalize_selected_articles(candidates: list[NewsCandidate]) -> list[dict[str, str]]:
