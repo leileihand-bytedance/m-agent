@@ -51,6 +51,9 @@ _NEGATIVE_OR_AMBIGUOUS_TITLE_MARKERS = (
     "被骗",
     "诈骗",
     "陷阱",
+    "维权",
+    "纠纷",
+    "诉讼",
     "投诉",
     "逾期",
     "违规",
@@ -376,7 +379,7 @@ def apply_editorial_assessment(
         candidate.select_reason = "不采用：报道核心是分红、派现或利润分配，不属于本动态报送的正面成果。"
         return None
 
-    if assessment.decision == "full_text" and assessment.subject_strength == "primary":
+    if assessment.decision != "reject" and assessment.subject_strength == "primary":
         if requires_positive_packaging(candidate.title):
             return _apply_extract_packaging(candidate, assessment)
         if any(marker in candidate.title for marker in _ROUNDUP_TITLE_MARKERS):
@@ -386,10 +389,7 @@ def apply_editorial_assessment(
         candidate.is_core_subject = True
         return candidate
 
-    if assessment.decision != "extract" or assessment.subject_strength not in {
-        "primary",
-        "substantial",
-    }:
+    if assessment.decision != "extract" or assessment.subject_strength != "substantial":
         return None
 
     return _apply_extract_packaging(candidate, assessment)

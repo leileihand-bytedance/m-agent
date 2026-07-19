@@ -18,6 +18,7 @@
 ## 输出约束
 
 - `full_text` 仅用于 `primary + is_positive_achievement=true`。
+- 对标题和全文都适合正面报送的 `primary` 专题稿必须返回 `full_text`，不得仅因标题写法较泛或希望压缩篇幅而返回 `extract`。
 - 即使微众银行是 `primary`，如果原题使用“被骗”“投诉”“怎么办”“风险”“打水漂”等负面或疑问式叙事，或者全文大篇幅铺陈诈骗、纠纷、损失等风险经过，也不得返回可直接全文采用的结果；应返回 `extract`，只保留微众银行正面行动与成果的原文段落，并提供准确的新标题。无法形成完整摘编时返回 `reject`。
 - `extract` 可用于 `substantial + is_positive_achievement=true`，也可用于上述需要正面包装的 `primary + is_positive_achievement=true`。
 - `extract` 的 `excerpt_paragraphs` 必须逐字复制原文中的完整段落，保持原顺序；不得概括、改写、拼句或添加衔接语。

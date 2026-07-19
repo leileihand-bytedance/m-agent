@@ -330,6 +330,33 @@ def test_primary_positive_assessment_keeps_full_text():
     assert selected.source_title == candidate.title
 
 
+def test_primary_positive_extract_decision_keeps_safe_feature_as_full_text():
+    body = "微众银行全面展示AI原生银行、普惠金融和科技出海成果。" * 20
+    candidate = NewsCandidate(
+        url="https://www.sznews.com/feature",
+        canonical_url="https://www.sznews.com/feature",
+        title="深圳金博会｜一家AI原生银行的进击与初心",
+        site="www.sznews.com",
+        body=body,
+    )
+    assessment = ArticleAssessment(
+        decision="extract",
+        is_positive_achievement=True,
+        subject_strength="primary",
+        suggested_title="微众银行展示AI原生银行发展成果",
+        excerpt_paragraphs=[body],
+        achievement_types=["科技创新"],
+        reason="模型认定微众银行是唯一核心主体，但错误选择了摘编。",
+    )
+
+    selected = apply_editorial_assessment(candidate, assessment)
+
+    assert selected is candidate
+    assert selected.content_mode == "full_text"
+    assert selected.title == "深圳金博会｜一家AI原生银行的进击与初心"
+    assert selected.body == body
+
+
 def test_substantial_positive_assessment_accepts_exact_ordered_excerpt():
     paragraph_one = "微众银行持续推进数字普惠金融服务，进一步扩大对小微企业的服务覆盖。"
     paragraph_two = "该行依托金融科技降低服务成本，并形成了可核验的普惠金融服务成果。"
