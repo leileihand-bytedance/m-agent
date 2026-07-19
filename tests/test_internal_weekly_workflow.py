@@ -2,6 +2,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from app.platform.tools import ToolGateway
 from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
@@ -616,6 +618,50 @@ def test_market_evidence_recovers_exact_source_clause_by_index_and_change_value(
         evidence.model_copy(update={"reported_change_pct": 5.41}),
         body,
     ) is None
+
+
+@pytest.mark.parametrize(
+    ("code", "model_name", "change", "body", "expected"),
+    [
+        (
+            "DJIA",
+            "道琼斯工业平均指数",
+            -0.5,
+            "The Dow is down 263.06 points, or 0.5%.",
+            "The Dow is down 263.06 points, or 0.5%.",
+        ),
+        (
+            "COMP",
+            "纳斯达克综合指数",
+            1.7,
+            "The Nasdaq is up 448.93 points, or 1.7%.",
+            "The Nasdaq is up 448.93 points, or 1.7%.",
+        ),
+        (
+            "SPX",
+            "标准普尔500指数",
+            1.2,
+            "The S&P 500 is up 92.15 points, or 1.2%.",
+            "The S&P 500 is up 92.15 points, or 1.2%.",
+        ),
+    ],
+)
+def test_market_evidence_recovers_english_index_aliases(
+    code, model_name, change, body, expected
+):
+    evidence = MarketSeriesEvidence(
+        scope="weekly_us",
+        index_code=code,
+        index_name=model_name,
+        start_date="2026-07-06",
+        end_date="2026-07-10",
+        reported_change_pct=change,
+        source_url="https://apnews.com/article/market-weekly",
+        source_title="How major US stock indexes fared Friday",
+        evidence_excerpt=f"{model_name}本周变动{change}%",
+    )
+
+    assert _resolve_market_evidence_excerpt(evidence, body) == expected
 
 
 def test_market_evidence_prefers_source_reported_change_over_extra_close_values():

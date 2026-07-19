@@ -23,6 +23,7 @@ from skills.internal_weekly.schema import (
 )
 from skills.internal_weekly.selection import (
     CANONICAL_MARKET_NAMES,
+    MARKET_NAME_ALIASES,
     SECTION_ORDER,
     build_monday_market_update,
     build_market_item,
@@ -100,8 +101,16 @@ def _resolve_market_evidence_excerpt(
     if _evidence_in_body(excerpt, body):
         return excerpt
 
-    index_name = CANONICAL_MARKET_NAMES.get(
-        evidence.index_code.upper(), evidence.index_name
+    index_code = evidence.index_code.upper()
+    index_name = CANONICAL_MARKET_NAMES.get(index_code, evidence.index_name)
+    index_aliases = tuple(
+        dict.fromkeys(
+            (
+                index_name,
+                evidence.index_name,
+                *MARKET_NAME_ALIASES.get(index_code, ()),
+            )
+        )
     )
     if evidence.reported_change_pct is not None:
         targets = [abs(float(evidence.reported_change_pct))]
@@ -114,7 +123,10 @@ def _resolve_market_evidence_excerpt(
 
     for match in re.finditer(r"[^。；;！？!?\n]+[。；;！？!?\n]?", body):
         clause = match.group(0).strip()
-        if index_name not in clause or (require_percent and "%" not in clause):
+        clause_casefold = clause.casefold()
+        if not any(alias.casefold() in clause_casefold for alias in index_aliases) or (
+            require_percent and "%" not in clause
+        ):
             continue
         numbers = [
             float(token.replace(",", ""))
