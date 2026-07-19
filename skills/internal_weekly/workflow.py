@@ -323,6 +323,7 @@ def _market_item(
     period_start: date,
     period_end: date,
     retrieved_at: str,
+    monday_pending: bool = False,
 ) -> tuple[WeeklyItem | None, list[SourceRecord], list[str]]:
     missing_page_groups = ["/".join(scopes) for scopes, pages in page_groups if not pages]
     if missing_page_groups:
@@ -392,6 +393,7 @@ def _market_item(
         bundle,
         publication_date=publication_date,
         retrieved_at=retrieved_at,
+        monday_pending=monday_pending,
     )
     for index, record in enumerate(records):
         page = page_map[record.url]
@@ -505,13 +507,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     else:
         publication_date, period_start, period_end = calculate_weekly_window(current)
 
-    if current.date() == publication_date and current.time() < time(15, 30):
-        return _clarification(
-            "资本市场综述必须包含周一A股收盘数据，请在当日15:30后再生成。",
-            publication_date,
-            period_start,
-            period_end,
-        )
+    monday_pending = current.date() == publication_date and current.time() < time(15, 30)
 
     retrieved_at = current.astimezone().isoformat()
     ordinary_pages, warnings = _collect_pages(
@@ -525,6 +521,8 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     for required_scopes, queries in _market_query_groups(
         publication_date, period_start, period_end
     ):
+        if monday_pending and required_scopes == ("monday_a",):
+            continue
         group_pages, group_warnings = _collect_pages(queries, tools)
         market_page_groups.append((required_scopes, group_pages))
         market_search_warnings.extend(group_warnings)
@@ -545,6 +543,8 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         frontier_pages = weekly_frontier_pages
     warnings.extend(market_search_warnings)
     warnings.extend(frontier_search_warnings)
+    if monday_pending:
+        warnings.append("周一A股收盘数据待当日15:30后更新")
 
     ordinary_items: list[WeeklyItem] = []
     source_records: list[SourceRecord] = []
@@ -567,6 +567,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             period_start=period_start,
             period_end=period_end,
             retrieved_at=retrieved_at,
+            monday_pending=monday_pending,
         )
         source_records.extend(records)
         warnings.extend(item_warnings)
@@ -599,7 +600,12 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     deduped_records: dict[str, SourceRecord] = {}
     for record in source_records:
         deduped_records[record.source_id] = record
-    ready = bool(ordinary_items) and market_item is not None and frontier_item is not None
+    ready = (
+        bool(ordinary_items)
+        and market_item is not None
+        and frontier_item is not None
+        and not monday_pending
+    )
     result = InternalWeeklyResult(
         title=f"内参周报（{publication_date.isoformat()}）",
         publication_date=publication_date.isoformat(),
@@ -613,7 +619,12 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         message=(
             "已生成内容核对稿和溯源清单，请完成人工核对。"
             if ready
-            else "资料或校验项不完整，已保留待核事项，暂不生成洁净版本。"
+            else (
+                "已生成上周内容核对稿；周一A股收盘数据待15:30后更新，"
+                "暂不生成洁净版本。"
+                if monday_pending
+                else "资料或校验项不完整，已保留待核事项，暂不生成洁净版本。"
+            )
         ),
     )
     result.draft_version = _digest(result)

@@ -235,7 +235,7 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     ]
 
 
-def test_workflow_waits_until_monday_market_close_without_search(tmp_path):
+def test_workflow_generates_previous_week_before_monday_close_with_pending_marker(tmp_path):
     fake = FakeTools()
     gateway = ToolGateway(
         allowed_tools=("search", "web_reader", "llm_writer"),
@@ -251,9 +251,20 @@ def test_workflow_waits_until_monday_market_close_without_search(tmp_path):
         gateway,
     )
 
-    assert result.needs_clarification is True
-    assert "15:30" in result.message
-    assert fake.search_calls == []
+    assert result.needs_clarification is False
+    assert result.ready_for_approval is False
+    market_section = next(section for section in result.sections if section.name == "市场观察")
+    assert "7月13日A股收盘情况：待当日收盘数据发布后更新。" in (
+        market_section.items[0].body
+    )
+    assert "周一A股收盘数据待当日15:30后更新" in result.warnings
+    assert "暂不生成洁净版本" in result.message
+    assert result.output_file.endswith(".md")
+    assert all("A股收评" not in query for query in fake.search_calls)
+    assert fake.market_required_scopes == [
+        ("weekly_a", "weekly_us"),
+        ("weekly_hk",),
+    ]
 
 
 def test_collect_pages_filters_unlisted_search_results_before_web_reader():

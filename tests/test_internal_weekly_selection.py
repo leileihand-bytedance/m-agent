@@ -117,6 +117,22 @@ def test_market_summary_rejects_missing_monday_a_group():
         build_market_item(bundle, publication_date=date(2026, 7, 13))
 
 
+def test_market_summary_keeps_monday_placeholder_before_close():
+    bundle = _complete_market_bundle()
+    bundle.series = [item for item in bundle.series if item.scope != "monday_a"]
+
+    item, source_records = build_market_item(
+        bundle,
+        publication_date=date(2026, 7, 13),
+        monday_pending=True,
+    )
+
+    assert item.body.index("上周A股") < item.body.index("7月13日A股收盘情况")
+    assert item.body.index("7月13日A股收盘情况") < item.body.index("上周港股")
+    assert "7月13日A股收盘情况：待当日收盘数据发布后更新。" in item.body
+    assert len(source_records) == 1
+
+
 def test_market_summary_uses_code_owned_index_names_and_rejects_wrong_monday_date():
     bundle = _complete_market_bundle()
     bundle.series[0].index_name = "模型误写指数名"

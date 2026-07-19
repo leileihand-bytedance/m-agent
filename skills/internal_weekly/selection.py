@@ -244,8 +244,9 @@ def build_market_item(
     *,
     publication_date: date,
     retrieved_at: str | None = None,
+    monday_pending: bool = False,
 ) -> tuple[WeeklyItem, list[SourceRecord]]:
-    """用结构化收盘价生成固定位置的资本市场综述。"""
+    """用结构化行情生成固定位置的资本市场综述。"""
     grouped: dict[str, dict[str, object]] = {}
     for item in bundle.series:
         grouped.setdefault(item.scope, {})[item.index_code.upper()] = item
@@ -274,8 +275,13 @@ def build_market_item(
         if item.scope != "monday_a" and end_date >= publication_date:
             raise ValueError(f"{item.scope} 必须使用出版日前一周的收盘值")
 
+    if monday_pending and grouped.get("monday_a"):
+        raise ValueError("周一收盘前不能使用 monday_a 行情数据")
+
     ordered: dict[str, list[object]] = {}
     for scope, required_codes in REQUIRED_MARKET_CODES.items():
+        if monday_pending and scope == "monday_a":
+            continue
         missing = [code for code in required_codes if code not in grouped.get(scope, {})]
         if missing:
             raise ValueError(f"资本市场综述缺少 {scope} 必填指数：{', '.join(missing)}")
@@ -284,7 +290,11 @@ def build_market_item(
     month_day = f"{publication_date.month}月{publication_date.day}日"
     paragraphs = [
         _render_group("上周A股", ordered["weekly_a"]),
-        _render_group(f"截至{month_day}收盘，A股", ordered["monday_a"]),
+        (
+            f"{month_day}A股收盘情况：待当日收盘数据发布后更新。"
+            if monday_pending
+            else _render_group(f"截至{month_day}收盘，A股", ordered["monday_a"])
+        ),
         _render_group("上周港股", ordered["weekly_hk"]),
         _render_group("上周美股", ordered["weekly_us"]),
     ]
