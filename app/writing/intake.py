@@ -175,7 +175,12 @@ class WritingIntakeStore:
 
         if intent:
             session.intent = intent
-            if not _is_pure_intent_text(clean_text, intent):
+            keep_internal_weekly_market_instruction = (
+                intent == INTERNAL_WEEKLY_INTENT
+                and "资本市场综述" in clean_text
+                and any(marker in clean_text for marker in ("今天", "今日", "当日"))
+            )
+            if not _is_pure_intent_text(clean_text, intent) or keep_internal_weekly_market_instruction:
                 session.instructions.append(clean_text)
             session.updated_at = time.time()
             if intent == REWRITE_INTENT:
@@ -396,14 +401,22 @@ class WritingIntakeStore:
         else:
             urls = tuple(item.url for item in session.materials if item.kind == "url" and item.url)
             files = tuple(item.file for item in session.materials if item.kind == "file" and item.file is not None)
+        instruction_text = "\n".join(session.instructions).strip()
+        skill_label = _skill_label(skill_id)
+        if (
+            skill_id == INTERNAL_WEEKLY_INTENT
+            and "资本市场综述" in instruction_text
+            and any(marker in instruction_text for marker in ("今天", "今日", "当日"))
+        ):
+            skill_label = "今日资本市场综述更新"
         return IntakeDecision(
             action="run",
             skill_id=skill_id,
-            text="\n".join(session.instructions).strip(),
+            text=instruction_text,
             material_text="\n\n".join(material_texts).strip(),
             urls=urls,
             files=files,
-            ack_message=f"收到，正在按{_skill_label(skill_id)}流程处理，请稍后……",
+            ack_message=f"收到，正在按{skill_label}流程处理，请稍后……",
         )
 
     def _persist_uploaded_file(self, key: tuple[str, str], file: UploadedFile) -> UploadedFile:
@@ -468,7 +481,9 @@ class WritingIntakeStore:
 
 
 def detect_writing_intent(text: str) -> str | None:
-    if "内参周报" in text:
+    if "内参周报" in text or (
+        "资本市场综述" in text and any(marker in text for marker in ("今天", "今日", "当日"))
+    ):
         return INTERNAL_WEEKLY_INTENT
     if any(marker in text for marker in ("综合调研", "调研材料整合", "调研材料汇总", "调研材料做个汇总", "按提纲整合", "按提纲汇总", "按调研提纲整合", "按调研提纲汇总")):
         return RESEARCH_SYNTHESIS_INTENT
@@ -584,7 +599,15 @@ def _is_pure_intent_text(text: str, intent: str) -> bool:
         REWRITE_INTENT: {"改写", "帮我改写", "润色", "帮我润色", "修改", "改稿"},
         RESEARCH_SYNTHESIS_INTENT: {"综合调研", "做综合调研", "综合调研材料整合", "帮我做综合调研材料整合", "按提纲整合"},
         SHENYINXIE_NEWS_INTENT: {"深银协动态", "生成深银协动态", "整理深银协动态", "深圳银行业协会动态"},
-        INTERNAL_WEEKLY_INTENT: {"内参周报", "生成内参周报", "生成本周内参周报", "整理内参周报", "内参周报内容稿"},
+        INTERNAL_WEEKLY_INTENT: {
+            "内参周报",
+            "生成内参周报",
+            "生成本周内参周报",
+            "整理内参周报",
+            "内参周报内容稿",
+            "生成一下今天的资本市场综述",
+            "更新今日资本市场综述",
+        },
     }
     return normalized in pure_values.get(intent, set())
 

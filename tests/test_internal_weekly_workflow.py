@@ -15,7 +15,9 @@ from skills.internal_weekly.workflow import (
     _collect_pages,
     _evidence_in_body,
     _normalize_market_evidence_mode,
+    _ordinary_query_groups,
     _resolve_market_evidence_excerpt,
+    is_market_update_request,
     run,
 )
 
@@ -88,6 +90,15 @@ class FakeTools:
                 "date_extracted_from": "meta:publishdate",
                 "text": "银行理财市场结构继续分化，固收类产品收益中枢有所变化，多资产配置能力成为机构关注重点。",
             },
+            "https://www.cmbyc.com/about/news/company-info/48.html": {
+                "url": "https://www.cmbyc.com/about/news/company-info/48.html",
+                "canonical_url": "https://www.cmbyc.com/about/news/company-info/48.html",
+                "site": "cmbyc.com",
+                "title": "招银云创发布全球司库数字化项目进展",
+                "publish_date": "2026-07-10",
+                "date_extracted_from": "meta:publishdate",
+                "text": "招银云创发布全球司库数字化项目进展，披露跨境金融科技服务和标准化交付能力。",
+            },
             "https://www.bis.org/publ/work999.htm": {
                 "url": "https://www.bis.org/publ/work999.htm",
                 "canonical_url": "https://www.bis.org/publ/work999.htm",
@@ -118,6 +129,10 @@ class FakeTools:
             {"url": "https://www.gov.cn/meeting.htm", "title": "国务院常务会议研究部署重点工作"},
             {"url": "https://www.pbc.gov.cn/rule.htm", "title": "中国人民银行发布金融统计数据"},
             {"url": "https://www.cs.com.cn/market.htm", "title": "银行理财市场结构继续分化"},
+            {
+                "url": "https://www.cmbyc.com/about/news/company-info/48.html",
+                "title": "招银云创发布全球司库数字化项目进展",
+            },
         ]
 
     def web_reader(self, url: str):
@@ -146,6 +161,16 @@ class FakeTools:
                         evidence_excerpt="中国人民银行发布金融统计数据",
                         score=9,
                         reason="金融监管部门动态",
+                    ),
+                    ContentCandidateAssessment(
+                        source_url="https://www.cmbyc.com/about/news/company-info/48.html",
+                        include=True,
+                        section="同业动向",
+                        title="招银云创发布全球司库数字化项目进展",
+                        summary="招银云创披露跨境金融科技服务和标准化交付能力。",
+                        evidence_excerpt="披露跨境金融科技服务和标准化交付能力",
+                        score=8.5,
+                        reason="银行科技子公司实质经营动态",
                     ),
                     ContentCandidateAssessment(
                         source_url="https://www.cs.com.cn/market.htm",
@@ -223,7 +248,13 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
 
     assert result.needs_clarification is False
     assert result.ready_for_approval is True
-    assert result.sections[0].name == "党政要闻"
+    assert [section.name for section in result.sections] == [
+        "党政要闻",
+        "监管动态",
+        "同业动向",
+        "市场观察",
+        "前沿观点",
+    ]
     market_section = next(section for section in result.sections if section.name == "市场观察")
     assert market_section.items[0].title == "资本市场综述"
     frontier = next(section for section in result.sections if section.name == "前沿观点")
@@ -317,10 +348,9 @@ def test_workflow_generates_previous_week_before_monday_close_with_pending_marke
     assert result.needs_clarification is False
     assert result.ready_for_approval is False
     market_section = next(section for section in result.sections if section.name == "市场观察")
-    assert "7月13日A股收盘情况：待当日收盘数据发布后更新。" in (
-        market_section.items[0].body
-    )
-    assert "周一A股收盘数据待当日15:30后更新" in result.warnings
+    assert "今日资本市场内容待收盘后更新" in market_section.items[0].body
+    assert 'style="color:#C00000' in market_section.items[0].body
+    assert "今日A股收盘数据待15:00收盘后更新" in result.warnings
     assert "暂不生成洁净版本" in result.message
     assert result.output_file.endswith(".md")
     assert all("A股收评" not in query for query in fake.search_calls)
@@ -328,6 +358,97 @@ def test_workflow_generates_previous_week_before_monday_close_with_pending_marke
         ("weekly_a", "weekly_us"),
         ("weekly_hk",),
     ]
+
+
+def test_full_weekly_includes_monday_close_immediately_after_market_close(tmp_path):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={"search": fake.search, "web_reader": fake.web_reader, "llm_writer": fake.llm_writer},
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 13, 15, 1),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    market_section = next(section for section in result.sections if section.name == "市场观察")
+    assert "截至7月13日收盘，A股" in market_section.items[0].body
+    assert "今日资本市场内容待收盘后更新" not in market_section.items[0].body
+    assert ("monday_a",) in fake.market_required_scopes
+
+
+def test_market_update_request_before_close_returns_highlighted_placeholder_without_search(tmp_path):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={"search": fake.search, "web_reader": fake.web_reader, "llm_writer": fake.llm_writer},
+    )
+
+    result = run(
+        {
+            "text": "生成一下今天的资本市场综述",
+            "now": datetime(2026, 7, 13, 14, 0),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    assert result.generation_mode == "market_update"
+    assert [section.name for section in result.sections] == ["市场观察"]
+    assert result.sections[0].items[0].title == "今日资本市场综述更新"
+    assert "今日资本市场内容待收盘后更新" in result.sections[0].items[0].body
+    assert 'style="color:#C00000' in result.sections[0].items[0].body
+    assert result.ready_for_approval is False
+    assert fake.search_calls == []
+    assert "今日资本市场更新" in Path(result.output_file).name
+
+
+def test_market_update_request_after_close_only_collects_current_day_market(tmp_path):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={"search": fake.search, "web_reader": fake.web_reader, "llm_writer": fake.llm_writer},
+    )
+
+    result = run(
+        {
+            "text": "生成一下今天的资本市场综述",
+            "now": datetime(2026, 7, 13, 15, 1),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    assert result.generation_mode == "market_update"
+    assert [section.name for section in result.sections] == ["市场观察"]
+    assert result.sections[0].items[0].title == "今日资本市场综述更新"
+    assert "截至7月13日收盘，A股" in result.sections[0].items[0].body
+    assert fake.market_required_scopes == [("monday_a",)]
+    assert all("研究报告" not in query for query in fake.search_calls)
+    assert all("中国政府网" not in query for query in fake.search_calls)
+    assert result.ready_for_approval is True
+
+
+def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expanded_peers():
+    groups = dict(_ordinary_query_groups(datetime(2026, 7, 6).date(), datetime(2026, 7, 12).date()))
+
+    assert set(groups) == {"党政要闻", "监管动态", "同业动向", "市场观察"}
+    peer_queries = "\n".join(groups["同业动向"])
+    assert "Monzo" in peer_queries
+    assert "ZA Bank" in peer_queries
+    assert "建信金科" in peer_queries
+    assert "工银科技" in peer_queries
+
+
+def test_detects_only_explicit_current_day_market_update_requests():
+    assert is_market_update_request("生成一下今天的资本市场综述") is True
+    assert is_market_update_request("更新今日资本市场综述") is True
+    assert is_market_update_request("生成本周内参周报") is False
 
 
 def test_collect_pages_filters_unlisted_search_results_before_web_reader():

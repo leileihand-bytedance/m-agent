@@ -91,7 +91,7 @@ class WeeklyItem(BaseModel):
     section: SectionName
     title: str
     body: str
-    content_mode: Literal["summary", "market_fixed", "report_extract"]
+    content_mode: Literal["summary", "market_fixed", "market_update", "report_extract"]
     source_ids: list[str] = Field(default_factory=list)
     fixed_position: int | None = None
 
@@ -102,6 +102,7 @@ class WeeklySection(BaseModel):
 
 
 class InternalWeeklyResult(BaseModel):
+    generation_mode: Literal["full_weekly", "market_update"] = "full_weekly"
     title: str = ""
     body: str = ""
     publication_date: str = ""

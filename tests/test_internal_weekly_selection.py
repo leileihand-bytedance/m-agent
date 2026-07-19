@@ -10,12 +10,18 @@ from skills.internal_weekly.schema import (
     WebCandidate,
 )
 from skills.internal_weekly.selection import (
+    BANK_TECH_SUBSIDIARY_ENTITIES,
+    INTERNATIONAL_DIGITAL_BANK_ENTITIES,
+    PENDING_MARKET_NOTICE,
+    build_monday_market_update,
     build_market_item,
     calculate_weekly_window,
     classify_section,
+    is_allowed_party_building_content,
     validate_frontier_selection,
 )
 from skills.internal_weekly.source_policy import candidate_allowed
+from skills.internal_weekly.source_registry import load_source_registry
 
 
 def _series(
@@ -82,6 +88,7 @@ def test_calculate_weekly_window_uses_latest_monday_and_previous_monday_to_sunda
 @pytest.mark.parametrize(
     ("title", "body", "expected"),
     [
+        ("中共中央部署金融系统党的建设", "党中央作出重要部署。", "党政要闻"),
         ("国务院常务会议召开", "国务院总理主持会议。", "党政要闻"),
         ("金融监管总局发布新规", "国家金融监督管理总局发布规定。", "监管动态"),
         ("数字银行发布经营数据", "网商银行公布年度经营数据。", "同业动向"),
@@ -90,6 +97,56 @@ def test_calculate_weekly_window_uses_latest_monday_and_previous_monday_to_sunda
 )
 def test_classify_section_copies_internal_weekly_taxonomy(title, body, expected):
     assert classify_section(title, body) == expected
+
+
+@pytest.mark.parametrize(
+    "entity",
+    ["Monzo", "Starling", "Revolut", "N26", "Nubank", "ZA Bank", "Mox Bank"],
+)
+def test_international_digital_banks_are_registered_as_peer_entities(entity):
+    assert entity in INTERNATIONAL_DIGITAL_BANK_ENTITIES
+    assert classify_section(f"{entity}发布经营进展", "披露数字银行经营和产品动态。") == "同业动向"
+
+
+@pytest.mark.parametrize(
+    "entity",
+    ["建信金科", "工银科技", "兴业数金", "招银云创"],
+)
+def test_domestic_bank_technology_subsidiaries_are_registered_as_peer_entities(entity):
+    assert entity in BANK_TECH_SUBSIDIARY_ENTITIES
+    assert classify_section(f"{entity}发布新平台", "披露银行科技产品和经营动态。") == "同业动向"
+
+
+def test_source_registry_keeps_official_references_for_expanded_peer_groups():
+    registry = load_source_registry()
+    peer_groups = registry["peer_entities"]
+
+    for category in (
+        "domestic_digital_banks",
+        "international_digital_banks",
+        "bank_technology_subsidiaries",
+    ):
+        assert peer_groups[category]
+        assert all(item["official_domain"] for item in peer_groups[category])
+        assert all(item["reference_url"].startswith("http") for item in peer_groups[category])
+
+
+def test_unknown_ordinary_content_is_not_misclassified_as_market_observation():
+    assert classify_section("某地举办文化活动", "活动介绍与金融、银行和资本市场无关。") is None
+
+
+@pytest.mark.parametrize(
+    ("title", "body", "section", "expected"),
+    [
+        ("党中央部署推进党的建设", "中共中央部署党建重点工作。", "党政要闻", True),
+        ("金融监管总局党委部署党建工作", "监管系统推进党的建设。", "监管动态", True),
+        ("某部党组召开党建会议", "某部部署机关党的建设。", "党政要闻", False),
+    ],
+)
+def test_party_building_only_keeps_party_central_and_financial_regulator_content(
+    title, body, section, expected
+):
+    assert is_allowed_party_building_content(title, body, section) is expected
 
 
 def test_market_summary_has_fixed_position_content_and_code_calculated_returns():
@@ -127,10 +184,27 @@ def test_market_summary_keeps_monday_placeholder_before_close():
         monday_pending=True,
     )
 
-    assert item.body.index("上周A股") < item.body.index("7月13日A股收盘情况")
-    assert item.body.index("7月13日A股收盘情况") < item.body.index("上周港股")
-    assert "7月13日A股收盘情况：待当日收盘数据发布后更新。" in item.body
+    assert item.body.index("上周A股") < item.body.index(PENDING_MARKET_NOTICE)
+    assert item.body.index(PENDING_MARKET_NOTICE) < item.body.index("上周港股")
+    assert '<span style="color:#C00000;font-weight:700">' in item.body
+    assert PENDING_MARKET_NOTICE in item.body
     assert len(source_records) == 1
+
+
+def test_build_monday_market_update_only_uses_publication_day_a_share_data():
+    bundle = _complete_market_bundle()
+    bundle.series = [item for item in bundle.series if item.scope == "monday_a"]
+
+    item, sources = build_monday_market_update(
+        bundle,
+        publication_date=date(2026, 7, 13),
+    )
+
+    assert item.title == "今日资本市场综述更新"
+    assert item.content_mode == "market_update"
+    assert "截至7月13日收盘，A股" in item.body
+    assert "上周A股" not in item.body
+    assert len(sources) == 1
 
 
 def test_market_summary_uses_code_owned_index_names_and_rejects_wrong_monday_date():

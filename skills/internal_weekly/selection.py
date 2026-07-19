@@ -11,6 +11,7 @@ from skills.internal_weekly.schema import (
     SourceRecord,
     WeeklyItem,
 )
+from skills.internal_weekly.source_registry import peer_entities
 
 
 SECTION_ORDER = ("党政要闻", "监管动态", "同业动向", "市场观察", "前沿观点")
@@ -30,8 +31,19 @@ REGULATORY_ENTITIES = frozenset(
         "外汇局",
     }
 )
+PARTY_CENTRAL_ENTITIES = frozenset(
+    {
+        "党中央",
+        "中共中央",
+        "中央政治局",
+        "中央书记处",
+        "中央党的建设工作领导小组",
+        "习近平",
+    }
+)
 PARTY_GOV_ENTITIES = frozenset(
     {
+        *PARTY_CENTRAL_ENTITIES,
         "习近平",
         "李强",
         "丁薛祥",
@@ -75,21 +87,20 @@ PARTY_GOV_ENTITIES = frozenset(
         "中纪委",
     }
 )
+DOMESTIC_DIGITAL_BANK_ENTITIES = peer_entities("domestic_digital_banks")
+INTERNATIONAL_DIGITAL_BANK_ENTITIES = peer_entities("international_digital_banks")
+BANK_TECH_SUBSIDIARY_ENTITIES = peer_entities("bank_technology_subsidiaries")
+SELF_BANK_ENTITIES = frozenset({"微众银行", "深圳前海微众银行", "WeBank"})
 BANKING_ENTITIES = frozenset(
     {
-        "微众银行",
-        "网商银行",
-        "富民银行",
-        "金城银行",
-        "蓝海银行",
-        "振兴银行",
+        *DOMESTIC_DIGITAL_BANK_ENTITIES,
+        *INTERNATIONAL_DIGITAL_BANK_ENTITIES,
+        *BANK_TECH_SUBSIDIARY_ENTITIES,
         "民营银行",
         "数字银行",
-        # 生产 Skill 在复制审核基线后补充的同类明确主体。
-        "新网银行",
-        "众邦银行",
-        "苏宁银行",
         "虚拟银行",
+        "互联网银行",
+        "银行科技子公司",
     }
 )
 MARKET_OBSERVATION_MARKERS = frozenset(
@@ -132,7 +143,23 @@ MARKET_OBSERVATION_MARKERS = frozenset(
         "债市",
         "汇市",
         "黄金",
+        "银行理财市场",
+        "理财市场",
+        "资管市场",
+        "贷款市场报价利率",
+        "LPR",
+        "国债收益率",
+        "同业存单",
+        "金融市场",
     }
+)
+PARTY_BUILDING_MARKERS = frozenset(
+    {"党建", "党的建设", "党委", "党组", "党纪学习", "全面从严治党"}
+)
+PENDING_MARKET_NOTICE = "今日资本市场内容待收盘后更新"
+PENDING_MARKET_MARKUP = (
+    '🔴 <span style="color:#C00000;font-weight:700">'
+    f"{PENDING_MARKET_NOTICE}</span>"
 )
 REQUIRED_MARKET_CODES = {
     "weekly_a": ("000001", "399001", "399006"),
@@ -162,7 +189,7 @@ def calculate_weekly_window(value: date | datetime) -> tuple[date, date, date]:
     return publication_date, period_start, period_end
 
 
-def classify_section(title: str, body: str) -> str:
+def classify_section(title: str, body: str) -> str | None:
     """按周报自身持有的分类规则给普通材料归类。"""
     text = f"{title}\n{body[:180]}"
     for markers, section in (
@@ -177,7 +204,24 @@ def classify_section(title: str, body: str) -> str:
             if section != "市场观察" and _is_entity_in_citation_context(text, marker):
                 continue
             return section
-    return "市场观察"
+    return None
+
+
+def is_allowed_party_building_content(title: str, body: str, section: str) -> bool:
+    """党建只保留党中央层面和金融监管部门自身部署。"""
+    text = f"{title}\n{body[:500]}"
+    if not any(marker in text for marker in PARTY_BUILDING_MARKERS):
+        return True
+    if section == "监管动态":
+        return any(entity in text for entity in REGULATORY_ENTITIES)
+    if section == "党政要闻":
+        return any(entity in text for entity in PARTY_CENTRAL_ENTITIES)
+    return False
+
+
+def is_self_bank_content(title: str, body: str) -> bool:
+    text = f"{title}\n{body[:300]}"
+    return any(entity in text for entity in SELF_BANK_ENTITIES)
 
 
 def _is_entity_in_citation_context(text: str, entity: str) -> bool:
@@ -247,8 +291,91 @@ def build_market_item(
     monday_pending: bool = False,
 ) -> tuple[WeeklyItem, list[SourceRecord]]:
     """用结构化行情生成固定位置的资本市场综述。"""
+    required_scopes = tuple(
+        scope
+        for scope in REQUIRED_MARKET_CODES
+        if not (monday_pending and scope == "monday_a")
+    )
+    ordered = _validate_market_bundle(
+        bundle,
+        publication_date=publication_date,
+        required_scopes=required_scopes,
+    )
+
+    month_day = f"{publication_date.month}月{publication_date.day}日"
+    paragraphs = [
+        _render_group("上周A股", ordered["weekly_a"]),
+        (
+            f"{month_day}A股收盘情况：{PENDING_MARKET_MARKUP}。"
+            if monday_pending
+            else _render_group(f"截至{month_day}收盘，A股", ordered["monday_a"])
+        ),
+        _render_group("上周港股", ordered["weekly_hk"]),
+        _render_group("上周美股", ordered["weekly_us"]),
+    ]
+    paragraphs.extend(context.summary.rstrip("。") + "。" for context in bundle.contexts)
+    sources = _market_source_records(bundle, retrieved_at=retrieved_at)
+    item = WeeklyItem(
+        item_id="market-capital-summary",
+        section="市场观察",
+        title="资本市场综述",
+        body="\n".join(paragraphs),
+        content_mode="market_fixed",
+        source_ids=[record.source_id for record in sources],
+        fixed_position=1,
+    )
+    return item, sources
+
+
+def build_monday_market_update(
+    bundle: MarketEvidenceBundle,
+    *,
+    publication_date: date,
+    retrieved_at: str | None = None,
+) -> tuple[WeeklyItem, list[SourceRecord]]:
+    """生成可单独替换到既有周报中的当日 A 股收盘块。"""
+    ordered = _validate_market_bundle(
+        bundle,
+        publication_date=publication_date,
+        required_scopes=("monday_a",),
+    )
+    month_day = f"{publication_date.month}月{publication_date.day}日"
+    sources = _market_source_records(bundle, retrieved_at=retrieved_at)
+    item = WeeklyItem(
+        item_id=f"market-current-day-update-{publication_date.isoformat()}",
+        section="市场观察",
+        title="今日资本市场综述更新",
+        body=_render_group(f"截至{month_day}收盘，A股", ordered["monday_a"]),
+        content_mode="market_update",
+        source_ids=[record.source_id for record in sources],
+        fixed_position=1,
+    )
+    return item, sources
+
+
+def build_pending_market_update(publication_date: date) -> WeeklyItem:
+    month_day = f"{publication_date.month}月{publication_date.day}日"
+    return WeeklyItem(
+        item_id=f"market-current-day-update-{publication_date.isoformat()}",
+        section="市场观察",
+        title="今日资本市场综述更新",
+        body=f"{month_day}A股收盘情况：{PENDING_MARKET_MARKUP}。",
+        content_mode="market_update",
+        source_ids=[],
+        fixed_position=1,
+    )
+
+
+def _validate_market_bundle(
+    bundle: MarketEvidenceBundle,
+    *,
+    publication_date: date,
+    required_scopes: tuple[str, ...],
+) -> dict[str, list[object]]:
     grouped: dict[str, dict[str, object]] = {}
     for item in bundle.series:
+        if item.scope not in required_scopes:
+            raise ValueError(f"行情包含未请求的数据组：{item.scope}")
         grouped.setdefault(item.scope, {})[item.index_code.upper()] = item
         has_reported_change = item.reported_change_pct is not None
         has_any_close = item.start_close is not None or item.end_close is not None
@@ -275,31 +402,21 @@ def build_market_item(
         if item.scope != "monday_a" and end_date >= publication_date:
             raise ValueError(f"{item.scope} 必须使用出版日前一周的收盘值")
 
-    if monday_pending and grouped.get("monday_a"):
-        raise ValueError("周一收盘前不能使用 monday_a 行情数据")
-
     ordered: dict[str, list[object]] = {}
-    for scope, required_codes in REQUIRED_MARKET_CODES.items():
-        if monday_pending and scope == "monday_a":
-            continue
+    for scope in required_scopes:
+        required_codes = REQUIRED_MARKET_CODES[scope]
         missing = [code for code in required_codes if code not in grouped.get(scope, {})]
         if missing:
             raise ValueError(f"资本市场综述缺少 {scope} 必填指数：{', '.join(missing)}")
         ordered[scope] = [grouped[scope][code] for code in required_codes]
+    return ordered
 
-    month_day = f"{publication_date.month}月{publication_date.day}日"
-    paragraphs = [
-        _render_group("上周A股", ordered["weekly_a"]),
-        (
-            f"{month_day}A股收盘情况：待当日收盘数据发布后更新。"
-            if monday_pending
-            else _render_group(f"截至{month_day}收盘，A股", ordered["monday_a"])
-        ),
-        _render_group("上周港股", ordered["weekly_hk"]),
-        _render_group("上周美股", ordered["weekly_us"]),
-    ]
-    paragraphs.extend(context.summary.rstrip("。") + "。" for context in bundle.contexts)
 
+def _market_source_records(
+    bundle: MarketEvidenceBundle,
+    *,
+    retrieved_at: str | None,
+) -> list[SourceRecord]:
     evidence_by_url: dict[str, dict[str, object]] = {}
     for evidence in [*bundle.series, *bundle.contexts]:
         record = evidence_by_url.setdefault(
@@ -309,7 +426,7 @@ def build_market_item(
         record["excerpts"].append(evidence.evidence_excerpt)
 
     timestamp = retrieved_at or datetime.now().astimezone().isoformat()
-    sources = [
+    return [
         SourceRecord(
             source_id=_source_id(url),
             title=str(value["title"]),
@@ -323,16 +440,6 @@ def build_market_item(
         )
         for url, value in evidence_by_url.items()
     ]
-    item = WeeklyItem(
-        item_id="market-capital-summary",
-        section="市场观察",
-        title="资本市场综述",
-        body="\n".join(paragraphs),
-        content_mode="market_fixed",
-        source_ids=[record.source_id for record in sources],
-        fixed_position=1,
-    )
-    return item, sources
 
 
 def extract_requested_publication_date(text: str) -> date | None:
