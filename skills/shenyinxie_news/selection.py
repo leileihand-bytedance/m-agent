@@ -441,14 +441,12 @@ def select_submission_candidates(
     full_text_candidates: list[NewsCandidate],
     excerpt_candidates: list[NewsCandidate],
 ) -> list[NewsCandidate]:
-    """按质量而非配额选稿：只有专题全文允许组成三篇。"""
+    """按质量而非配额选稿：摘编只在没有合格专题全文时兜底。"""
     selected_full = select_top_candidates(full_text_candidates, target=3)
-    if len(selected_full) >= 2:
+    if selected_full:
         return selected_full
 
-    excerpt_limit = 2 - len(selected_full)
-    selected_excerpts = select_top_candidates(excerpt_candidates, target=excerpt_limit)
-    return selected_full + selected_excerpts
+    return select_top_candidates(excerpt_candidates, target=2)
 
 
 def finalize_selected_articles(candidates: list[NewsCandidate]) -> list[dict[str, str]]:

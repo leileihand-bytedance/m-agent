@@ -388,6 +388,65 @@ def test_workflow_keeps_two_full_reports_instead_of_adding_third_excerpt(tmp_pat
     assert result.message == "本期已整理 2 篇报道。"
 
 
+def test_workflow_keeps_one_full_report_instead_of_adding_excerpt(tmp_path):
+    today = date(2026, 7, 16)
+    full_url = "https://people.com.cn/full-one"
+    excerpt_url = "https://people.com.cn/roundup"
+    excerpt_one = "微众银行持续推进数字普惠金融服务，进一步扩大对小微企业的服务覆盖。"
+    excerpt_two = "该行依托金融科技降低服务成本，并形成了可核验的普惠金融服务成果。"
+    search_results = {
+        "微众银行": [
+            _search_result(full_url, "微众银行发布普惠金融年度成果"),
+            _search_result(excerpt_url, "银行业数字普惠金融实践观察"),
+        ]
+    }
+    web_pages = {
+        full_url: _web_page(
+            title="微众银行发布普惠金融年度成果",
+            body="微众银行发布普惠金融年度成果，服务小微企业的覆盖范围持续扩大。" * 15,
+            publish_date="2026-07-10",
+            site="people.com.cn",
+            canonical_url=full_url,
+        ),
+        excerpt_url: _web_page(
+            title="银行业数字普惠金融实践观察",
+            body="\n\n".join(
+                (
+                    "多家银行近期介绍数字普惠金融实践和服务实体经济的阶段性进展。" * 4,
+                    excerpt_one,
+                    excerpt_two,
+                    "报道还介绍了其他银行的相关服务举措和后续安排。" * 4,
+                )
+            ),
+            publish_date="2026-07-12",
+            site="people.com.cn",
+            canonical_url=excerpt_url,
+        ),
+    }
+    assessments = {
+        excerpt_url: ArticleAssessment(
+            decision="extract",
+            is_positive_achievement=True,
+            subject_strength="substantial",
+            suggested_title="微众银行持续提升数字普惠金融服务质效",
+            excerpt_paragraphs=[excerpt_one, excerpt_two],
+            achievement_types=["普惠金融成果"],
+            reason="综合稿中存在可独立成立的微众银行成果段落。",
+        )
+    }
+    gateway, _ = _make_gateway(
+        search_results=search_results,
+        web_pages=web_pages,
+        assessments=assessments,
+    )
+
+    result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
+
+    assert [article.original_url for article in result.articles] == [full_url]
+    assert excerpt_url not in result.sources
+    assert result.message == "本期已整理 1 篇报道。"
+
+
 def test_workflow_rejects_dividend_roundup_even_if_model_marks_it_positive(tmp_path):
     today = date(2026, 7, 16)
     url = "https://stcn.com/dividend-roundup"
