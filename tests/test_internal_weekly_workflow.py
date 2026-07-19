@@ -14,6 +14,7 @@ from skills.internal_weekly.schema import (
 from skills.internal_weekly.workflow import (
     _collect_pages,
     _evidence_in_body,
+    _normalize_market_evidence_mode,
     _resolve_market_evidence_excerpt,
     run,
 )
@@ -401,6 +402,28 @@ def test_market_evidence_recovers_exact_source_clause_by_index_and_change_value(
         evidence.model_copy(update={"reported_change_pct": 5.41}),
         body,
     ) is None
+
+
+def test_market_evidence_prefers_source_reported_change_over_extra_close_values():
+    evidence = MarketSeriesEvidence(
+        scope="weekly_us",
+        index_code="DJIA",
+        index_name="道琼斯指数",
+        start_date="2026-07-06",
+        end_date="2026-07-10",
+        start_close=50000,
+        end_close=49750,
+        reported_change_pct=-0.5,
+        source_url="https://apnews.com/article/market-weekly",
+        source_title="美股周评",
+        evidence_excerpt="道琼斯指数本周下跌0.5%",
+    )
+
+    normalized = _normalize_market_evidence_mode(evidence)
+
+    assert normalized.reported_change_pct == -0.5
+    assert normalized.start_close is None
+    assert normalized.end_close is None
 
 
 def test_collect_pages_does_not_expose_raw_reader_exception():

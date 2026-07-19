@@ -87,6 +87,17 @@ def _resolve_market_evidence_excerpt(
     return None
 
 
+def _normalize_market_evidence_mode(
+    evidence: MarketSeriesEvidence,
+) -> MarketSeriesEvidence:
+    """来源已直接披露涨跌幅时，清除模型多余返回的起止收盘值。"""
+    if evidence.reported_change_pct is None:
+        return evidence
+    if evidence.start_close is None and evidence.end_close is None:
+        return evidence
+    return evidence.model_copy(update={"start_close": None, "end_close": None})
+
+
 def _now(inputs: dict[str, object]) -> datetime:
     override = inputs.get("now")
     if isinstance(override, datetime):
@@ -431,6 +442,7 @@ def _market_item(
         group_page_map = {page.canonical_url: page for page in pages}
         validated_series: list[MarketSeriesEvidence] = []
         for evidence in group_bundle.series:
+            evidence = _normalize_market_evidence_mode(evidence)
             page = group_page_map.get(evidence.source_url)
             if page is None:
                 raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
