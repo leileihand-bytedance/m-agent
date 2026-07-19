@@ -27,6 +27,12 @@ sources:
       - paper.ce.cn
     tier: 1
 
+  - name: 中国经济网
+    category: 中央级媒体
+    domains:
+      - ce.cn
+    tier: 1
+
   - name: 人民日报
     category: 中央级媒体
     domains:
@@ -200,6 +206,12 @@ sources:
       - ycwb.com
     tier: 2
 
+  - name: 信息时报
+    category: 广东主流媒体
+    domains:
+      - xxsb.gz-cmc.com
+    tier: 2
+
   # 深圳主流党媒
   - name: 深圳特区报
     category: 深圳主流党媒
@@ -237,3 +249,28 @@ sources:
     domains:
       - sznews.com
     tier: 2
+
+  # 经核验的补充媒体（仅在前两轮没有合格专题全文时启用）
+  - name: 北青网
+    category: 经核验补充媒体
+    domains:
+      - ynet.com
+    tier: 3
+
+  - name: 和讯网
+    category: 经核验补充媒体
+    domains:
+      - hexun.com
+    tier: 3
+
+  - name: 香港商报
+    category: 经核验补充媒体
+    domains:
+      - hkcd.com.hk
+    tier: 3
+
+  - name: 投资界
+    category: 经核验补充媒体
+    domains:
+      - pedaily.cn
+    tier: 3

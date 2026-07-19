@@ -473,35 +473,91 @@ def _publication_period_hint(period_start: date, period_end: date) -> str:
     )
 
 
+def _publication_month_hint(period_start: date) -> str:
+    return f"{period_start.year}年{period_start.month}月"
+
+
+def _dated_search_query(subject: str, period_start: date, period_end: date) -> str:
+    return (
+        f"{subject} {_publication_month_hint(period_start)} "
+        f"原文发布日期 {_publication_period_hint(period_start, period_end)}"
+    )
+
+
 def generate_primary_search_queries(period_start: date, period_end: date) -> list[str]:
-    """生成首轮权威媒体检索词，并明确要求按发布日期限定区间。"""
-    date_hint = _publication_period_hint(period_start, period_end)
+    """按业务主题生成首轮检索词，不绑定某篇已知稿件标题。"""
     return [
-        f"微众银行 科技创新助推数字化金融普惠发展 人民日报 {date_hint}",
-        f"微众银行 党建 引领 金融高质量发展 {date_hint}",
-        f"微众银行 {date_hint}",
-        f"深圳前海微众银行 {date_hint}",
-        f"微众银行 正面新闻 成果 {date_hint}",
-        f"微众银行 site:gov.cn {date_hint}",
-        f"微众银行 人民网 新华网 {date_hint}",
-        f"微众银行 深圳特区报 深圳商报 {date_hint}",
+        _dated_search_query("微众银行 新闻 报道", period_start, period_end),
+        _dated_search_query("深圳前海微众银行 成果 进展", period_start, period_end),
+        _dated_search_query(
+            "微众银行 普惠金融 小微企业 服务实体经济", period_start, period_end
+        ),
+        _dated_search_query(
+            "微众银行 金融科技 科技创新 数字金融 人工智能", period_start, period_end
+        ),
+        _dated_search_query(
+            "微众银行 消费者权益 征信 金融教育 反诈 金融为民",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 社会责任 公益 乡村振兴 绿色金融", period_start, period_end
+        ),
+        _dated_search_query(
+            "微众银行 党建 合作成果 获奖 荣誉 外部认可", period_start, period_end
+        ),
+        _dated_search_query(
+            "微众银行 微众科技 香港 国际化 技术输出", period_start, period_end
+        ),
     ]
 
 
 def generate_expanded_search_queries(period_start: date, period_end: date) -> list[str]:
     """首轮信源不足时，检索已核验的行业媒体和广东主流媒体。"""
-    date_hint = _publication_period_hint(period_start, period_end)
     return [
-        f"微众银行 央广网 中国金融新闻网 电子银行网 {date_hint}",
-        f"微众银行 南方日报 南方+ 南方网 {date_hint}",
-        f"微众银行 羊城晚报 金羊网 {date_hint}",
+        _dated_search_query(
+            "微众银行 央广网 中国经济网 中国金融新闻网 电子银行网",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 南方日报 南方+ 南方网 羊城晚报 金羊网 信息时报",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 深圳特区报 深圳商报 读特 深圳新闻网",
+            period_start,
+            period_end,
+        ),
+    ]
+
+
+def generate_fallback_search_queries(period_start: date, period_end: date) -> list[str]:
+    """没有合格主流媒体专题稿时，检索经核验的补充媒体。"""
+    return [
+        _dated_search_query(
+            "微众银行 北青网 和讯网 香港商报 投资界", period_start, period_end
+        ),
+        _dated_search_query(
+            "微众银行 征信 消费者权益 金融教育 金融为民 北青网 投资界",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 普惠金融 科技创新 社会责任 获奖 和讯网 香港商报",
+            period_start,
+            period_end,
+        ),
     ]
 
 
 def generate_search_queries(period_start: date, period_end: date) -> list[str]:
-    """兼容调用方：返回首轮与扩展轮的全部检索词。"""
-    return generate_primary_search_queries(period_start, period_end) + generate_expanded_search_queries(
-        period_start, period_end
+    """兼容调用方：返回三轮信源的全部检索词。"""
+    return (
+        generate_primary_search_queries(period_start, period_end)
+        + generate_expanded_search_queries(period_start, period_end)
+        + generate_fallback_search_queries(period_start, period_end)
     )
 
 
@@ -550,7 +606,9 @@ def strip_trailing_media_title_suffix(title: str) -> str:
             found
             and head.strip()
             and len(clean_tail) <= 20
-            and clean_tail.endswith(("网", "报", "报道", "新闻", "客户端", "日报", "时报"))
+            and clean_tail.endswith(
+                ("网", "报", "报道", "新闻", "客户端", "日报", "时报", "投资界")
+            )
         ):
             normalized = head.strip()
             break

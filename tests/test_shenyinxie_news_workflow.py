@@ -160,7 +160,7 @@ def test_workflow_returns_zero_when_no_qualified_candidates(tmp_path):
 
     assert result.needs_clarification is False
     assert len(result.articles) == 0
-    assert "未检索到" in result.message
+    assert "均未通过发布日期或正文完整性核验" in result.message
 
 
 def test_workflow_asks_for_half_month_when_instruction_omits_it(tmp_path):
@@ -185,7 +185,7 @@ def test_workflow_honors_explicit_upper_half_month_instruction(tmp_path):
     today = date(2026, 7, 17)
     url = "https://paper.people.com.cn/rmrb/pc/content/202607/11/example.html"
     search_results = {
-        "微众银行 2026年7月1日至2026年7月15日": [
+        "微众银行 新闻 报道": [
             _search_result(url, "科技创新助推数字化金融普惠发展")
         ]
     }
@@ -490,7 +490,7 @@ def test_workflow_searches_expanded_sources_only_when_primary_full_text_is_insuf
     primary_url = "https://people.com.cn/primary"
     expanded_url = "https://www.cnr.cn/expanded"
     search_results = {
-        "微众银行 2026年7月1日至2026年7月15日": [
+        "微众银行 新闻 报道": [
             _search_result(primary_url, "微众银行发布普惠金融成果")
         ],
         "微众银行 央广网": [
@@ -522,6 +522,126 @@ def test_workflow_searches_expanded_sources_only_when_primary_full_text_is_insuf
     assert any(query.startswith("微众银行 央广网") for query in search_calls)
 
 
+def test_workflow_uses_verified_fallback_media_when_no_mainstream_full_report(tmp_path):
+    today = date(2026, 7, 19)
+    fallback_url = "https://m.pedaily.cn/99discoveries/132279"
+    search_results = {
+        "微众银行 北青网": [
+            _search_result(
+                fallback_url,
+                "微众银行举办“守护信用，共赢未来”征信专场直播",
+            )
+        ]
+    }
+    web_pages = {
+        fallback_url: _web_page(
+            title="微众银行举办&quot;守护信用，共赢未来&quot;征信专场直播|投资界",
+            body=(
+                "微众银行承办金融明白人直播大讲堂，围绕征信知识、反诈案例和消费者权益保护"
+                "开展金融教育宣传，吸引众多公众在线观看，取得了可核验的金融为民成效。"
+            )
+            * 10,
+            publish_date="2026-06-16",
+            site="news.pedaily.cn",
+            canonical_url=fallback_url,
+        )
+    }
+    gateway, calls = _make_gateway(search_results=search_results, web_pages=web_pages)
+
+    result = run(
+        {
+            "text": "生成2026年6月下半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": today,
+        },
+        gateway,
+    )
+
+    assert [article.original_url for article in result.articles] == [fallback_url]
+    assert result.articles[0].title == "微众银行举办\"守护信用，共赢未来\"征信专场直播"
+    search_calls = [query for kind, query in calls if kind == "search"]
+    assert any(query.startswith("微众银行 北青网") for query in search_calls)
+
+
+def test_workflow_does_not_search_fallback_media_when_mainstream_full_report_exists(tmp_path):
+    today = date(2026, 7, 16)
+    primary_url = "https://people.com.cn/primary"
+    search_results = {
+        "微众银行 新闻 报道": [
+            _search_result(primary_url, "微众银行发布普惠金融成果")
+        ]
+    }
+    web_pages = {
+        primary_url: _web_page(
+            title="微众银行发布普惠金融成果",
+            body="微众银行发布普惠金融成果，服务实体经济成效持续提升。" * 15,
+            publish_date="2026-07-10",
+            site="people.com.cn",
+            canonical_url=primary_url,
+        )
+    }
+    gateway, calls = _make_gateway(search_results=search_results, web_pages=web_pages)
+
+    result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
+
+    assert [article.original_url for article in result.articles] == [primary_url]
+    search_calls = [query for kind, query in calls if kind == "search"]
+    assert not any(query.startswith("微众银行 北青网") for query in search_calls)
+
+
+def test_unlisted_primary_results_do_not_block_expanded_media_search(tmp_path):
+    today = date(2026, 7, 16)
+    expanded_url = "https://www.cnr.cn/expanded"
+    unlisted_results = [
+        _search_result(f"https://unlisted-{index}.example/article", f"无关候选{index}")
+        for index in range(30)
+    ]
+    calls: list[tuple[str, object]] = []
+
+    def search(query, max_results=5):
+        calls.append(("search", query))
+        if query.startswith("微众银行 新闻 报道"):
+            return unlisted_results
+        if query.startswith("微众银行 央广网"):
+            return [_search_result(expanded_url, "微众银行科技创新取得新成果")]
+        return []
+
+    def web_reader(url):
+        calls.append(("web_reader", url))
+        if url == expanded_url:
+            return _web_page(
+                title="微众银行科技创新取得新成果",
+                body="微众银行科技创新取得新成果，数字金融服务能力继续增强。" * 15,
+                publish_date="2026-07-12",
+                site="cnr.cn",
+                canonical_url=expanded_url,
+            )
+        raise AssertionError("白名单外链接不应进入网页读取")
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": search,
+            "web_reader": web_reader,
+            "llm_writer": lambda payload: ArticleAssessment(
+                decision="full_text",
+                is_positive_achievement=True,
+                subject_strength="primary",
+                reason="全文聚焦微众银行正面成果。",
+                achievement_types=["科技创新成果"],
+            ),
+        },
+    )
+
+    result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
+
+    assert [article.original_url for article in result.articles] == [expanded_url]
+    assert not any(
+        kind == "web_reader" and str(value).startswith("https://unlisted-")
+        for kind, value in calls
+    )
+
+
 def test_workflow_expands_when_primary_full_text_contains_duplicate_reports(tmp_path):
     today = date(2026, 7, 16)
     first_url = "https://people.com.cn/feature"
@@ -534,7 +654,7 @@ def test_workflow_expands_when_primary_full_text_contains_duplicate_reports(tmp_
         _search_result(second_url, "微众银行科技创新取得进展"),
     ]
     search_results = {
-        "微众银行 2026年7月1日至2026年7月15日": primary_results,
+        "微众银行 新闻 报道": primary_results,
         "微众银行 央广网": [_search_result(expanded_url, "微众银行服务实体经济再获成果")],
     }
     duplicate_body = "微众银行发布普惠金融年度成果，服务小微企业的覆盖范围持续扩大。" * 15
@@ -608,7 +728,7 @@ def test_workflow_rejects_neutral_roundup_even_when_title_contains_weizhong(tmp_
     result = run({"output_dir": str(tmp_path / "output"), "today": today}, gateway)
 
     assert result.articles == []
-    assert "未检索到" in result.message
+    assert "均未达到微众银行正面新闻和成果的报送标准" in result.message
 
 
 def test_workflow_continues_when_one_model_assessment_fails(tmp_path):
