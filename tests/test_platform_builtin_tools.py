@@ -36,6 +36,44 @@ def test_read_web_page_extracts_title_and_paragraphs():
     assert result["text"] == "第一段正文。\n第二段正文。"
 
 
+def test_read_web_page_extracts_links_from_public_json_index():
+    payload = json.dumps(
+        [
+            {
+                "TITLE": "习近平出席世界人工智能大会并发表重要讲话",
+                "URL": "/yaowen/liebiao/202607/content_123.htm",
+                "DOCRELPUBTIME": "2026-07-10",
+            },
+            {
+                "TITLE": "国务院部署促进消费重点工作",
+                "URL": "https://www.gov.cn/yaowen/liebiao/202607/content_456.htm",
+                "DOCRELPUBTIME": "2026-07-09",
+            },
+        ],
+        ensure_ascii=False,
+    )
+
+    result = read_web_page(
+        "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json",
+        fetcher=lambda _: payload,
+    )
+
+    assert result["links"] == [
+        {
+            "title": "习近平出席世界人工智能大会并发表重要讲话",
+            "url": "https://www.gov.cn/yaowen/liebiao/202607/content_123.htm",
+            "publish_date": "2026-07-10",
+        },
+        {
+            "title": "国务院部署促进消费重点工作",
+            "url": "https://www.gov.cn/yaowen/liebiao/202607/content_456.htm",
+            "publish_date": "2026-07-09",
+        },
+    ]
+    assert "人工智能大会" in result["text"]
+    assert result["canonical_url"].endswith("YAOWENLIEBIAO.json")
+
+
 def test_read_web_page_prefers_open_graph_title_over_site_decorated_title():
     html = """
     <html>

@@ -6,7 +6,7 @@ updated_on: "2026-07-19"
 section_sources:
   党政要闻:
     # gov.cn 必须精确匹配中央政府门户，不能把任意地方 *.gov.cn 当作党中央/国务院信源。
-    - {name: 中国政府网要闻列表, domain: gov.cn, tier: primary, match: exact, entry_url: "https://www.gov.cn/yaowen/liebiao/"}
+    - {name: 中国政府网要闻列表, domain: gov.cn, tier: primary, match: exact, entry_url: "https://www.gov.cn/yaowen/liebiao/", feed_url: "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json"}
     - {name: 新华社, domain: xinhuanet.com, tier: primary}
     - {name: 新华社, domain: news.cn, tier: primary}
     - {name: 人民网, domain: people.com.cn, tier: primary}

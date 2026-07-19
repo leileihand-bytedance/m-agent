@@ -17,15 +17,103 @@ from app.platform.documents import DocumentService
 
 MAX_WEB_REDIRECTS = 5
 MAX_WEB_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_WEB_INDEX_LINKS = 500
 
 
-def read_web_page(url: str, fetcher: Callable[[str], str] | None = None) -> dict[str, str]:
+def read_web_page(
+    url: str,
+    fetcher: Callable[[str], str] | None = None,
+) -> dict[str, object]:
     if fetcher:
         _validate_public_web_url(url, resolver=None)
         html = fetcher(url)
     else:
         html = _fetch_url(url)
+    json_page = _extract_json_index(url, html)
+    if json_page is not None:
+        return json_page
     return _extract_page_text(url, html)
+
+
+def _extract_json_index(url: str, body: str) -> dict[str, object] | None:
+    """把公开 JSON 索引归一为文字和链接元数据，不跟随或读取其中链接。"""
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return None
+
+    records: object = payload
+    if isinstance(payload, dict):
+        for key in ("items", "results", "data", "list"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                records = value
+                break
+    if not isinstance(records, list):
+        records = []
+
+    links: list[dict[str, str]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        raw_url = next(
+            (
+                str(record.get(key) or "").strip()
+                for key in ("URL", "url", "href", "link")
+                if str(record.get(key) or "").strip()
+            ),
+            "",
+        )
+        if not raw_url:
+            continue
+        resolved_url = urljoin(url, raw_url)
+        if urlparse(resolved_url).scheme not in {"http", "https"}:
+            continue
+        title = next(
+            (
+                str(record.get(key) or "").strip()
+                for key in ("TITLE", "title", "name")
+                if str(record.get(key) or "").strip()
+            ),
+            "",
+        )
+        publish_date = next(
+            (
+                str(record.get(key) or "").strip()
+                for key in (
+                    "DOCRELPUBTIME",
+                    "publish_date",
+                    "published_at",
+                    "date",
+                )
+                if str(record.get(key) or "").strip()
+            ),
+            "",
+        )
+        links.append(
+            {
+                "title": title,
+                "url": resolved_url,
+                "publish_date": publish_date,
+            }
+        )
+        if len(links) >= MAX_WEB_INDEX_LINKS:
+            break
+
+    text = "\n".join(
+        " ".join(value for value in (item["publish_date"], item["title"], item["url"]) if value)
+        for item in links
+    )[:4000]
+    return {
+        "url": url,
+        "title": "",
+        "text": text,
+        "publish_date": "",
+        "site": _extract_site(url),
+        "canonical_url": url,
+        "date_extracted_from": "",
+        "links": links,
+    }
 
 
 def _validate_public_web_url(

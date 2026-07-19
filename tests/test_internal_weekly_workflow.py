@@ -16,6 +16,7 @@ from skills.internal_weekly.schema import (
 )
 from skills.internal_weekly.workflow import (
     _collect_pages,
+    _collect_source_feed_pages,
     _evidence_in_body,
     _frontier_queries,
     _market_query_groups,
@@ -72,6 +73,22 @@ class FakeTools:
         self.market_required_scopes: list[tuple[str, ...]] = []
         self.market_instructions: list[str] = []
         self.pages = {
+            "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json": {
+                "url": "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json",
+                "canonical_url": "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json",
+                "site": "gov.cn",
+                "title": "中国政府网要闻列表",
+                "publish_date": "",
+                "date_extracted_from": "",
+                "text": "国务院常务会议研究部署重点工作",
+                "links": [
+                    {
+                        "url": "https://www.gov.cn/meeting.htm",
+                        "title": "国务院常务会议研究部署重点工作",
+                        "publish_date": "2026-07-08",
+                    }
+                ],
+            },
             "https://www.gov.cn/meeting.htm": {
                 "url": "https://www.gov.cn/meeting.htm",
                 "canonical_url": "https://www.gov.cn/meeting.htm",
@@ -471,7 +488,6 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert any(query.startswith("新华社") for query in party_queries)
     assert any(query.startswith("人民网") for query in party_queries)
     party_query_text = "\n".join(party_queries)
-    assert "https://www.gov.cn/yaowen/liebiao/" in party_query_text
     for topic in (
         "宏观经济",
         "科技创新",
@@ -637,6 +653,76 @@ def test_collect_pages_uses_section_source_policy_before_reading_local_governmen
 
     assert read_urls == ["https://www.gov.cn/meeting.htm"]
     assert [page.canonical_url for page in pages] == ["https://www.gov.cn/meeting.htm"]
+    assert warnings == []
+
+
+def test_collect_source_feed_pages_reads_only_in_period_relevant_party_links():
+    feed_url = "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json"
+    ai_url = "https://www.gov.cn/yaowen/liebiao/202607/content_ai.htm"
+    read_urls: list[str] = []
+
+    def web_reader(url: str):
+        read_urls.append(url)
+        if url == feed_url:
+            return {
+                "url": feed_url,
+                "canonical_url": feed_url,
+                "title": "中国政府网要闻列表",
+                "publish_date": "",
+                "text": "",
+                "links": [
+                    {
+                        "url": ai_url,
+                        "title": "习近平出席世界人工智能大会并发表重要讲话",
+                        "publish_date": "2026-07-10",
+                    },
+                    {
+                        "url": "https://www.gov.cn/yaowen/liebiao/202607/content_old.htm",
+                        "title": "国务院部署宏观经济工作",
+                        "publish_date": "2026-07-05",
+                    },
+                    {
+                        "url": "https://www.gov.cn/yaowen/liebiao/202607/content_culture.htm",
+                        "title": "地方文艺展演举行",
+                        "publish_date": "2026-07-10",
+                    },
+                    {
+                        "url": "https://example.com/untrusted.htm",
+                        "title": "人工智能营销活动",
+                        "publish_date": "2026-07-10",
+                    },
+                ],
+            }
+        assert url == ai_url
+        return {
+            "url": ai_url,
+            "canonical_url": ai_url,
+            "site": "gov.cn",
+            "publisher": "中国政府网",
+            "title": "习近平出席世界人工智能大会并发表重要讲话",
+            "publish_date": "2026-07-10",
+            "date_extracted_from": "meta:publishdate",
+            "text": (
+                "习近平出席世界人工智能大会并发表重要讲话，"
+                "强调推动人工智能创新发展和产业创新深度融合。"
+            ),
+        }
+
+    gateway = ToolGateway(
+        allowed_tools=("web_reader",),
+        tools={"web_reader": web_reader},
+    )
+
+    pages, warnings = _collect_source_feed_pages(
+        [feed_url],
+        gateway,
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+        source_section="党政要闻",
+    )
+
+    assert read_urls == [feed_url, ai_url]
+    assert [page.canonical_url for page in pages] == [ai_url]
     assert warnings == []
 
 
