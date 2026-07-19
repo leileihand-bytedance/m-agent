@@ -258,7 +258,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             message="本期未检索到符合当前权威媒体和日期条件的微众银行报道。",
         )
 
-    # 2. 专题全文最多选 3 篇；只有不足 2 篇时才用摘编稿补到最多 2 篇。
+    # 2. 专题全文最多选 3 篇；只有没有专题全文时才考虑摘编稿（最多 2 篇）。
     full_text_candidates = score_candidates_rule_based(dedupe_same_article(full_text_candidates))
     excerpt_candidates = score_candidates_rule_based(dedupe_same_article(excerpt_candidates))
     selected = select_submission_candidates(full_text_candidates, excerpt_candidates)
