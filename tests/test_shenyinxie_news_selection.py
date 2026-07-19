@@ -419,6 +419,35 @@ def test_dividend_roundup_is_not_reportable_even_when_model_marks_it_positive():
     assert apply_editorial_assessment(candidate, assessment) is None
 
 
+def test_external_executive_appointment_story_is_not_reportable_background():
+    paragraph_one = (
+        "顾敏获委任为友邦保险独立非执行董事，并将牵头该公司的科技委员会工作。"
+    )
+    paragraph_two = (
+        "顾敏曾任微众银行董事长，任内推动微众科技业务覆盖11个国家和地区，"
+        "并与多家海外机构开展数字金融合作。"
+    )
+    candidate = NewsCandidate(
+        url="https://eeo.com.cn/external-appointment",
+        canonical_url="https://eeo.com.cn/external-appointment",
+        title="微众银行顾敏加入友邦保险董事会，并牵头科技委员会工作",
+        source_title="微众银行顾敏加入友邦保险董事会，并牵头科技委员会工作",
+        site="eeo.com.cn",
+        body=f"{paragraph_one}\n\n{paragraph_two}",
+    )
+    assessment = ArticleAssessment(
+        decision="extract",
+        is_positive_achievement=True,
+        subject_strength="substantial",
+        suggested_title="微众银行董事长顾敏受邀加入友邦保险董事会",
+        excerpt_paragraphs=[paragraph_one, paragraph_two],
+        achievement_types=["国际化成果"],
+        reason="模型把履历中的微众科技数据判断成可报送成果。",
+    )
+
+    assert apply_editorial_assessment(candidate, assessment) is None
+
+
 def test_reportable_technology_story_is_not_rejected_for_incidental_dividend_mention():
     body = "微众银行发布金融科技创新成果，并在报道末尾披露年度分红安排。" * 10
     candidate = NewsCandidate(

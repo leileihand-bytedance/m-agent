@@ -12,12 +12,16 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.opc.constants import RELATIONSHIP_TYPE
-from docx.shared import Cm, Pt
+from docx.shared import Cm, Pt, RGBColor
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 from app.review.official_format_checker import load_official_format_rules
 from skills.shenyinxie_news.schema import SelectedArticle
-from skills.shenyinxie_news.selection import extract_markdown_front_matter
+from skills.shenyinxie_news.selection import (
+    clean_article_body_noise,
+    extract_markdown_front_matter,
+)
 
 
 OUTPUT_FILENAME = "【深银协】微众银行{year}年{month}月第{monthly_issue}期信息动态.docx"
@@ -42,6 +46,9 @@ _WEB_PAGE_CHROME_PATTERNS = (
 _NEWSPAPER_METADATA_SUFFIX = re.compile(
     r"\s*《[^》]{1,30}》\s*[（(]\s*\d{4}年\d{1,2}月\d{1,2}日\s*"
     r"第\s*\d{1,2}\s*版\s*[）)]\s*$"
+)
+_SOURCE_LEAD_PATTERN = re.compile(
+    r"^(【[^】\r\n]{1,24}(?:报道|報道|讯|訊)】)(.*)$"
 )
 _WEB_PAGE_CHROME_EXACT = {
     "+",
@@ -271,13 +278,16 @@ def _expand_body_paragraphs(marker: Paragraph, paragraphs: list[str]) -> None:
     paragraph_texts = paragraphs or [""]
     prototype = deepcopy(marker._p)
     _replace_paragraph_text(marker, paragraph_texts[0])
+    _mark_source_lead_red(marker)
     current = marker
     for text in paragraph_texts[1:]:
         current = _insert_cloned_paragraph_after(current, prototype, text)
+        _mark_source_lead_red(current)
 
 
 def _article_body_paragraphs(body: str, article_title: str = "") -> list[str]:
     _, body = extract_markdown_front_matter(body)
+    body = clean_article_body_noise(body)
     paragraphs: list[str] = []
     for raw_line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         clean = raw_line.replace("\u200b", "").replace("\ufeff", "").strip()
@@ -291,6 +301,24 @@ def _article_body_paragraphs(body: str, article_title: str = "") -> list[str]:
             continue
         paragraphs.append(clean)
     return paragraphs
+
+
+def _mark_source_lead_red(paragraph: Paragraph) -> None:
+    """只将正文开头的来源/报道标记设为红色，便于用户手动删除。"""
+    match = _SOURCE_LEAD_PATTERN.match(paragraph.text)
+    if match is None or not paragraph.runs:
+        return
+
+    lead, remainder = match.groups()
+    lead_run = paragraph.runs[0]
+    remainder_element = deepcopy(lead_run._element)
+    lead_run.text = lead
+    lead_run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+
+    if remainder:
+        lead_run._element.addnext(remainder_element)
+        remainder_run = Run(remainder_element, paragraph)
+        remainder_run.text = remainder
 
 
 def _apply_render_compatible_fonts(doc: Document) -> None:
@@ -354,7 +382,8 @@ def _add_article_block(doc: Document, article: SelectedArticle, rules: dict[str,
 
     # 正文
     for paragraph_text in _article_body_paragraphs(article.body, article.title):
-        _add_formatted_paragraph(doc, paragraph_text, body_rules)
+        paragraph = _add_formatted_paragraph(doc, paragraph_text, body_rules)
+        _mark_source_lead_red(paragraph)
 
     # 摘编稿保留原报道标题，便于用户核对标题调整。
     if article.content_mode == "extract" and article.source_title:

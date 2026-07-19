@@ -1121,3 +1121,80 @@ def test_workflow_rejects_candidate_when_title_cannot_be_recovered(tmp_path):
     )
 
     assert result.articles == []
+
+
+def test_workflow_cleans_promotional_tail_before_selection_and_output(tmp_path):
+    url = "https://m.pedaily.cn/99discoveries/clean-tail"
+    body = (
+        "微众银行举办征信专场直播，普及征信知识并强化消费者权益保护。" * 6
+        + "\n惠州首富，投资思摩尔回报200亿"
+        + "\n入驻创投号>>>"
+        + "\n清科控股（01945.HK）旗下 创业与投资资讯平台"
+    )
+    gateway, _ = _make_gateway(
+        search_results={
+            "微众银行 北青网": [_search_result(url, "微众银行举办征信专场直播")]
+        },
+        web_pages={
+            url: _web_page(
+                title="微众银行举办征信专场直播",
+                body=body,
+                publish_date="2026-04-10",
+                site="news.pedaily.cn",
+                canonical_url=url,
+            )
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年4月上半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert len(result.articles) == 1
+    assert "惠州首富" not in result.articles[0].body
+    assert "入驻创投号" not in result.articles[0].body
+    assert "清科控股" not in result.articles[0].body
+
+
+def test_workflow_converts_selected_traditional_chinese_to_simplified(tmp_path):
+    url = "https://people.com.cn/traditional-report"
+    body = (
+        "【點新聞報道】微众科技立足香港，助力『一帶一路』沿線國家數字經濟協同發展，"
+        "並與多個國家和地區的企業開展合作。"
+    ) * 8
+    gateway, _ = _make_gateway(
+        search_results={
+            "微众银行 新闻 报道": [
+                _search_result(url, "微众科技助力『一帶一路』沿線國家數字經濟協同發展")
+            ]
+        },
+        web_pages={
+            url: _web_page(
+                title="微众科技助力『一帶一路』沿線國家數字經濟協同發展",
+                body=body,
+                publish_date="2026-06-24",
+                site="people.com.cn",
+                canonical_url=url,
+            )
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月下半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert len(result.articles) == 1
+    article = result.articles[0]
+    assert article.title == "微众科技助力『一带一路』沿线国家数字经济协同发展"
+    assert "【点新闻报道】" in article.body
+    assert "多个国家和地区的企业开展合作" in article.body

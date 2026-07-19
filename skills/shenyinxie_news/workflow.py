@@ -20,6 +20,7 @@ from skills.shenyinxie_news.selection import (
     apply_rule_relevance,
     calculate_issue_number,
     calculate_news_period,
+    clean_article_body_noise,
     dedupe_same_article,
     extract_markdown_front_matter,
     extract_explicit_half_month,
@@ -32,6 +33,7 @@ from skills.shenyinxie_news.selection import (
     select_submission_candidates,
     strip_trailing_media_title_suffix,
 )
+from skills.shenyinxie_news.text_normalization import to_simplified_chinese
 
 
 MAX_CANDIDATES = 30
@@ -62,7 +64,8 @@ def _assess_candidate(candidate: NewsCandidate, tools: ToolGateway) -> ArticleAs
                 "只有标题和全文都适合正面报送的专题稿才可返回 full_text；"
                 "综合稿，以及标题带有被骗、投诉、风险、疑问等负面叙事但其中含有可独立报送成果的专题稿，"
                 "必须返回 extract，并逐字段落摘取微众银行相关正面内容、给出准确的新标题；"
-                "其他银行为主、中性行业盘点、负面风险事件或名单式提及必须 reject。"
+                "其他银行为主、中性行业盘点、负面风险事件或名单式提及必须 reject；"
+                "高管到其他机构任职且微众成果仅作为个人履历背景的报道也必须 reject。"
             ),
             "materials": [
                 {
@@ -151,7 +154,7 @@ def _build_candidate(search_item: dict[str, object], page: dict[str, str]) -> Ne
             page.get("date_extracted_from", "")
             or ("markdown_front_matter" if metadata_publish_date else "")
         ),
-        body=clean_body,
+        body=clean_article_body_noise(clean_body),
     )
 
 
@@ -502,14 +505,14 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
     body_lines: list[str] = []
     for idx, candidate in enumerate(selected, start=1):
         article = SelectedArticle(
-            title=candidate.title,
-            media_name=candidate.media_name or candidate.site,
+            title=to_simplified_chinese(candidate.title),
+            media_name=to_simplified_chinese(candidate.media_name or candidate.site),
             publish_date=candidate.publish_date,
-            body=candidate.body,
+            body=to_simplified_chinese(candidate.body),
             original_url=candidate.canonical_url or candidate.url,
             content_mode=candidate.content_mode or "full_text",
-            source_title=candidate.source_title or candidate.title,
-            editor_note=candidate.editor_note,
+            source_title=to_simplified_chinese(candidate.source_title or candidate.title),
+            editor_note=to_simplified_chinese(candidate.editor_note),
         )
         articles.append(article)
         sources.append(article.original_url)

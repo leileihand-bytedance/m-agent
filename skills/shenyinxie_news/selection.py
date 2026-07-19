@@ -69,6 +69,18 @@ _MARKDOWN_FRONT_MATTER = re.compile(
     r"\A\s*---\s*\n(?P<header>.*?)\n---\s*(?:\n|\Z)",
     re.DOTALL,
 )
+_INVESTMENT_SITE_PROMO_MARKER = re.compile(
+    r"入[驻駐][创創]投[号號]\s*>{2,}",
+    re.IGNORECASE,
+)
+_EXTERNAL_APPOINTMENT_EVENT = re.compile(
+    r"(?:加入|受邀加入|获委任(?:为)?|獲委任(?:為)?|出任|担任|擔任|当选为|當選為)"
+    r".{0,30}(?:董事会|董事會|独立非执行董事|獨立非執行董事|董事|委员会主席|委員會主席)"
+)
+_EXECUTIVE_ROLE = re.compile(
+    r"董事[长長]|行长|行長|副行长|副行長|首席|总裁|總裁|CEO",
+    re.IGNORECASE,
+)
 
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -269,6 +281,17 @@ def extract_markdown_front_matter(text: str) -> tuple[dict[str, str], str]:
     return metadata, text[match.end() :].lstrip()
 
 
+def clean_article_body_noise(text: str) -> str:
+    """移除正文末尾可确定识别的站点推广区，不改动新闻正文。"""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for index, line in enumerate(lines):
+        if _INVESTMENT_SITE_PROMO_MARKER.fullmatch(line.strip()):
+            # 推广标记上一行是站点推荐的另一篇文章标题，和推广区一起删除。
+            cutoff = max(0, index - 1)
+            return "\n".join(lines[:cutoff]).rstrip()
+    return text
+
+
 def extract_publish_date(page: dict[str, str]) -> date | None:
     """从 web_reader 返回的页面字典中解析发布日期。"""
     date_str = str(page.get("publish_date", "") or "").strip()
@@ -379,6 +402,13 @@ def apply_editorial_assessment(
         candidate.select_reason = "不采用：报道核心是分红、派现或利润分配，不属于本动态报送的正面成果。"
         return None
 
+    if is_external_executive_appointment_story(candidate):
+        candidate.select_reason = (
+            "不采用：报道核心是微众银行高管到其他机构任职，"
+            "微众银行成果仅作为个人履历或背景出现。"
+        )
+        return None
+
     if assessment.decision != "reject" and assessment.subject_strength == "primary":
         if requires_positive_packaging(candidate.title):
             return _apply_extract_packaging(candidate, assessment)
@@ -433,6 +463,15 @@ def is_financial_distribution_only_story(candidate: NewsCandidate) -> bool:
         for marker in _REPORTABLE_ACHIEVEMENT_TITLE_MARKERS
     )
     return has_distribution_topic and not has_reportable_achievement
+
+
+def is_external_executive_appointment_story(candidate: NewsCandidate) -> bool:
+    """拒绝核心事件为微众银行高管到其他机构任职的履历背景稿。"""
+    title = (candidate.source_title or candidate.title).strip()
+    if not _EXTERNAL_APPOINTMENT_EVENT.search(title):
+        return False
+    context = f"{title}\n{candidate.body[:1200]}"
+    return "微众" in context and _EXECUTIVE_ROLE.search(context) is not None
 
 
 def is_likely_repost(body: str) -> bool:

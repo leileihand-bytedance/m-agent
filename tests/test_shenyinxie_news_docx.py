@@ -5,6 +5,7 @@ import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.shared import RGBColor
 
 from skills.shenyinxie_news import docx_output
 from skills.shenyinxie_news.docx_output import write_shenyinxie_docx
@@ -368,6 +369,58 @@ def test_docx_output_removes_web_page_chrome_noise(tmp_path):
     assert not any(text.startswith("第07版") for text in texts)
     assert not any(text.startswith("人民日报 2026年") for text in texts)
     assert not any("第\u00a007\u00a0版" in text for text in texts)
+
+
+def test_docx_output_removes_investment_site_promotional_tail(tmp_path):
+    article = _article(
+        body=(
+            "微众银行举办征信专场直播，普及征信知识并强化消费者权益保护。\n"
+            "活动吸引众多公众在线观看，取得了良好的金融教育成效。\n"
+            "惠州首富，投资思摩尔回报200亿\n"
+            "入驻创投号>>>\n"
+            "清科控股（01945.HK）旗下 创业与投资资讯平台"
+        )
+    )
+
+    path = write_shenyinxie_docx(
+        title="微众银行2026年4月第1期信息动态",
+        period_start=date(2026, 4, 1),
+        period_end=date(2026, 4, 15),
+        issue_number="2026-07",
+        articles=[article],
+        output_dir=tmp_path / "out",
+    )
+
+    full_text = "\n".join(paragraph.text for paragraph in Document(str(path)).paragraphs)
+    assert "微众银行举办征信专场直播" in full_text
+    assert "惠州首富" not in full_text
+    assert "入驻创投号" not in full_text
+    assert "清科控股" not in full_text
+
+
+def test_docx_output_marks_source_lead_label_red_only(tmp_path):
+    article = _article(
+        body="【點新聞報道】微眾科技助力『一帶一路』沿線國家數字經濟協同發展。"
+    )
+
+    path = write_shenyinxie_docx(
+        title="微众银行2026年6月第2期信息动态",
+        period_start=date(2026, 6, 16),
+        period_end=date(2026, 6, 30),
+        issue_number="2026-12",
+        articles=[article],
+        output_dir=tmp_path / "out",
+    )
+
+    doc = Document(str(path))
+    paragraph = next(p for p in doc.paragraphs if p.text.startswith("【點新聞報道】"))
+    assert paragraph.runs[0].text == "【點新聞報道】"
+    assert paragraph.runs[0].font.color.rgb == RGBColor(0xFF, 0x00, 0x00)
+    assert "微眾科技助力" in "".join(run.text for run in paragraph.runs[1:])
+    assert all(
+        run.font.color.rgb != RGBColor(0xFF, 0x00, 0x00)
+        for run in paragraph.runs[1:]
+    )
 
 
 def test_docx_excerpt_includes_source_title_and_editor_note(tmp_path):

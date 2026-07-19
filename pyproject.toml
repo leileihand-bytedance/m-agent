@@ -9,6 +9,7 @@ dependencies = [
     "beautifulsoup4==4.14.3",
     "curl-cffi==0.14.0",
     "lxml==5.4.0",
+    "opencc-python-reimplemented==0.1.7",
     "openai==2.30.0",
     "pydantic==2.12.5",
     "pydantic-ai-slim[anthropic,openai]==2.4.0",
