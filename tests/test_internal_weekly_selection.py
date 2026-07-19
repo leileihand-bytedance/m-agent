@@ -21,7 +21,10 @@ from skills.internal_weekly.selection import (
     validate_frontier_selection,
 )
 from skills.internal_weekly.source_policy import candidate_allowed, domain_allowed_for_section
-from skills.internal_weekly.source_registry import load_source_registry
+from skills.internal_weekly.source_registry import (
+    load_source_registry,
+    section_source_entry_urls,
+)
 
 
 def _series(
@@ -129,6 +132,19 @@ def test_source_registry_keeps_official_references_for_expanded_peer_groups():
         assert peer_groups[category]
         assert all(item["official_domain"] for item in peer_groups[category])
         assert all(item["reference_url"].startswith("http") for item in peer_groups[category])
+
+
+def test_party_source_registry_includes_state_council_news_list_entry():
+    registry = load_source_registry()
+    party_sources = registry["section_sources"]["党政要闻"]
+
+    assert any(
+        item.get("entry_url") == "https://www.gov.cn/yaowen/liebiao/"
+        for item in party_sources
+    )
+    assert section_source_entry_urls("党政要闻") == (
+        "https://www.gov.cn/yaowen/liebiao/",
+    )
 
 
 def test_unknown_ordinary_content_is_not_misclassified_as_market_observation():

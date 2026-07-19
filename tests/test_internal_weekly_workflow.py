@@ -470,6 +470,16 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert any(query.startswith("中国政府网") for query in party_queries)
     assert any(query.startswith("新华社") for query in party_queries)
     assert any(query.startswith("人民网") for query in party_queries)
+    party_query_text = "\n".join(party_queries)
+    assert "https://www.gov.cn/yaowen/liebiao/" in party_query_text
+    for topic in (
+        "宏观经济",
+        "科技创新",
+        "人工智能",
+        "促进消费",
+        "小微企业",
+    ):
+        assert topic in party_query_text
     assert any(query.startswith("中国人民银行") for query in regulatory_queries)
     assert any(query.startswith("国家金融监督管理总局") for query in regulatory_queries)
     assert any(query.startswith("中国证监会") for query in regulatory_queries)
@@ -479,6 +489,58 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert "ZA Bank" in peer_queries
     assert "建信金科" in peer_queries
     assert "工银科技" in peer_queries
+
+
+def test_party_assessment_instruction_covers_broad_management_relevance():
+    page = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/content_123.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/content_123.htm",
+        title="习近平出席世界人工智能大会并发表重要讲话",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-10",
+        body=(
+            "习近平出席世界人工智能大会并发表重要讲话，强调推动人工智能创新发展，"
+            "促进科技创新和产业创新深度融合。"
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def llm_writer(payload):
+        captured.update(payload)
+        return ContentAssessmentBatch(
+            items=[
+                ContentCandidateAssessment(
+                    source_url=page.canonical_url,
+                    include=True,
+                    section="党政要闻",
+                    title=page.title,
+                    summary="中央部署推动人工智能创新发展和科技产业融合。",
+                    evidence_excerpt="强调推动人工智能创新发展",
+                    score=9,
+                    reason="与银行数字化经营和科技创新相关的中央部署",
+                )
+            ]
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    instruction = str(captured["instruction"])
+    for topic in ("宏观经济", "科技创新", "人工智能", "促进消费", "小微企业"):
+        assert topic in instruction
+    assert [item.title for item in items] == [page.title]
+    assert len(records) == 1
+    assert warnings == []
 
 
 def test_frontier_queries_cover_report_series_and_both_months_in_fallback_window():

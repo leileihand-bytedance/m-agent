@@ -79,6 +79,23 @@ def section_domain_rules(section: str) -> tuple[tuple[str, str], ...]:
     return tuple(dict.fromkeys(values))
 
 
+def section_source_entry_urls(section: str) -> tuple[str, ...]:
+    """返回板块登记的固定发现入口，供检索查询显式引用。"""
+    payload = load_source_registry()
+    section_sources = payload.get("section_sources", {})
+    if not isinstance(section_sources, dict):
+        return ()
+    entries = section_sources.get(section, [])
+    values: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        entry_url = str(entry.get("entry_url") or "").strip()
+        if entry_url:
+            values.append(entry_url)
+    return tuple(dict.fromkeys(values))
+
+
 def registered_domains() -> frozenset[str]:
     payload = load_source_registry()
     values: set[str] = set()

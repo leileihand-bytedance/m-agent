@@ -35,7 +35,10 @@ from skills.internal_weekly.selection import (
     is_self_bank_content,
     validate_frontier_selection,
 )
-from skills.internal_weekly.source_registry import peer_query_names
+from skills.internal_weekly.source_registry import (
+    peer_query_names,
+    section_source_entry_urls,
+)
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
     date_in_period,
@@ -283,6 +286,7 @@ def _ordinary_query_groups(
     period_end: date,
 ) -> list[tuple[str, tuple[str, ...]]]:
     date_range = _format_date_range(period_start, period_end)
+    party_entry_urls = " ".join(section_source_entry_urls("党政要闻"))
     peer_queries: list[str] = []
     for category, suffix in (
         ("domestic_digital_banks", "经营 产品 科技 风险管理 合作"),
@@ -301,12 +305,16 @@ def _ordinary_query_groups(
         (
             "党政要闻",
             (
-                "中国政府网 国务院常务会议 宏观经济 金融 银行经营 "
-                f"重要政策 原文 {date_range}",
-                "新华社 中共中央 中央政治局 国务院 宏观经济 金融 "
-                f"重要部署 原文 {date_range}",
-                "人民网 中共中央 习近平 金融工作 党的建设 "
-                f"重要部署 原文 {date_range}",
+                "中国政府网 要闻列表 中共中央 国务院 中央重要会议 重大政策 "
+                f"宏观经济 高质量发展 原文 {party_entry_urls} {date_range}",
+                "中国政府网 要闻列表 科技创新 人工智能 数字经济 数据要素 "
+                f"新质生产力 原文 {party_entry_urls} {date_range}",
+                "中国政府网 要闻列表 扩大内需 促进消费 小微企业 民营经济 "
+                f"营商环境 就业 原文 {party_entry_urls} {date_range}",
+                "新华社 中共中央 中央政治局 国务院 宏观经济 高质量发展 "
+                f"科技创新 人工智能 重要部署 原文 {date_range}",
+                "人民网 中共中央 习近平 党的建设 宏观经济 科技创新 "
+                f"人工智能 促进消费 小微企业 重要部署 原文 {date_range}",
             ),
         ),
         (
@@ -498,6 +506,15 @@ def _ordinary_items(
         tuple[ContentCandidateAssessment, dict[str, WebCandidate]]
     ] = []
     warnings: list[str] = []
+    party_scope_instruction = (
+        "党政要闻不能以是否出现‘金融’二字作为入选门槛；除宏观经济金融外，"
+        "中央层面的高质量发展、科技创新、人工智能、数字经济、数据要素、"
+        "新质生产力、扩大内需、促进消费、支持小微企业和民营经济、营商环境、"
+        "就业等内容，只要对银行经营管理、客户经营、风险判断或数字化发展有明确"
+        "参考价值，都可以入选。"
+        if expected_section == "党政要闻"
+        else ""
+    )
     for batch_index, offset in enumerate(
         range(0, len(pages), MAX_PAGES_PER_ASSESSMENT_BATCH),
         start=1,
@@ -517,6 +534,7 @@ def _ordinary_items(
                         f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
                         "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
                         "宏观经济金融、风险管理、数字化经营直接相关的信息。"
+                        f"{party_scope_instruction}"
                         "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
                         "只形成事实摘要，并返回可在原文逐字核对的证据句。"
                     ),
