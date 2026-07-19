@@ -1072,7 +1072,7 @@ def test_workflow_recovers_markdown_front_matter_and_canonical_source(tmp_path):
                 body=body,
                 publish_date="2026-05-27",
                 site="finance.sina.com.cn",
-                canonical_url="",
+                canonical_url=raw_url,
             )
         },
     )

@@ -130,10 +130,8 @@ def _build_candidate(search_item: dict[str, object], page: dict[str, str]) -> Ne
     raw_body = str(page.get("text", ""))
     metadata, clean_body = extract_markdown_front_matter(raw_body)
     url = str(page.get("url") or search_item.get("url", ""))
-    canonical = str(
-        page.get("canonical_url")
-        or metadata.get("canonical_url")
-        or _strip_markdown_proxy_suffix(url)
+    canonical = _strip_markdown_proxy_suffix(
+        str(page.get("canonical_url") or metadata.get("canonical_url") or url)
     )
     source_title = unescape(
         str(page.get("title") or metadata.get("title") or search_item.get("title", ""))
