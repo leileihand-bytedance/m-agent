@@ -35,6 +35,19 @@ from skills.internal_weekly.source_policy import (
 
 
 MAX_PAGES_PER_GROUP = 30
+_INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
+
+
+def _evidence_in_body(excerpt: str, body: str) -> bool:
+    """只忽略网页排版不可见字符和空白差异，保留文字、数字与标点校验。"""
+
+    def normalize(value: str) -> str:
+        return " ".join(
+            value.translate(_INVISIBLE_LAYOUT_MARKS).replace("\xa0", " ").split()
+        )
+
+    normalized_excerpt = normalize(excerpt)
+    return bool(normalized_excerpt) and normalized_excerpt in normalize(body)
 
 
 def _now(inputs: dict[str, object]) -> datetime:
@@ -290,7 +303,7 @@ def _ordinary_items(
             warnings.append(f"模型返回了候选集外的来源：{assessment.source_url}")
             continue
         evidence = assessment.evidence_excerpt.strip()
-        if not evidence or evidence not in page.body:
+        if not _evidence_in_body(evidence, page.body):
             warnings.append(f"《{assessment.title}》缺少可逐字核验的证据句，已排除")
             continue
         section = classify_section(assessment.title, page.body)
@@ -383,7 +396,7 @@ def _market_item(
             if page is None:
                 raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
             excerpt = evidence.evidence_excerpt.strip()
-            if not excerpt or excerpt not in page.body:
+            if not _evidence_in_body(excerpt, page.body):
                 label = (
                     evidence.index_name
                     if hasattr(evidence, "index_name")

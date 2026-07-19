@@ -10,7 +10,7 @@ from skills.internal_weekly.schema import (
     MarketEvidenceBundle,
     MarketSeriesEvidence,
 )
-from skills.internal_weekly.workflow import _collect_pages, run
+from skills.internal_weekly.workflow import _collect_pages, _evidence_in_body, run
 
 
 def _market_series() -> list[MarketSeriesEvidence]:
@@ -307,6 +307,22 @@ def test_collect_pages_filters_unlisted_search_results_before_web_reader():
     assert read_urls == ["https://www.gov.cn/meeting.htm"]
     assert [page.canonical_url for page in pages] == ["https://www.gov.cn/meeting.htm"]
     assert warnings == []
+
+
+def test_evidence_matching_ignores_invisible_web_layout_marks_only():
+    body = (
+        "截至7月10日收盘，\u200b恒生指数报收24175.12点，单周上涨3.53%\u200b；"
+        "恒生科技指数周涨幅达4.94%。"
+    )
+
+    assert _evidence_in_body(
+        "截至7月10日收盘，恒生指数报收24175.12点，单周上涨3.53%；",
+        body,
+    )
+    assert not _evidence_in_body(
+        "截至7月10日收盘，恒生指数报收24175.12点，单周上涨4.53%；",
+        body,
+    )
 
 
 def test_collect_pages_does_not_expose_raw_reader_exception():
