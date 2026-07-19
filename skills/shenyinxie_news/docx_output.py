@@ -46,6 +46,10 @@ _NEWSPAPER_METADATA_SUFFIX = re.compile(
 _WEB_PAGE_CHROME_EXACT = {
     "+",
     "-",
+    "关闭",
+    "打开",
+    "展开",
+    "收起",
     "本版新闻",
     "Mon",
     "Tue",

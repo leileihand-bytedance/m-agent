@@ -337,6 +337,7 @@ def test_docx_output_removes_web_page_chrome_noise(tmp_path):
     article = _article(
         title="科技创新助推数字化金融普惠发展",
         body=(
+            "关闭\n打开\n展开\n收起\n"
             "2026-07-11 07:00\n+\n-\n第07版：特别报道\n本版新闻\n"
             "人民日报 2026年07月11日\nSat\n科技创新助推数字化金融普惠发展\n"
             "微众银行党委书记 李南青 《人民日报》（ 2026年07月11日 第\u00a007\u00a0版）\n"
@@ -358,6 +359,10 @@ def test_docx_output_removes_web_page_chrome_noise(tmp_path):
     assert "微众银行党委书记 李南青" in texts
     assert "科技创新助推数字化金融普惠发展" not in texts
     assert "+" not in texts
+    assert "关闭" not in texts
+    assert "打开" not in texts
+    assert "展开" not in texts
+    assert "收起" not in texts
     assert "-" not in texts
     assert "Sat" not in texts
     assert not any(text.startswith("第07版") for text in texts)
