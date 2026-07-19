@@ -36,6 +36,39 @@ def test_read_web_page_extracts_title_and_paragraphs():
     assert result["text"] == "第一段正文。\n第二段正文。"
 
 
+def test_read_web_page_recovers_article_after_premature_html_close():
+    html = """
+    <html>
+      <head><title>中央部署科技创新重点工作</title></head>
+      <body><nav>首页 | 登录 | 无障碍</nav></body>
+    </html>
+    <div class="content">
+      <div id="UCAP-CONTENT">
+        <div class="trs_editor_view">
+          <p>新华社北京7月8日电</p>
+          <p>（2026年7月8日）</p>
+          <p>党中央把科技创新摆在现代化建设突出位置。</p>
+          <p>推动人工智能创新发展，促进科技创新和产业创新深度融合。</p>
+        </div>
+      </div>
+    </div>
+    """
+
+    result = read_web_page(
+        "https://www.gov.cn/yaowen/liebiao/202607/content_123.htm",
+        fetcher=lambda _: html,
+    )
+
+    assert result["title"] == "中央部署科技创新重点工作"
+    assert result["publish_date"] == "2026-07-08"
+    assert result["text"] == (
+        "新华社北京7月8日电\n"
+        "（2026年7月8日）\n"
+        "党中央把科技创新摆在现代化建设突出位置。\n"
+        "推动人工智能创新发展，促进科技创新和产业创新深度融合。"
+    )
+
+
 def test_read_web_page_extracts_links_from_public_json_index():
     payload = json.dumps(
         [

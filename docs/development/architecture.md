@@ -228,7 +228,7 @@ app/platform/builtin_tools.py
 
 当前已有：
 
-- `read_web_page`：只读取公网 http/https 网页；拒绝 `file://`、localhost、内网 IP、云元数据地址和 DNS 解析到私网。请求关闭自动跳转，每一跳先校验目标再访问；已校验的公网 DNS 结果会固定到本次请求，并限制跳转次数和响应体大小。标题优先采用网页 `og:title` 或 `twitter:title`，避免把站点栏目和媒体名带入成稿；发布日期在清理脚本前先读取 JSON-LD 和常见新闻元数据，也识别研究报告页面常用的 `citation_publication_date`、`DC.date` 以及 `<time>` 中的可见点分日期，供 Skill 做日期硬校验。公开地址返回 JSON 列表时，工具只归一化其中的标题、URL 和发布日期并返回受限数量的链接元数据，不自动跟随链接；业务 Skill 仍须逐条执行自己的域名、日期和内容校验。
+- `read_web_page`：只读取公网 http/https 网页；拒绝 `file://`、localhost、内网 IP、云元数据地址和 DNS 解析到私网。请求关闭自动跳转，每一跳先校验目标再访问；已校验的公网 DNS 结果会固定到本次请求，并限制跳转次数和响应体大小。标题优先采用网页 `og:title` 或 `twitter:title`，避免把站点栏目和媒体名带入成稿；发布日期在清理脚本前先读取 JSON-LD 和常见新闻元数据，也识别研究报告页面常用的 `citation_publication_date`、`DC.date` 以及 `<time>` 中的可见点分日期，供 Skill 做日期硬校验。部分权威站点模板会在公共页头后提前输出 `</html>`，使 lxml 丢弃后续正文；当原始页面明确含有段落而 lxml 未解析到任何段落时，工具使用标准库解析器回退，并从文章容器恢复正文和可见发布日期。公开地址返回 JSON 列表时，工具只归一化其中的标题、URL 和发布日期并返回受限数量的链接元数据，不自动跟随链接；业务 Skill 仍须逐条执行自己的域名、日期和内容校验。
 - `search_web`：按供应商调用联网搜索并统一返回标题、摘要、链接和来源类型。DeepSeek 使用 Anthropic Messages `/anthropic/v1/messages` 的服务器工具 `web_search_20250305`，MiniMax 旧通道保留 `/v1/coding_plan/search` 兼容；未知供应商明确拒绝，不能把任意模型地址拼成 MiniMax 搜索路径。
 - `policy_research` / `policy_materials` / `policy_search`：共享政策挂靠判断、政策知识库材料包和底层检索。
 - `bank_materials` / `bank_search`：微众银行信息库材料包和底层检索。

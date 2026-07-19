@@ -625,6 +625,12 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         raise RuntimeError("缺少 beautifulsoup4，无法解析网页。") from exc
 
     soup = BeautifulSoup(html, "lxml")
+    # 部分权威站点会把公共页头片段连同 </html> 一起嵌入正文模板。
+    # lxml 遇到这个提前闭合标签会丢弃后续文章，而 html.parser 能保留它。
+    if not soup.find("p") and re.search(r"<p(?:\s|>)", html, flags=re.IGNORECASE):
+        fallback_soup = BeautifulSoup(html, "html.parser")
+        if fallback_soup.find("p"):
+            soup = fallback_soup
     title = _extract_page_title(soup)
     canonical_url = _extract_canonical_url(soup, url)
     site = _extract_site(canonical_url or url)
@@ -769,7 +775,12 @@ def _extract_publish_date(
             return parsed, "time:text"
 
     # 4. 中文/常见日期文本（仅出现在 body 区域）
-    body = soup.find("article") or soup.find("main") or soup.body
+    body = (
+        soup.select_one("#UCAP-CONTENT")
+        or soup.find("article")
+        or soup.find("main")
+        or soup.body
+    )
     if body:
         body_text = body.get_text(" ", strip=True)
         parsed, pattern = _extract_date_from_text(body_text)
