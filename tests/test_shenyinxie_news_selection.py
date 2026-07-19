@@ -472,6 +472,41 @@ def test_score_candidates_rule_based():
     assert candidates[0].authority_score == 9.0
 
 
+def test_dedupe_same_event_keeps_one_richer_report_from_same_day():
+    short = NewsCandidate(
+        url="https://finance.sina.com.cn/brief",
+        canonical_url="https://finance.sina.com.cn/brief",
+        title="微众银行AI算力增长3.5倍",
+        site="finance.sina.com.cn",
+        media_name="上海证券报",
+        media_tier=2,
+        publish_date="2026-05-27",
+        body=(
+            "记者在第二十届深圳国际金融博览会了解到，微众银行展示AI算力、"
+            "跨境数据验证和普惠金融成果。"
+        )
+        * 4,
+    )
+    rich = NewsCandidate(
+        url="https://www.sznews.com/feature",
+        canonical_url="https://www.sznews.com/feature",
+        title="深圳金博会｜一家AI原生银行的进击与初心",
+        site="www.sznews.com",
+        media_name="深圳新闻网",
+        media_tier=2,
+        publish_date="2026-05-27",
+        body=(
+            "第二十届深圳国际金融博览会期间，微众银行系统介绍数字员工、智能体、"
+            "深港跨境数据平台、微业贷和无障碍服务等多项实践成果。"
+        )
+        * 12,
+    )
+
+    selected = dedupe_same_article([short, rich])
+
+    assert [candidate.url for candidate in selected] == [rich.url]
+
+
 def test_select_top_candidates_respects_target():
     candidates = [
         NewsCandidate(

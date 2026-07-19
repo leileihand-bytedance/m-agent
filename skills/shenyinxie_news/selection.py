@@ -768,6 +768,19 @@ def _normalize_article_title(title: str) -> str:
     return re.sub(r"[\W_]+", "", normalized.lower())
 
 
+_NAMED_EVENT_PATTERN = re.compile(
+    r"第[0-9一二三四五六七八九十百零〇两]+届"
+    r"[\u4e00-\u9fffA-Za-z0-9·]{2,24}?"
+    r"(?:博览会|大会|论坛|峰会|年会)"
+)
+
+
+def _named_event_anchors(candidate: NewsCandidate) -> set[str]:
+    """提取可用于同日同事件去重的具名会议锚点。"""
+    text = f"{candidate.source_title or candidate.title}\n{candidate.body}"
+    return set(_NAMED_EVENT_PATTERN.findall(text))
+
+
 def dedupe_same_article(candidates: list[NewsCandidate], similarity_threshold: float = 0.85) -> list[NewsCandidate]:
     """同稿转载去重：标题/正文高度相似且发布时间接近视为同一篇。
 
@@ -791,7 +804,16 @@ def dedupe_same_article(candidates: list[NewsCandidate], similarity_threshold: f
                 _normalize_article_title(existing.title),
             )
             body_sim = _text_similarity(candidate.body[:300], existing.body[:300])
-            if title_sim >= similarity_threshold or body_sim >= similarity_threshold:
+            same_named_event = bool(
+                candidate.publish_date
+                and candidate.publish_date == existing.publish_date
+                and _named_event_anchors(candidate) & _named_event_anchors(existing)
+            )
+            if (
+                title_sim >= similarity_threshold
+                or body_sim >= similarity_threshold
+                or same_named_event
+            ):
                 is_duplicate = True
                 break
         if not is_duplicate:
