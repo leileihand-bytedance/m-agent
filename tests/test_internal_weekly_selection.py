@@ -305,6 +305,27 @@ def test_frontier_selection_rejects_model_written_passage():
         validate_frontier_selection(selection, "报告原文只有一段可核验内容。")
 
 
+def test_frontier_selection_drops_exact_but_truncated_passage():
+    complete = "This is a complete and traceable report sentence."
+    truncated = "The current two-tier monetary architecture remains intermedia"
+    selection = FrontierSelection(
+        source_url="https://www.bis.org/publ/work999.htm",
+        title="Digital money report",
+        institution="BIS",
+        publish_date="2026-07-09",
+        selected_passages=[complete, truncated],
+        source_location="网页正文",
+        reason="与银行经营相关",
+    )
+
+    validated = validate_frontier_selection(
+        selection,
+        complete + "\n" + truncated,
+    )
+
+    assert validated == [complete]
+
+
 def test_source_policy_rejects_unlisted_domain_and_out_of_period_report():
     candidate = WebCandidate(
         url="https://blog.example/report",
@@ -362,6 +383,17 @@ def test_party_source_policy_accepts_central_portals_but_rejects_local_gov_subdo
     assert not domain_allowed_for_section(
         "https://gzw.hlj.gov.cn/local-party.htm",
         "党政要闻",
+    )
+
+
+def test_regulatory_source_policy_accepts_registered_financial_media_fallbacks():
+    assert domain_allowed_for_section(
+        "https://www.cnfin.com/hb-lb/detail/20260707/example.html",
+        "监管动态",
+    )
+    assert domain_allowed_for_section(
+        "https://www.stcn.com/article/detail/4002669.html",
+        "监管动态",
     )
 
 

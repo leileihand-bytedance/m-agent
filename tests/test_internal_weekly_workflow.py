@@ -15,8 +15,10 @@ from skills.internal_weekly.schema import (
 from skills.internal_weekly.workflow import (
     _collect_pages,
     _evidence_in_body,
+    _market_query_groups,
     _normalize_market_evidence_mode,
     _normalize_reported_market_period,
+    _ordinary_items,
     _ordinary_query_groups,
     _resolve_market_evidence_excerpt,
     is_market_update_request,
@@ -650,6 +652,126 @@ def test_collect_pages_does_not_expose_raw_reader_exception():
 
     assert warnings == ["网页读取失败：gov.cn"]
     assert "curl" not in warnings[0]
+
+
+def test_collect_pages_retries_transient_reader_failure_for_allowed_source():
+    attempts = 0
+
+    def search(query: str, max_results: int = 5):
+        return [{"url": "https://www.cnfin.com/market/weekly.html", "title": "周评"}]
+
+    def web_reader(url: str):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary connection reset")
+        return {
+            "url": url,
+            "canonical_url": url,
+            "site": "cnfin.com",
+            "title": "一周市场回顾",
+            "publish_date": "2026-07-12",
+            "text": "本周市场主要指数涨跌情况完整列示，可供人工核验。",
+        }
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader"),
+        tools={"search": search, "web_reader": web_reader},
+    )
+
+    pages, warnings = _collect_pages(
+        ["测试"],
+        gateway,
+        source_section="市场观察",
+    )
+
+    assert attempts == 2
+    assert [page.title for page in pages] == ["一周市场回顾"]
+    assert warnings == []
+
+
+def test_collect_pages_supports_larger_result_limit_for_sparse_authority_search():
+    limits: list[int] = []
+
+    def search(query: str, max_results: int = 5):
+        limits.append(max_results)
+        return []
+
+    gateway = ToolGateway(
+        allowed_tools=("search",),
+        tools={"search": search},
+    )
+
+    _collect_pages(["测试"], gateway, max_results_per_query=10)
+
+    assert limits == [10]
+
+
+def test_ordinary_assessment_continues_after_one_candidate_batch_fails():
+    pages = [
+        WebCandidate(
+            url=f"https://www.cmbyc.com/news/{index}.html",
+            canonical_url=f"https://www.cmbyc.com/news/{index}.html",
+            title=f"招银云创发布项目进展{index}",
+            site="cmbyc.com",
+            publish_date="2026-07-10",
+            body=f"招银云创发布项目进展{index}，披露银行科技服务能力。",
+        )
+        for index in range(7)
+    ]
+    calls = 0
+
+    def llm_writer(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("structured output retry exceeded")
+        page = pages[5]
+        return ContentAssessmentBatch(
+            items=[
+                ContentCandidateAssessment(
+                    source_url=page.canonical_url,
+                    include=True,
+                    section="同业动向",
+                    title=page.title,
+                    summary="招银云创披露银行科技服务能力。",
+                    evidence_excerpt="披露银行科技服务能力",
+                    score=8,
+                    reason="实质科技经营动态",
+                )
+            ]
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        pages,
+        gateway,
+        expected_section="同业动向",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    assert calls == 2
+    assert [item.title for item in items] == ["招银云创发布项目进展5"]
+    assert len(records) == 1
+    assert any("第1批候选评估失败" in warning for warning in warnings)
+
+
+def test_weekly_us_queries_include_readable_ap_and_cnfin_sources():
+    groups = dict(
+        _market_query_groups(
+            datetime(2026, 7, 13).date(),
+            datetime(2026, 7, 6).date(),
+            datetime(2026, 7, 12).date(),
+        )
+    )
+    weekly_us = "\n".join(groups[("weekly_us",)])
+
+    assert "Wall Street week ended July 10 2026" in weekly_us
+    assert "新华财经 一周要闻 全球市场" in weekly_us
 
 
 class FrontierFallbackTools(FakeTools):

@@ -11,6 +11,7 @@ from skills.internal_weekly.dates import parse_flexible_date
 from skills.internal_weekly.output import render_review_markdown, write_review_bundle
 from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
+    ContentCandidateAssessment,
     FrontierSelection,
     InternalWeeklyResult,
     MarketEvidenceBundle,
@@ -46,6 +47,9 @@ from skills.internal_weekly.source_policy import (
 
 MAX_PAGES_PER_GROUP = 30
 MAX_ITEMS_PER_ORDINARY_SECTION = 6
+MAX_PAGES_PER_ASSESSMENT_BATCH = 5
+MAX_ORDINARY_BODY_CHARS = 12000
+WEB_READER_ATTEMPTS = 2
 MARKET_CLOSE_TIME = time(15, 0)
 _INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
 _WEEKLY_MARKET_MARKERS = (
@@ -182,12 +186,13 @@ def _collect_pages(
     period_end: date | None = None,
     require_research: bool = False,
     source_section: str | None = None,
+    max_results_per_query: int = 5,
 ) -> tuple[list[WebCandidate], list[str]]:
     search_results: list[dict[str, object]] = []
     warnings: list[str] = []
     for query in queries:
         try:
-            results = tools.call("search", query, max_results=5)
+            results = tools.call("search", query, max_results=max_results_per_query)
         except Exception:
             warnings.append(f"检索失败：{query}")
             continue
@@ -207,10 +212,15 @@ def _collect_pages(
             continue
         if require_research and not is_research_source(url):
             continue
-        try:
-            page = tools.call("web_reader", url)
-        except Exception:
-            warnings.append(f"网页读取失败：{hostname(url) or '未知来源'}")
+        page: object | None = None
+        for attempt in range(WEB_READER_ATTEMPTS):
+            try:
+                page = tools.call("web_reader", url)
+                break
+            except Exception:
+                if attempt == WEB_READER_ATTEMPTS - 1:
+                    warnings.append(f"网页读取失败：{hostname(url) or '未知来源'}")
+        if page is None:
             continue
         if not isinstance(page, dict):
             warnings.append(f"网页读取结果格式无效：{url}")
@@ -275,14 +285,10 @@ def _ordinary_query_groups(
         (
             "监管动态",
             (
-                "中国人民银行 金融政策 监管规则 金融统计 风险提示 "
-                f"原文 {date_range}",
-                "国家金融监督管理总局 银行监管 监管规则 风险提示 "
-                f"原文 {date_range}",
-                "中国证监会 资本市场 监管规则 风险提示 "
-                f"原文 {date_range}",
-                "国家外汇管理局 外汇政策 跨境资金 监管统计 "
-                f"原文 {date_range}",
+                f"中国人民银行 {date_range} 发布 货币政策 金融统计 风险提示 原文",
+                f"国家金融监督管理总局 {date_range} 发布 监管 规定 风险 会议",
+                f"中国证监会 {date_range} 发布 资本市场 监管 规定 风险提示",
+                f"国家外汇管理局 {date_range} 发布 外汇政策 跨境资金 监管统计",
                 "金融监管部门 党委 党组 党建 全面从严治党 "
                 f"原文 {date_range}",
             ),
@@ -361,10 +367,10 @@ def _market_query_groups(
         (
             ("weekly_us",),
             (
-                "美股一周回顾 道琼斯指数 纳斯达克指数 标普500指数 "
-                f"周涨跌幅 {market_close} {weekly_range}",
-                "美联社 新华财经 美股一周 道琼斯 纳斯达克 标普500 "
-                f"收盘 周涨跌幅 {market_close}",
+                f"Wall Street week ended July {last_trading_day.day} "
+                f"{last_trading_day.year} Dow Jones Nasdaq S&P 500 weekly percent change",
+                "新华财经 一周要闻 全球市场 本周回顾 美股 道琼斯 纳斯达克 "
+                f"标普500 周涨跌幅 {market_close} {weekly_range}",
             ),
         ),
     ]
@@ -396,7 +402,11 @@ def _frontier_queries(
     ]
 
 
-def _materials(pages: list[WebCandidate]) -> list[dict[str, str]]:
+def _materials(
+    pages: list[WebCandidate],
+    *,
+    max_body_chars: int | None = None,
+) -> list[dict[str, str]]:
     return [
         {
             "type": "web_page",
@@ -407,7 +417,8 @@ def _materials(pages: list[WebCandidate]) -> list[dict[str, str]]:
             "publish_date": page.publish_date,
             "text": (
                 f"标题：{page.title}\n发布日期：{page.publish_date}\n"
-                f"原文链接：{page.canonical_url}\n\n正文：\n{page.body}"
+                f"原文链接：{page.canonical_url}\n\n正文：\n"
+                f"{page.body[:max_body_chars] if max_body_chars else page.body}"
             ),
         }
         for page in pages
@@ -445,30 +456,55 @@ def _ordinary_items(
 ) -> tuple[list[WeeklyItem], list[SourceRecord], list[str]]:
     if not pages:
         return [], [], [f"{expected_section}未找到通过日期和来源校验的候选材料"]
-    result = tools.call(
-        "llm_writer",
-        {
-            "task": "internal_weekly_content_assessment",
-            "skill_id": "internal_weekly",
-            "output_type": ContentAssessmentBatch,
-            "prompt_path": "prompts/assess.md",
-            "target_section": expected_section,
-            "instruction": (
-                f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
-                "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
-                "宏观经济金融、风险管理、数字化经营直接相关的信息。"
-                "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
-                "只形成事实摘要，并返回可在原文逐字核对的证据句。"
-            ),
-            "materials": _materials(pages),
-        },
-    )
-    batch = result if isinstance(result, ContentAssessmentBatch) else ContentAssessmentBatch.model_validate(result)
-    page_map = {page.canonical_url: page for page in pages}
+    assessed: list[
+        tuple[ContentCandidateAssessment, dict[str, WebCandidate]]
+    ] = []
+    warnings: list[str] = []
+    for batch_index, offset in enumerate(
+        range(0, len(pages), MAX_PAGES_PER_ASSESSMENT_BATCH),
+        start=1,
+    ):
+        page_batch = pages[offset : offset + MAX_PAGES_PER_ASSESSMENT_BATCH]
+        page_map = {page.canonical_url: page for page in page_batch}
+        try:
+            result = tools.call(
+                "llm_writer",
+                {
+                    "task": "internal_weekly_content_assessment",
+                    "skill_id": "internal_weekly",
+                    "output_type": ContentAssessmentBatch,
+                    "prompt_path": "prompts/assess.md",
+                    "target_section": expected_section,
+                    "instruction": (
+                        f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
+                        "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
+                        "宏观经济金融、风险管理、数字化经营直接相关的信息。"
+                        "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
+                        "只形成事实摘要，并返回可在原文逐字核对的证据句。"
+                    ),
+                    "materials": _materials(
+                        page_batch,
+                        max_body_chars=MAX_ORDINARY_BODY_CHARS,
+                    ),
+                },
+            )
+            batch = (
+                result
+                if isinstance(result, ContentAssessmentBatch)
+                else ContentAssessmentBatch.model_validate(result)
+            )
+        except Exception:
+            warnings.append(f"{expected_section}第{batch_index}批候选评估失败")
+            continue
+        assessed.extend((assessment, page_map) for assessment in batch.items)
     items: list[WeeklyItem] = []
     records: list[SourceRecord] = []
-    warnings: list[str] = []
-    for assessment in sorted(batch.items, key=lambda item: item.score, reverse=True):
+    seen_urls: set[str] = set()
+    for assessment, page_map in sorted(
+        assessed,
+        key=lambda pair: pair[0].score,
+        reverse=True,
+    ):
         if not assessment.include:
             continue
         if assessment.section != expected_section:
@@ -476,6 +512,8 @@ def _ordinary_items(
         page = page_map.get(assessment.source_url)
         if page is None:
             warnings.append(f"模型返回了候选集外的来源：{assessment.source_url}")
+            continue
+        if page.canonical_url in seen_urls:
             continue
         evidence = assessment.evidence_excerpt.strip()
         if not _evidence_in_body(evidence, page.body):
@@ -517,6 +555,7 @@ def _ordinary_items(
             )
         )
         records.append(source_record)
+        seen_urls.add(page.canonical_url)
         if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
             break
     return items, records, warnings
@@ -681,6 +720,9 @@ def _frontier_item(
     if not period_start <= selected_date <= period_end:
         raise ValueError("前沿观点发布日期超出允许的报告窗口")
     passages = validate_frontier_selection(selection, page.body)
+    warnings = []
+    if len(passages) != len(selection.selected_passages):
+        warnings.append("前沿观点已剔除网页截断导致的非完整段落")
     record = _record_from_page(
         page,
         retrieved_at=retrieved_at,
@@ -702,7 +744,7 @@ def _frontier_item(
         content_mode="report_extract",
         source_ids=[record.source_id],
     )
-    return item, [record], []
+    return item, [record], warnings
 
 
 def _digest(result: InternalWeeklyResult) -> str:
@@ -767,6 +809,7 @@ def _run_market_update(
             list(monday_queries),
             tools,
             source_section="市场观察",
+            max_results_per_query=10,
         )
         warnings.extend(search_warnings)
         try:
@@ -874,6 +917,9 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             period_start=period_start,
             period_end=period_end,
             source_section=section_name,
+            max_results_per_query=(
+                10 if section_name in {"党政要闻", "监管动态"} else 5
+            ),
         )
         ordinary_page_groups.append((section_name, pages))
         warnings.extend(group_warnings)
@@ -888,6 +934,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
             queries,
             tools,
             source_section="市场观察",
+            max_results_per_query=10,
         )
         market_page_groups.append((required_scopes, group_pages))
         market_search_warnings.extend(group_warnings)

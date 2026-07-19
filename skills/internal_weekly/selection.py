@@ -247,10 +247,16 @@ def validate_frontier_selection(selection: FrontierSelection, report_body: str) 
     """前沿观点只能逐字摘录已读取的研报内容。"""
     if not selection.selected_passages:
         raise ValueError("前沿观点没有可核验的研报摘录")
+    complete_passages: list[str] = []
     for passage in selection.selected_passages:
         if not passage.strip() or passage.strip() not in report_body:
             raise ValueError("前沿观点摘录必须逐字存在于研报页面正文中")
-    return [passage.strip() for passage in selection.selected_passages]
+        normalized = passage.strip()
+        if re.search(r"[。！？.!?][\"'”’）)]?$", normalized):
+            complete_passages.append(normalized)
+    if not complete_passages:
+        raise ValueError("前沿观点没有句末完整的可核验研报摘录")
+    return complete_passages
 
 
 def _source_id(url: str) -> str:

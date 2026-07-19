@@ -15,6 +15,12 @@ section_sources:
     - {name: 国家金融监督管理总局, domain: nfra.gov.cn, tier: primary}
     - {name: 中国证监会, domain: csrc.gov.cn, tier: primary}
     - {name: 国家外汇管理局, domain: safe.gov.cn, tier: primary}
+    - {name: 新华财经, domain: cnfin.com, tier: secondary}
+    - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
+    - {name: 上海证券报, domain: cnstock.com, tier: secondary}
+    - {name: 证券时报, domain: stcn.com, tier: secondary}
+    - {name: 新华社, domain: news.cn, tier: secondary}
+    - {name: 人民网, domain: people.com.cn, tier: secondary}
   同业动向:
     - {name: 新华财经, domain: cnfin.com, tier: secondary}
     - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
