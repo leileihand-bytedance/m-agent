@@ -52,6 +52,7 @@ from skills.internal_weekly.source_policy import (
 MAX_PAGES_PER_GROUP = 30
 MAX_ITEMS_PER_ORDINARY_SECTION = 6
 MAX_PAGES_PER_ASSESSMENT_BATCH = 5
+MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
 MAX_ORDINARY_BODY_CHARS = 12000
 WEB_READER_ATTEMPTS = 2
 MARKET_CLOSE_TIME = time(15, 0)
@@ -692,35 +693,43 @@ def _ordinary_items(
         page_batch = pages[offset : offset + MAX_PAGES_PER_ASSESSMENT_BATCH]
         page_map = {page.canonical_url: page for page in page_batch}
         try:
-            result = tools.call(
-                "llm_writer",
-                {
-                    "task": "internal_weekly_content_assessment",
-                    "skill_id": "internal_weekly",
-                    "output_type": ContentAssessmentBatch,
-                    "prompt_path": "prompts/assess.md",
-                    "target_section": expected_section,
-                    "instruction": (
-                        f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
-                        "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
-                        "宏观经济金融、风险管理、数字化经营直接相关的信息。"
-                        f"{party_scope_instruction}"
-                        "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
-                        "只形成事实摘要，并返回可在原文逐字核对的证据句。"
-                    ),
-                    "materials": _materials(
-                        page_batch,
-                        max_body_chars=MAX_ORDINARY_BODY_CHARS,
-                    ),
-                },
-            )
-            batch = (
-                result
-                if isinstance(result, ContentAssessmentBatch)
-                else ContentAssessmentBatch.model_validate(result)
-            )
+            batch = ContentAssessmentBatch()
+            for assessment_attempt in range(MAX_EMPTY_ASSESSMENT_ATTEMPTS):
+                result = tools.call(
+                    "llm_writer",
+                    {
+                        "task": "internal_weekly_content_assessment",
+                        "skill_id": "internal_weekly",
+                        "output_type": ContentAssessmentBatch,
+                        "prompt_path": "prompts/assess.md",
+                        "target_section": expected_section,
+                        "instruction": (
+                            f"本次只筛选“{expected_section}”，其他板块材料必须排除。"
+                            "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
+                            "宏观经济金融、风险管理、数字化经营直接相关的信息。"
+                            f"{party_scope_instruction}"
+                            "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
+                            "每一条候选都必须返回判断；不入选也要返回 include=false，不能漏答或返回空列表。"
+                            "只形成事实摘要，并返回可在原文逐字核对的证据句。"
+                        ),
+                        "materials": _materials(
+                            page_batch,
+                            max_body_chars=MAX_ORDINARY_BODY_CHARS,
+                        ),
+                    },
+                )
+                batch = (
+                    result
+                    if isinstance(result, ContentAssessmentBatch)
+                    else ContentAssessmentBatch.model_validate(result)
+                )
+                if batch.items or assessment_attempt == MAX_EMPTY_ASSESSMENT_ATTEMPTS - 1:
+                    break
         except Exception:
             warnings.append(f"{expected_section}第{batch_index}批候选评估失败")
+            continue
+        if not batch.items:
+            warnings.append(f"{expected_section}第{batch_index}批候选评估连续返回空判断")
             continue
         assessed.extend((assessment, page_map) for assessment in batch.items)
     items: list[WeeklyItem] = []

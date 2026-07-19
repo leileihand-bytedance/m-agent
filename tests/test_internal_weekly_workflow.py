@@ -554,9 +554,95 @@ def test_party_assessment_instruction_covers_broad_management_relevance():
     instruction = str(captured["instruction"])
     for topic in ("宏观经济", "科技创新", "人工智能", "促进消费", "小微企业"):
         assert topic in instruction
+    assert "每一条候选都必须返回判断" in instruction
     assert [item.title for item in items] == [page.title]
     assert len(records) == 1
     assert warnings == []
+
+
+def test_ordinary_assessment_retries_when_model_omits_the_whole_batch():
+    page = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/content_456.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/content_456.htm",
+        title="中共中央 国务院作出国家科学技术奖励决定",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-08",
+        body="中共中央 国务院作出国家科学技术奖励决定，推动科技创新发展。",
+    )
+    calls = 0
+
+    def llm_writer(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ContentAssessmentBatch(items=[])
+        return ContentAssessmentBatch(
+            items=[
+                ContentCandidateAssessment(
+                    source_url=page.canonical_url,
+                    include=True,
+                    section="党政要闻",
+                    title=page.title,
+                    summary="中央作出国家科学技术奖励决定，推动科技创新发展。",
+                    evidence_excerpt="推动科技创新发展",
+                    score=9,
+                    reason="中央科技创新重要部署",
+                )
+            ]
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    assert calls == 2
+    assert [item.title for item in items] == [page.title]
+    assert len(records) == 1
+    assert warnings == []
+
+
+def test_ordinary_assessment_reports_consecutive_empty_batches():
+    page = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/content_789.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/content_789.htm",
+        title="国务院部署促进消费重点工作",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-09",
+        body="国务院部署促进消费重点工作。",
+    )
+    calls = 0
+
+    def llm_writer(payload):
+        nonlocal calls
+        calls += 1
+        return ContentAssessmentBatch(items=[])
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    assert calls == 2
+    assert items == []
+    assert records == []
+    assert warnings == ["党政要闻第1批候选评估连续返回空判断"]
 
 
 def test_frontier_queries_cover_report_series_and_both_months_in_fallback_window():
