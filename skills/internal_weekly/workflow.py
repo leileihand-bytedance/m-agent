@@ -62,6 +62,21 @@ _WEEKLY_MARKET_MARKERS = (
     "weekly",
     "week",
 )
+_ENGLISH_MONTH_NAMES = (
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 
 
 def _evidence_in_body(excerpt: str, body: str) -> bool:
@@ -384,6 +399,10 @@ def _frontier_queries(
 ) -> list[str]:
     marker = "近30日补充" if fallback else "统计期优先"
     report_date = f"{period_end.year}年{period_end.month}月{period_end.day}日"
+    month_window = (
+        f"{_ENGLISH_MONTH_NAMES[period_start.month]} "
+        f"{_ENGLISH_MONTH_NAMES[period_end.month]} {period_end.year}"
+    )
     return [
         (
             "BIS working paper bulletin banking finance digital payments "
@@ -394,6 +413,11 @@ def _frontier_queries(
             "BIS latest bulletin working paper banking digital payments "
             f"研究报告 {report_date}"
         ),
+        (
+            f"BIS Annual Economic Report {period_end.year} banking digital money "
+            f"financial system 研究报告 {month_window}"
+        ),
+        f"BIS report banking digital payments 研究报告 {month_window}",
         (
             "IMF World Bank working paper banking finance financial market "
             f"研究报告 {marker} "
@@ -455,6 +479,8 @@ def _ordinary_items(
     retrieved_at: str,
 ) -> tuple[list[WeeklyItem], list[SourceRecord], list[str]]:
     if not pages:
+        if expected_section == "市场观察":
+            return [], [], ["市场观察（资本市场综述以外）未找到合格候选材料"]
         return [], [], [f"{expected_section}未找到通过日期和来源校验的候选材料"]
     assessed: list[
         tuple[ContentCandidateAssessment, dict[str, WebCandidate]]
@@ -946,6 +972,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         period_end=period_end,
         require_research=True,
         source_section="前沿观点",
+        max_results_per_query=10,
     )
     weekly_frontier_pages = [
         page

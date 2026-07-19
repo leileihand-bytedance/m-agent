@@ -15,6 +15,7 @@ from skills.internal_weekly.schema import (
 from skills.internal_weekly.workflow import (
     _collect_pages,
     _evidence_in_body,
+    _frontier_queries,
     _market_query_groups,
     _normalize_market_evidence_mode,
     _normalize_reported_market_period,
@@ -65,6 +66,7 @@ def _market_series() -> list[MarketSeriesEvidence]:
 class FakeTools:
     def __init__(self):
         self.search_calls: list[str] = []
+        self.search_limits: list[int] = []
         self.market_required_scopes: list[tuple[str, ...]] = []
         self.market_instructions: list[str] = []
         self.pages = {
@@ -126,6 +128,7 @@ class FakeTools:
 
     def search(self, query: str, max_results: int = 5):
         self.search_calls.append(query)
+        self.search_limits.append(max_results)
         if "研究报告" in query:
             return [{"url": "https://www.bis.org/publ/work999.htm", "title": "利率传导与银行净息差"}]
         if "指数" in query or "A股" in query or "港股" in query or "美股" in query:
@@ -295,8 +298,14 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert len(monday_queries) == 2
     assert all("证券时报" not in query for query in monday_queries)
     bis_queries = [query for query in fake.search_calls if query.startswith("BIS")]
-    assert len(bis_queries) == 2
+    assert len(bis_queries) >= 4
     assert any("latest bulletin" in query for query in bis_queries)
+    assert any("Annual Economic Report 2026" in query for query in bis_queries)
+    assert all(
+        limit == 10
+        for query, limit in zip(fake.search_calls, fake.search_limits, strict=True)
+        if query.startswith("BIS") or query.startswith("IMF")
+    )
     hk_queries = [query for query in fake.search_calls if "恒生中国企业指数" in query]
     assert len(hk_queries) == 2
     assert any("港股一周复盘" in query for query in hk_queries)
@@ -468,6 +477,34 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert "ZA Bank" in peer_queries
     assert "建信金科" in peer_queries
     assert "工银科技" in peer_queries
+
+
+def test_frontier_queries_cover_report_series_and_both_months_in_fallback_window():
+    queries = _frontier_queries(
+        datetime(2026, 6, 13).date(),
+        datetime(2026, 7, 12).date(),
+        fallback=True,
+    )
+
+    combined = "\n".join(queries)
+    assert "BIS Annual Economic Report 2026" in combined
+    assert "BIS report banking digital payments" in combined
+    assert "June July 2026" in combined
+
+
+def test_empty_optional_market_observation_uses_unambiguous_warning():
+    gateway = ToolGateway(allowed_tools=(), tools={})
+
+    items, records, warnings = _ordinary_items(
+        [],
+        gateway,
+        expected_section="市场观察",
+        retrieved_at="2026-07-19T12:00:00+08:00",
+    )
+
+    assert items == []
+    assert records == []
+    assert warnings == ["市场观察（资本市场综述以外）未找到合格候选材料"]
 
 
 def test_detects_only_explicit_current_day_market_update_requests():
