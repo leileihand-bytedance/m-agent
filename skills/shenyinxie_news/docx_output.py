@@ -17,6 +17,7 @@ from docx.text.paragraph import Paragraph
 
 from app.review.official_format_checker import load_official_format_rules
 from skills.shenyinxie_news.schema import SelectedArticle
+from skills.shenyinxie_news.selection import extract_markdown_front_matter
 
 
 OUTPUT_FILENAME = "【深银协】微众银行{year}年{month}月第{monthly_issue}期信息动态.docx"
@@ -53,6 +54,10 @@ _WEB_PAGE_CHROME_EXACT = {
     "Fri",
     "Sat",
     "Sun",
+}
+_RENDER_FONT_ALIASES = {
+    "宋体": "Songti SC",
+    "黑体": "Hiragino Sans GB",
 }
 
 
@@ -162,6 +167,7 @@ def _fill_template(
             )
 
     doc.core_properties.title = title.strip() or "深银协动态"
+    _apply_render_compatible_fonts(doc)
     doc.save(str(target))
 
 
@@ -193,6 +199,7 @@ def _build_from_scratch(
         _add_formatted_paragraph(doc, heading, rules["roles"]["heading1"])
         _add_article_block(doc, article, rules)
 
+    _apply_render_compatible_fonts(doc)
     doc.save(str(target))
 
 
@@ -266,6 +273,7 @@ def _expand_body_paragraphs(marker: Paragraph, paragraphs: list[str]) -> None:
 
 
 def _article_body_paragraphs(body: str, article_title: str = "") -> list[str]:
+    _, body = extract_markdown_front_matter(body)
     paragraphs: list[str] = []
     for raw_line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         clean = raw_line.replace("\u200b", "").replace("\ufeff", "").strip()
@@ -279,6 +287,18 @@ def _article_body_paragraphs(body: str, article_title: str = "") -> list[str]:
             continue
         paragraphs.append(clean)
     return paragraphs
+
+
+def _apply_render_compatible_fonts(doc: Document) -> None:
+    """只在生成副本中映射本机可用中文字体，避免渲染时正文消失。"""
+    for root in (doc.styles.element, doc._element):
+        for rfonts in root.xpath(".//w:rFonts"):
+            for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+                key = qn(f"w:{attribute}")
+                current = rfonts.get(key)
+                replacement = _RENDER_FONT_ALIASES.get(current or "")
+                if replacement:
+                    rfonts.set(key, replacement)
 
 
 def _format_publish_date(value: str) -> str:

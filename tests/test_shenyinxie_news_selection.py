@@ -197,6 +197,71 @@ def test_strip_trailing_media_title_suffix_preserves_article_title():
     assert strip_trailing_media_title_suffix("微众银行发布新成果") == "微众银行发布新成果"
 
 
+def test_strip_trailing_media_title_suffix_removes_china_economic_net_branding():
+    assert (
+        strip_trailing_media_title_suffix(
+            "微众银行维权案入选典型案例_中国经济网——国家经济门户"
+        )
+        == "微众银行维权案入选典型案例"
+    )
+
+
+def test_negative_framing_full_text_requires_safe_extract_packaging():
+    first = "微众银行第一时间组建维权小组，为受骗企业提供专业支持。"
+    second = "微众银行协助企业完成报警并追回绝大部分服务费。"
+    candidate = NewsCandidate(
+        url="https://money.ycwb.com/case",
+        canonical_url="https://money.ycwb.com/case",
+        title="怎么办，2万元服务费打水漂……",
+        source_title="怎么办，2万元服务费打水漂……",
+        site="money.ycwb.com",
+        media_name="羊城晚报-金羊网",
+        media_tier=2,
+        publish_date="2026-06-08",
+        body=f"诈骗经过。\n{first}\n{second}",
+    )
+    assessment = ArticleAssessment(
+        decision="full_text",
+        is_positive_achievement=True,
+        subject_strength="primary",
+        reason="微众银行帮助客户维权并取得成效。",
+        suggested_title="微众银行协助受骗企业维权并追回服务费",
+        excerpt_paragraphs=[first, second],
+        achievement_types=["消费者权益保护"],
+    )
+
+    selected = apply_editorial_assessment(candidate, assessment)
+
+    assert selected is not None
+    assert selected.content_mode == "extract"
+    assert selected.title == "微众银行协助受骗企业维权并追回服务费"
+    assert selected.body == f"{first}\n\n{second}"
+    assert selected.source_title == "怎么办，2万元服务费打水漂……"
+
+
+def test_negative_framing_full_text_without_extract_material_is_rejected():
+    candidate = NewsCandidate(
+        url="https://money.ycwb.com/case",
+        canonical_url="https://money.ycwb.com/case",
+        title="怎么办，2万元服务费打水漂……",
+        source_title="怎么办，2万元服务费打水漂……",
+        site="money.ycwb.com",
+        media_name="羊城晚报-金羊网",
+        media_tier=2,
+        publish_date="2026-06-08",
+        body="诈骗经过。微众银行随后提供维权帮助并取得成效。" * 8,
+    )
+    assessment = ArticleAssessment(
+        decision="full_text",
+        is_positive_achievement=True,
+        subject_strength="primary",
+        reason="微众银行帮助客户维权。",
+        achievement_types=["消费者权益保护"],
+    )
+
+    assert apply_editorial_assessment(candidate, assessment) is None
+
+
 def test_apply_rule_relevance():
     candidates = [
         NewsCandidate(
