@@ -439,3 +439,15 @@ def test_search_queries_include_exact_publication_period_and_are_staged():
     assert any("央广网" in query for query in expanded)
     assert any("南方" in query for query in expanded)
     assert any("北青网" in query and "投资界" in query for query in fallback)
+
+
+def test_fallback_queries_include_month_specific_financial_education_events():
+    march = generate_fallback_search_queries(date(2026, 3, 16), date(2026, 3, 31))
+    june = generate_fallback_search_queries(date(2026, 6, 16), date(2026, 6, 30))
+    september = generate_fallback_search_queries(date(2026, 9, 1), date(2026, 9, 15))
+    july = generate_fallback_search_queries(date(2026, 7, 1), date(2026, 7, 15))
+
+    assert any("3.15" in query and "消费者权益保护" in query for query in march)
+    assert any("6.14" in query and "信用记录关爱日" in query for query in june)
+    assert any("金融教育宣传月" in query for query in september)
+    assert not any("6.14" in query or "3.15" in query for query in july)

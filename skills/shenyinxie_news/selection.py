@@ -535,21 +535,52 @@ def generate_expanded_search_queries(period_start: date, period_end: date) -> li
 
 def generate_fallback_search_queries(period_start: date, period_end: date) -> list[str]:
     """没有合格主流媒体专题稿时，检索经核验的补充媒体。"""
-    return [
-        _dated_search_query(
-            "微众银行 北青网 和讯网 香港商报 投资界", period_start, period_end
-        ),
-        _dated_search_query(
-            "微众银行 征信 消费者权益 金融教育 金融为民 北青网 投资界",
-            period_start,
-            period_end,
-        ),
-        _dated_search_query(
-            "微众银行 普惠金融 科技创新 社会责任 获奖 和讯网 香港商报",
-            period_start,
-            period_end,
-        ),
-    ]
+    queries: list[str] = []
+    if period_start.month == 3:
+        queries.append(
+            _dated_search_query(
+                "微众银行 3.15 金融消费者权益保护 教育宣传 北青网 投资界",
+                period_start,
+                period_end,
+            )
+        )
+    elif period_start.month == 6:
+        queries.append(
+            _dated_search_query(
+                "微众银行 6.14信用记录关爱日 征信 金融教育 北青网 投资界",
+                period_start,
+                period_end,
+            )
+        )
+    elif period_start.month == 9:
+        queries.append(
+            _dated_search_query(
+                "微众银行 金融教育宣传月 消费者权益保护 北青网 投资界",
+                period_start,
+                period_end,
+            )
+        )
+
+    queries.extend(
+        [
+            _dated_search_query(
+                "微众银行 北青网 和讯网 香港商报 投资界",
+                period_start,
+                period_end,
+            ),
+            _dated_search_query(
+                "微众银行 征信 消费者权益 金融教育 金融为民 北青网 投资界",
+                period_start,
+                period_end,
+            ),
+            _dated_search_query(
+                "微众银行 普惠金融 科技创新 社会责任 获奖 和讯网 香港商报",
+                period_start,
+                period_end,
+            ),
+        ]
+    )
+    return queries
 
 
 def generate_search_queries(period_start: date, period_end: date) -> list[str]:
