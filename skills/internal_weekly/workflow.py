@@ -351,6 +351,7 @@ def _market_item(
 
     series = []
     contexts = []
+    warnings: list[str] = []
     page_map: dict[str, WebCandidate] = {}
     for required_scopes, pages in page_groups:
         page_map.update({page.canonical_url: page for page in pages})
@@ -391,20 +392,22 @@ def _market_item(
                 f"行情分组返回了未请求的 scope：{', '.join(sorted(unexpected_scopes))}"
             )
         group_page_map = {page.canonical_url: page for page in pages}
-        for evidence in [*group_bundle.series, *group_bundle.contexts]:
+        for evidence in group_bundle.series:
             page = group_page_map.get(evidence.source_url)
             if page is None:
                 raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
             excerpt = evidence.evidence_excerpt.strip()
             if not _evidence_in_body(excerpt, page.body):
-                label = (
-                    evidence.index_name
-                    if hasattr(evidence, "index_name")
-                    else evidence.scope
+                raise ValueError(f"行情证据无法在原页面逐字核对：{evidence.index_name}")
+        for context in group_bundle.contexts:
+            page = group_page_map.get(context.source_url)
+            if page is None or not _evidence_in_body(context.evidence_excerpt, page.body):
+                warnings.append(
+                    f"行情背景句证据无法逐字核对，已排除：{context.scope}"
                 )
-                raise ValueError(f"行情证据无法在原页面逐字核对：{label}")
+                continue
+            contexts.append(context)
         series.extend(group_bundle.series)
-        contexts.extend(group_bundle.contexts)
 
     bundle = MarketEvidenceBundle(series=series, contexts=contexts)
     item, records = build_market_item(
@@ -422,7 +425,7 @@ def _market_item(
                 "content_sha256": hashlib.sha256(page.body.encode("utf-8")).hexdigest(),
             }
         )
-    return item, records, []
+    return item, records, warnings
 
 
 def _frontier_item(

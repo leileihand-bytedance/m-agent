@@ -7,6 +7,7 @@ from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
     ContentCandidateAssessment,
     FrontierSelection,
+    MarketContextEvidence,
     MarketEvidenceBundle,
     MarketSeriesEvidence,
 )
@@ -174,6 +175,25 @@ class FakeTools:
         raise AssertionError(payload["task"])
 
 
+class InvalidOptionalMarketContextTools(FakeTools):
+    def llm_writer(self, payload):
+        result = super().llm_writer(payload)
+        if (
+            payload["task"] == "internal_weekly_market_extraction"
+            and tuple(payload["required_scopes"]) == ("weekly_hk",)
+        ):
+            result.contexts = [
+                MarketContextEvidence(
+                    scope="weekly_hk",
+                    summary="港股市场情绪有所回暖。",
+                    source_url="https://www.sse.com.cn/market/",
+                    source_title="市场数据",
+                    evidence_excerpt="这是模型改写后、并不存在于页面中的背景句。",
+                )
+            ]
+        return result
+
+
 def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     fake = FakeTools()
     gateway = ToolGateway(
@@ -243,6 +263,33 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
         ("monday_a",),
         ("weekly_hk",),
     ]
+
+
+def test_workflow_drops_invalid_optional_market_context_but_keeps_fixed_summary(tmp_path):
+    fake = InvalidOptionalMarketContextTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+            "output_dir": str(tmp_path / "output"),
+        },
+        gateway,
+    )
+
+    assert result.ready_for_approval is True
+    market_section = next(section for section in result.sections if section.name == "市场观察")
+    assert market_section.items[0].title == "资本市场综述"
+    assert "港股市场情绪有所回暖" not in market_section.items[0].body
+    assert "行情背景句证据无法逐字核对，已排除：weekly_hk" in result.warnings
 
 
 def test_workflow_generates_previous_week_before_monday_close_with_pending_marker(tmp_path):
