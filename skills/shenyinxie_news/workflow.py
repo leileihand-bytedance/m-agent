@@ -36,7 +36,7 @@ from skills.shenyinxie_news.selection import (
 
 MAX_CANDIDATES = 30
 SEARCH_RESULTS_PER_QUERY = 10
-SEARCH_PASSES = 2
+SEARCH_PASSES = 3
 
 
 @dataclass(frozen=True)

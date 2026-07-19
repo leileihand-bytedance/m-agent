@@ -961,7 +961,7 @@ def test_workflow_repeats_each_search_query_and_unions_late_results(tmp_path):
     )
 
     assert [article.original_url for article in result.articles] == [url]
-    assert all(count == 2 for count in query_counts.values())
+    assert all(count == 3 for count in query_counts.values())
 
 
 def test_workflow_ranks_repeated_relevant_result_before_single_hit_noise(tmp_path):

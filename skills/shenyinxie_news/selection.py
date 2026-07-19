@@ -597,6 +597,19 @@ def generate_primary_search_queries(period_start: date, period_end: date) -> lis
         _dated_search_query(
             "微众银行 微众科技 香港 国际化 技术输出", period_start, period_end
         ),
+        _dated_search_query(
+            "微众银行 上海证券报 中国证券报 证券时报 每日经济新闻 21世纪经济报道",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 AI原生 人工智能 算力 智能体 数字员工",
+            period_start,
+            period_end,
+        ),
+        _dated_search_query(
+            "微众银行 专利 知识产权 技术成果 发明授权", period_start, period_end
+        ),
     ]
 
 
