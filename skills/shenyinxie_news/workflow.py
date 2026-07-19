@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
+from html import unescape
+
 from app.platform.tools import ToolGateway
 from skills.shenyinxie_news.docx_output import write_shenyinxie_docx
 from skills.shenyinxie_news.schema import (
@@ -18,6 +21,7 @@ from skills.shenyinxie_news.selection import (
     dedupe_same_article,
     extract_explicit_half_month,
     generate_expanded_search_queries,
+    generate_fallback_search_queries,
     generate_primary_search_queries,
     hard_gate,
     normalize_url,
@@ -28,6 +32,15 @@ from skills.shenyinxie_news.selection import (
 
 
 MAX_CANDIDATES = 30
+
+
+@dataclass(frozen=True)
+class StageCollectionStats:
+    search_results: int = 0
+    source_eligible_results: int = 0
+    readable_pages: int = 0
+    hard_gate_passes: int = 0
+    web_read_failures: int = 0
 
 
 def _assess_candidate(candidate: NewsCandidate, tools: ToolGateway) -> ArticleAssessment:
@@ -69,7 +82,7 @@ def _build_candidate(search_item: dict[str, str], page: dict[str, str]) -> NewsC
     """把搜索结果和网页读取结果合并为 NewsCandidate。"""
     url = str(page.get("url") or search_item.get("url", ""))
     canonical = str(page.get("canonical_url") or url)
-    source_title = str(page.get("title") or search_item.get("title", ""))
+    source_title = unescape(str(page.get("title") or search_item.get("title", "")))
     title = strip_trailing_media_title_suffix(source_title)
     site = str(page.get("site", ""))
     return NewsCandidate(
@@ -100,7 +113,8 @@ def _collect_stage_candidates(
     period_start: date,
     period_end: date,
     seen_urls: set[str],
-) -> tuple[list[NewsCandidate], int]:
+    max_media_tier: int,
+) -> tuple[list[NewsCandidate], StageCollectionStats]:
     """完成一轮信源检索、去重、正文读取和硬性准入。"""
     search_results: list[dict[str, str]] = []
     for query in queries:
@@ -113,23 +127,31 @@ def _collect_stage_candidates(
         url = str(item.get("url", "")).strip()
         if not url:
             continue
+        media_info = whitelist.media_info(url)
+        if media_info is None or int(media_info.get("tier", 99)) > max_media_tier:
+            continue
         key = normalize_url(url)
         if key in seen_urls:
             continue
         seen_urls.add(key)
         unique_results.append(item)
-        if len(seen_urls) >= MAX_CANDIDATES:
+        if len(unique_results) >= MAX_CANDIDATES:
             break
 
     candidates: list[NewsCandidate] = []
+    readable_pages = 0
+    web_read_failures = 0
     for item in unique_results:
         url = str(item.get("url", ""))
         try:
             page = tools.call("web_reader", url)
         except Exception:
+            web_read_failures += 1
             continue
         if not isinstance(page, dict):
+            web_read_failures += 1
             continue
+        readable_pages += 1
         candidate = _attach_media_info(_build_candidate(item, page), whitelist)
         ok, reason = hard_gate(candidate, period_start, period_end, whitelist)
         if ok:
@@ -137,7 +159,13 @@ def _collect_stage_candidates(
         else:
             candidate.select_reason = f"硬性准入失败：{reason}"
 
-    return apply_rule_relevance(candidates), len(search_results)
+    return apply_rule_relevance(candidates), StageCollectionStats(
+        search_results=len(search_results),
+        source_eligible_results=len(unique_results),
+        readable_pages=readable_pages,
+        hard_gate_passes=len(candidates),
+        web_read_failures=web_read_failures,
+    )
 
 
 def _assess_stage_candidates(
@@ -164,6 +192,24 @@ def _assess_stage_candidates(
         elif assessed.content_mode == "extract":
             excerpt_candidates.append(assessed)
     return full_text_candidates, excerpt_candidates, failures, successes
+
+
+def _no_selection_message(
+    *,
+    total_search_results: int,
+    source_eligible_results: int,
+    readable_pages: int,
+    hard_gate_passes: int,
+) -> str:
+    if total_search_results == 0:
+        return "本期未检索到与微众银行相关的候选报道。"
+    if source_eligible_results == 0:
+        return "本期检索到相关页面，但没有来自当前已核验媒体范围的候选报道。"
+    if readable_pages == 0:
+        return "本期检索到候选链接，但原文均无法完整读取或核验。"
+    if hard_gate_passes == 0:
+        return "本期检索到候选报道，但均未通过发布日期或正文完整性核验。"
+    return "本期检索并核验了候选报道，但均未达到微众银行正面新闻和成果的报送标准。"
 
 
 def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
@@ -197,23 +243,30 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
 
     whitelist = MediaWhitelist.from_yaml()
 
-    # 1. 首轮检索并完成内容判断；完整专题稿不足 3 篇时才扩展信源。
+    # 1. 先检索主流媒体；不足 3 篇时扩展行业/广东媒体；零专题稿时再启用补充媒体。
     seen_urls: set[str] = set()
     total_search_results = 0
+    source_eligible_results = 0
+    readable_pages = 0
+    hard_gate_passes = 0
     full_text_candidates: list[NewsCandidate] = []
     excerpt_candidates: list[NewsCandidate] = []
     assessment_failures = 0
     assessment_successes = 0
     try:
-        primary_candidates, primary_result_count = _collect_stage_candidates(
+        primary_candidates, primary_stats = _collect_stage_candidates(
             queries=generate_primary_search_queries(period_start, period_end),
             tools=tools,
             whitelist=whitelist,
             period_start=period_start,
             period_end=period_end,
             seen_urls=seen_urls,
+            max_media_tier=2,
         )
-        total_search_results += primary_result_count
+        total_search_results += primary_stats.search_results
+        source_eligible_results += primary_stats.source_eligible_results
+        readable_pages += primary_stats.readable_pages
+        hard_gate_passes += primary_stats.hard_gate_passes
         primary_full, primary_extract, failures, successes = _assess_stage_candidates(
             primary_candidates, tools
         )
@@ -223,21 +276,47 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
         assessment_successes += successes
 
         distinct_primary_full = dedupe_same_article(full_text_candidates)
-        if len(distinct_primary_full) < 3 and len(seen_urls) < MAX_CANDIDATES:
-            expanded_candidates, expanded_result_count = _collect_stage_candidates(
+        if len(distinct_primary_full) < 3:
+            expanded_candidates, expanded_stats = _collect_stage_candidates(
                 queries=generate_expanded_search_queries(period_start, period_end),
                 tools=tools,
                 whitelist=whitelist,
                 period_start=period_start,
                 period_end=period_end,
                 seen_urls=seen_urls,
+                max_media_tier=2,
             )
-            total_search_results += expanded_result_count
+            total_search_results += expanded_stats.search_results
+            source_eligible_results += expanded_stats.source_eligible_results
+            readable_pages += expanded_stats.readable_pages
+            hard_gate_passes += expanded_stats.hard_gate_passes
             expanded_full, expanded_extract, failures, successes = _assess_stage_candidates(
                 expanded_candidates, tools
             )
             full_text_candidates.extend(expanded_full)
             excerpt_candidates.extend(expanded_extract)
+            assessment_failures += failures
+            assessment_successes += successes
+
+        if not dedupe_same_article(full_text_candidates):
+            fallback_candidates, fallback_stats = _collect_stage_candidates(
+                queries=generate_fallback_search_queries(period_start, period_end),
+                tools=tools,
+                whitelist=whitelist,
+                period_start=period_start,
+                period_end=period_end,
+                seen_urls=seen_urls,
+                max_media_tier=3,
+            )
+            total_search_results += fallback_stats.search_results
+            source_eligible_results += fallback_stats.source_eligible_results
+            readable_pages += fallback_stats.readable_pages
+            hard_gate_passes += fallback_stats.hard_gate_passes
+            fallback_full, fallback_extract, failures, successes = _assess_stage_candidates(
+                fallback_candidates, tools
+            )
+            full_text_candidates.extend(fallback_full)
+            excerpt_candidates.extend(fallback_extract)
             assessment_failures += failures
             assessment_successes += successes
     except Exception as exc:
@@ -255,7 +334,12 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             period_end=period_end.isoformat(),
             issue_number=issue_number,
             needs_clarification=False,
-            message="本期未检索到符合当前权威媒体和日期条件的微众银行报道。",
+            message=_no_selection_message(
+                total_search_results=total_search_results,
+                source_eligible_results=source_eligible_results,
+                readable_pages=readable_pages,
+                hard_gate_passes=hard_gate_passes,
+            ),
         )
 
     # 2. 专题全文最多选 3 篇；只有没有专题全文时才考虑摘编稿（最多 2 篇）。
@@ -265,7 +349,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
 
     # 8. 构造输出
     if not selected:
-        if seen_urls and assessment_successes == 0 and assessment_failures > 0:
+        if hard_gate_passes and assessment_successes == 0 and assessment_failures > 0:
             return ShenyinxieNewsResult(
                 period_start=period_start.isoformat(),
                 period_end=period_end.isoformat(),
@@ -278,7 +362,12 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             period_end=period_end.isoformat(),
             issue_number=issue_number,
             needs_clarification=False,
-            message="本期未检索到符合当前权威媒体和日期条件的微众银行报道。",
+            message=_no_selection_message(
+                total_search_results=total_search_results,
+                source_eligible_results=source_eligible_results,
+                readable_pages=readable_pages,
+                hard_gate_passes=hard_gate_passes,
+            ),
         )
 
     articles: list[SelectedArticle] = []

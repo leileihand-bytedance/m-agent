@@ -66,7 +66,14 @@ def test_whitelist_loads_from_yaml():
     assert whitelist.is_allowed("https://www.nfnews.com/content/1.html")
     assert whitelist.is_allowed("https://app.financialnews.com.cn/detailArticle/1.html")
     assert whitelist.is_allowed("https://www.cebnet.com.cn/20260701/1.html")
+    assert whitelist.is_allowed("https://finance.ce.cn/bank12/scroll/1.html")
+    assert whitelist.is_allowed("https://xxsb.gz-cmc.com/pages/1.html")
+    assert whitelist.is_allowed("https://finance.ynet.com/2026/06/16/1.html")
+    assert whitelist.is_allowed("https://m.hexun.com/tech/1.html")
+    assert whitelist.is_allowed("https://www.hkcd.com.hk/hkcdweb/content/1.html")
+    assert whitelist.is_allowed("https://m.pedaily.cn/99discoveries/1")
     assert not whitelist.is_allowed("https://www.webank.com/news/1")
+    assert not whitelist.is_allowed("https://baijiahao.baidu.com/s?id=1")
 
 
 def test_whitelist_prefers_lower_tier_on_duplicate_domain():

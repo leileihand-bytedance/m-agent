@@ -13,6 +13,7 @@ from skills.shenyinxie_news.selection import (
     dedupe_same_article,
     extract_publish_date,
     generate_expanded_search_queries,
+    generate_fallback_search_queries,
     generate_primary_search_queries,
     hard_gate,
     is_body_readable,
@@ -418,12 +419,23 @@ def test_search_queries_include_exact_publication_period_and_are_staged():
 
     primary = generate_primary_search_queries(period_start, period_end)
     expanded = generate_expanded_search_queries(period_start, period_end)
+    fallback = generate_fallback_search_queries(period_start, period_end)
 
     assert primary
     assert expanded
-    assert all("2026年7月1日至2026年7月15日" in query for query in primary + expanded)
-    assert primary[0].startswith("微众银行 科技创新助推数字化金融普惠发展 人民日报")
-    assert any("人民网" in query for query in primary)
-    assert any("科技创新助推数字化金融普惠发展" in query for query in primary)
+    assert fallback
+    assert all(
+        "2026年7月1日至2026年7月15日" in query
+        for query in primary + expanded + fallback
+    )
+    assert all("2026年7月" in query for query in primary + expanded + fallback)
+    assert not any("site:" in query for query in primary + expanded + fallback)
+    assert not any("科技创新助推数字化金融普惠发展" in query for query in primary)
+    assert any("普惠金融" in query and "小微企业" in query for query in primary)
+    assert any("消费者权益" in query and "征信" in query for query in primary)
+    assert any("社会责任" in query and "乡村振兴" in query for query in primary)
+    assert any("获奖" in query and "荣誉" in query for query in primary)
+    assert any("国际化" in query and "技术输出" in query for query in primary)
     assert any("央广网" in query for query in expanded)
     assert any("南方" in query for query in expanded)
+    assert any("北青网" in query and "投资界" in query for query in fallback)
