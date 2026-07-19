@@ -32,6 +32,7 @@ from skills.shenyinxie_news.selection import (
 
 
 MAX_CANDIDATES = 30
+SEARCH_RESULTS_PER_QUERY = 10
 
 
 @dataclass(frozen=True)
@@ -114,23 +115,42 @@ def _collect_stage_candidates(
     period_end: date,
     seen_urls: set[str],
     max_media_tier: int,
+    initial_results: list[dict[str, str]] | None = None,
+    deferred_results: list[dict[str, str]] | None = None,
 ) -> tuple[list[NewsCandidate], StageCollectionStats]:
     """完成一轮信源检索、去重、正文读取和硬性准入。"""
     search_results: list[dict[str, str]] = []
     for query in queries:
-        results = tools.call("search", query, max_results=5)
+        results = tools.call("search", query, max_results=SEARCH_RESULTS_PER_QUERY)
         if isinstance(results, list):
             search_results.extend(item for item in results if isinstance(item, dict))
 
+    candidate_results = list(initial_results or []) + search_results
+    deferred_keys = {
+        normalize_url(str(item.get("url", "")))
+        for item in (deferred_results or [])
+        if str(item.get("url", "")).strip()
+    }
     unique_results: list[dict[str, str]] = []
-    for item in search_results:
+    for item in candidate_results:
         url = str(item.get("url", "")).strip()
         if not url:
             continue
         media_info = whitelist.media_info(url)
-        if media_info is None or int(media_info.get("tier", 99)) > max_media_tier:
+        if media_info is None:
             continue
         key = normalize_url(url)
+        media_tier = int(media_info.get("tier", 99))
+        if media_tier > max_media_tier:
+            if (
+                deferred_results is not None
+                and media_tier <= 3
+                and key not in seen_urls
+                and key not in deferred_keys
+            ):
+                deferred_results.append(item)
+                deferred_keys.add(key)
+            continue
         if key in seen_urls:
             continue
         seen_urls.add(key)
@@ -251,6 +271,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
     hard_gate_passes = 0
     full_text_candidates: list[NewsCandidate] = []
     excerpt_candidates: list[NewsCandidate] = []
+    deferred_fallback_results: list[dict[str, str]] = []
     assessment_failures = 0
     assessment_successes = 0
     try:
@@ -262,6 +283,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
             period_end=period_end,
             seen_urls=seen_urls,
             max_media_tier=2,
+            deferred_results=deferred_fallback_results,
         )
         total_search_results += primary_stats.search_results
         source_eligible_results += primary_stats.source_eligible_results
@@ -285,6 +307,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
                 period_end=period_end,
                 seen_urls=seen_urls,
                 max_media_tier=2,
+                deferred_results=deferred_fallback_results,
             )
             total_search_results += expanded_stats.search_results
             source_eligible_results += expanded_stats.source_eligible_results
@@ -307,6 +330,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> ShenyinxieNewsResult:
                 period_end=period_end,
                 seen_urls=seen_urls,
                 max_media_tier=3,
+                initial_results=deferred_fallback_results,
             )
             total_search_results += fallback_stats.search_results
             source_eligible_results += fallback_stats.source_eligible_results

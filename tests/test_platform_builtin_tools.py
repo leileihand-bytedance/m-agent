@@ -404,6 +404,63 @@ def test_read_web_page_falls_back_to_time_element_for_date():
     assert result["date_extracted_from"] == "time:datetime"
 
 
+def test_read_web_page_extracts_visible_dotted_date_from_time_element():
+    html = """
+    <html>
+      <head><title>微众科技助力数字经济协同发展</title></head>
+      <body>
+        <article>
+          <time class="publish-date">2026.06.24 16:27</time>
+          <p>微众科技依托金融科技能力服务沿线国家数字化转型。</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/dotted-date", fetcher=lambda _: html)
+
+    assert result["publish_date"] == "2026-06-24"
+    assert result["date_extracted_from"] == "time:text"
+
+
+def test_read_web_page_extracts_json_ld_date_before_script_cleanup():
+    html = """
+    <html>
+      <head>
+        <title>微众科技成果报道</title>
+        <script type="application/ld+json">
+          {"@type": "NewsArticle", "datePublished": "2026-06-24T16:27:39+08:00"}
+        </script>
+      </head>
+      <body>
+        <article><p>微众科技持续推进数字金融技术输出。</p></article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/json-ld-date", fetcher=lambda _: html)
+
+    assert result["publish_date"] == "2026-06-24"
+    assert result["date_extracted_from"] == "json-ld:datePublished"
+
+
+def test_read_web_page_ignores_header_clock_when_article_has_publish_date():
+    html = """
+    <html>
+      <head><title>微众银行成果报道</title></head>
+      <body>
+        <header><time>2026.07.19 10:30</time></header>
+        <article><p>本报2026年6月24日讯，微众银行发布最新成果。</p></article>
+      </body>
+    </html>
+    """
+
+    result = read_web_page("https://www.example.com/header-clock", fetcher=lambda _: html)
+
+    assert result["publish_date"] == "2026-06-24"
+    assert "text:" in result["date_extracted_from"]
+
+
 def test_read_web_page_extracts_date_from_text_when_no_meta():
     html = """
     <html>

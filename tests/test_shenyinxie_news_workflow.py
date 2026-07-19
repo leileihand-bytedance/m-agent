@@ -563,6 +563,78 @@ def test_workflow_uses_verified_fallback_media_when_no_mainstream_full_report(tm
     assert any(query.startswith("微众银行 北青网") for query in search_calls)
 
 
+def test_workflow_defers_tier_three_candidate_found_during_primary_search(tmp_path):
+    today = date(2026, 7, 19)
+    deferred_url = (
+        "https://www.dotdotnews.com/a/202606/24/"
+        "AP6a3b94fde4b04b6c5d31555f.html"
+    )
+    search_results = {
+        "微众银行 微众科技": [
+            _search_result(
+                deferred_url,
+                "微众科技助力‘一带一路’沿线国家数字经济协同发展",
+            )
+        ]
+    }
+    web_pages = {
+        deferred_url: _web_page(
+            title="微众科技助力‘一带一路’沿线国家数字经济协同发展 - 点新闻",
+            body=(
+                "微众银行科技子公司微众科技立足香港，依托金融科技能力，"
+                "与多个国家和地区的企业开展合作，助力数字经济协同发展。"
+            )
+            * 12,
+            publish_date="2026-06-24",
+            site="dotdotnews.com",
+            canonical_url=deferred_url,
+        )
+    }
+    gateway, calls = _make_gateway(search_results=search_results, web_pages=web_pages)
+
+    result = run(
+        {
+            "text": "生成2026年6月下半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": today,
+        },
+        gateway,
+    )
+
+    assert [article.original_url for article in result.articles] == [deferred_url]
+    assert ("web_reader", deferred_url) in calls
+
+
+def test_workflow_requests_ten_results_per_search_query(tmp_path):
+    requested_limits: list[int] = []
+
+    def search(query, max_results=5):
+        requested_limits.append(max_results)
+        return []
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": search,
+            "web_reader": lambda url: _web_page(title="未知", body=""),
+            "llm_writer": lambda payload: None,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月下半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert result.articles == []
+    assert requested_limits
+    assert set(requested_limits) == {10}
+
+
 def test_workflow_does_not_search_fallback_media_when_mainstream_full_report_exists(tmp_path):
     today = date(2026, 7, 16)
     primary_url = "https://people.com.cn/primary"

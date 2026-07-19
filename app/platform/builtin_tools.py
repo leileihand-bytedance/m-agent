@@ -537,10 +537,23 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         raise RuntimeError("缺少 beautifulsoup4，无法解析网页。") from exc
 
     soup = BeautifulSoup(html, "lxml")
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    canonical_url = _extract_canonical_url(soup, url)
+    site = _extract_site(canonical_url or url)
+    publish_date, date_source = _extract_verified_people_daily_issue_date(soup, canonical_url)
+    if publish_date is None:
+        # 日期元数据常位于 JSON-LD script 中，必须在正文清洗前提取。
+        publish_date, date_source = _extract_publish_date(
+            soup,
+            include_visible_text=False,
+        )
+
     for tag in soup.find_all(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
 
-    title = soup.title.get_text(strip=True) if soup.title else ""
+    if publish_date is None:
+        publish_date, date_source = _extract_publish_date(soup)
+
     paragraphs = _extract_article_paragraphs(soup)
     text_parts = [item for item in paragraphs if item]
 
@@ -548,12 +561,6 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         main = soup.find("article") or soup.find("main") or soup.body
         if main:
             text_parts = [main.get_text("\n", strip=True)]
-
-    canonical_url = _extract_canonical_url(soup, url)
-    site = _extract_site(canonical_url or url)
-    publish_date, date_source = _extract_verified_people_daily_issue_date(soup, canonical_url)
-    if publish_date is None:
-        publish_date, date_source = _extract_publish_date(soup)
 
     return {
         "url": url,
@@ -604,7 +611,11 @@ def _extract_verified_people_daily_issue_date(soup: Any, url: str) -> tuple[date
     return issue_date, "people-daily:verified-issue-path"
 
 
-def _extract_publish_date(soup: Any) -> tuple[date | None, str]:
+def _extract_publish_date(
+    soup: Any,
+    *,
+    include_visible_text: bool = True,
+) -> tuple[date | None, str]:
     """从 HTML 中提取发布日期，返回 (date, source_description)。"""
     # 1. OpenGraph / article meta
     meta_selectors = [
@@ -644,13 +655,20 @@ def _extract_publish_date(soup: Any) -> tuple[date | None, str]:
                             if parsed:
                                 return parsed, f"json-ld:{key}"
 
-    # 3. <time datetime="...">
+    if not include_visible_text:
+        return None, ""
+
+    # 3. <time datetime="..."> 或可见日期文本
     for time_node in soup.find_all("time"):
         datetime_attr = time_node.get("datetime")
         if datetime_attr:
             parsed = _parse_date(str(datetime_attr))
             if parsed:
                 return parsed, "time:datetime"
+        time_text = time_node.get_text(" ", strip=True)
+        parsed, _ = _extract_date_from_text(time_text)
+        if parsed:
+            return parsed, "time:text"
 
     # 4. 中文/常见日期文本（仅出现在 body 区域）
     body = soup.find("article") or soup.find("main") or soup.body
@@ -665,6 +683,7 @@ def _extract_publish_date(soup: Any) -> tuple[date | None, str]:
 
 _DATE_PATTERNS = [
     (r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", "%Y-%m-%d"),
+    (r"(\d{4})\.(\d{1,2})\.(\d{1,2})", "%Y-%m-%d"),
     (r"(\d{4})年(\d{1,2})月(\d{1,2})日", "%Y-%m-%d"),
     (r"(\d{4})年(\d{1,2})月(\d{1,2})号", "%Y-%m-%d"),
 ]

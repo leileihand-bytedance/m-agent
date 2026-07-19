@@ -72,6 +72,8 @@ def test_whitelist_loads_from_yaml():
     assert whitelist.is_allowed("https://m.hexun.com/tech/1.html")
     assert whitelist.is_allowed("https://www.hkcd.com.hk/hkcdweb/content/1.html")
     assert whitelist.is_allowed("https://m.pedaily.cn/99discoveries/1")
+    assert whitelist.is_allowed("https://www.dotdotnews.com/a/202606/24/1.html")
+    assert whitelist.is_allowed("https://www.dutenews.com/n/article/1")
     assert not whitelist.is_allowed("https://www.webank.com/news/1")
     assert not whitelist.is_allowed("https://baijiahao.baidu.com/s?id=1")
 

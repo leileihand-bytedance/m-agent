@@ -135,6 +135,12 @@ sources:
       - eeo.com.cn
     tier: 2
 
+  - name: 界面新闻
+    category: 全国主流财经媒体
+    domains:
+      - jiemian.com
+    tier: 2
+
   - name: 财新
     category: 全国主流财经媒体
     domains:
@@ -236,6 +242,7 @@ sources:
     domains:
       - sznews.com
       - dt.sznews.com
+      - dutenews.com
     tier: 2
 
   - name: 晶报
@@ -267,6 +274,13 @@ sources:
     category: 经核验补充媒体
     domains:
       - hkcd.com.hk
+      - hkcd.com
+    tier: 3
+
+  - name: 点新闻
+    category: 经核验补充媒体
+    domains:
+      - dotdotnews.com
     tier: 3
 
   - name: 投资界
