@@ -176,8 +176,8 @@ def _market_query_groups(
         (
             ("monday_a",),
             (
-                "证券时报 中国证券报 第一财经 A股收评 上证指数 深证成指 "
-                f"创业板指 收盘 涨跌幅 {monday}",
+                f"{monday} A股收盘 沪指 深成指 创业板指 涨跌幅",
+                f"{monday} A股收评 三大指数 收盘",
             ),
         ),
         (
@@ -199,11 +199,16 @@ def _frontier_queries(
     fallback: bool = False,
 ) -> list[str]:
     marker = "近30日补充" if fallback else "统计期优先"
+    report_date = f"{period_end.year}年{period_end.month}月{period_end.day}日"
     return [
         (
             "BIS working paper bulletin banking finance digital payments "
             f"研究报告 {marker} "
             f"{_format_date_range(period_start, period_end)}"
+        ),
+        (
+            "BIS latest bulletin working paper banking digital payments "
+            f"研究报告 {report_date}"
         ),
         (
             "IMF World Bank working paper banking finance financial market "
