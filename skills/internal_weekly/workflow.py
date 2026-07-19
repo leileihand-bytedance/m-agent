@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -12,12 +13,14 @@ from skills.internal_weekly.schema import (
     FrontierSelection,
     InternalWeeklyResult,
     MarketEvidenceBundle,
+    MarketSeriesEvidence,
     SourceRecord,
     WebCandidate,
     WeeklyItem,
     WeeklySection,
 )
 from skills.internal_weekly.selection import (
+    CANONICAL_MARKET_NAMES,
     SECTION_ORDER,
     build_market_item,
     calculate_weekly_window,
@@ -48,6 +51,40 @@ def _evidence_in_body(excerpt: str, body: str) -> bool:
 
     normalized_excerpt = normalize(excerpt)
     return bool(normalized_excerpt) and normalized_excerpt in normalize(body)
+
+
+def _resolve_market_evidence_excerpt(
+    evidence: MarketSeriesEvidence,
+    body: str,
+) -> str | None:
+    """优先保留模型原句；不匹配时按固定指数名和同值数字回源取原文分句。"""
+    excerpt = evidence.evidence_excerpt.strip()
+    if _evidence_in_body(excerpt, body):
+        return excerpt
+
+    index_name = CANONICAL_MARKET_NAMES.get(
+        evidence.index_code.upper(), evidence.index_name
+    )
+    if evidence.reported_change_pct is not None:
+        targets = [abs(float(evidence.reported_change_pct))]
+        require_percent = True
+    elif evidence.start_close is not None and evidence.end_close is not None:
+        targets = [float(evidence.start_close), float(evidence.end_close)]
+        require_percent = False
+    else:
+        return None
+
+    for match in re.finditer(r"[^。；;！？!?\n]+[。；;！？!?\n]?", body):
+        clause = match.group(0).strip()
+        if index_name not in clause or (require_percent and "%" not in clause):
+            continue
+        numbers = [
+            float(token.replace(",", ""))
+            for token in re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?", clause)
+        ]
+        if all(any(abs(number - target) < 0.0005 for number in numbers) for target in targets):
+            return clause
+    return None
 
 
 def _now(inputs: dict[str, object]) -> datetime:
@@ -392,13 +429,17 @@ def _market_item(
                 f"行情分组返回了未请求的 scope：{', '.join(sorted(unexpected_scopes))}"
             )
         group_page_map = {page.canonical_url: page for page in pages}
+        validated_series: list[MarketSeriesEvidence] = []
         for evidence in group_bundle.series:
             page = group_page_map.get(evidence.source_url)
             if page is None:
                 raise ValueError(f"行情证据不在候选数据页中：{evidence.source_url}")
-            excerpt = evidence.evidence_excerpt.strip()
-            if not _evidence_in_body(excerpt, page.body):
+            excerpt = _resolve_market_evidence_excerpt(evidence, page.body)
+            if excerpt is None:
                 raise ValueError(f"行情证据无法在原页面逐字核对：{evidence.index_name}")
+            validated_series.append(
+                evidence.model_copy(update={"evidence_excerpt": excerpt})
+            )
         for context in group_bundle.contexts:
             page = group_page_map.get(context.source_url)
             if page is None or not _evidence_in_body(context.evidence_excerpt, page.body):
@@ -407,7 +448,7 @@ def _market_item(
                 )
                 continue
             contexts.append(context)
-        series.extend(group_bundle.series)
+        series.extend(validated_series)
 
     bundle = MarketEvidenceBundle(series=series, contexts=contexts)
     item, records = build_market_item(

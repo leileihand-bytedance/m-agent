@@ -11,7 +11,12 @@ from skills.internal_weekly.schema import (
     MarketEvidenceBundle,
     MarketSeriesEvidence,
 )
-from skills.internal_weekly.workflow import _collect_pages, _evidence_in_body, run
+from skills.internal_weekly.workflow import (
+    _collect_pages,
+    _evidence_in_body,
+    _resolve_market_evidence_excerpt,
+    run,
+)
 
 
 def _market_series() -> list[MarketSeriesEvidence]:
@@ -370,6 +375,32 @@ def test_evidence_matching_ignores_invisible_web_layout_marks_only():
         "截至7月10日收盘，恒生指数报收24175.12点，单周上涨4.53%；",
         body,
     )
+
+
+def test_market_evidence_recovers_exact_source_clause_by_index_and_change_value():
+    body = (
+        "截至7月10日收盘，\u200b恒生指数报收24175.12点，单周上涨3.53%\u200b；"
+        "\u200b恒生中国企业指数上涨4.41%\u200b。"
+    )
+    evidence = MarketSeriesEvidence(
+        scope="weekly_hk",
+        index_code="HSCEI",
+        index_name="恒生中国企业指数",
+        start_date="2026-07-06",
+        end_date="2026-07-10",
+        reported_change_pct=4.41,
+        source_url="https://www.sfccn.com/market/weekly.html",
+        source_title="港股周评",
+        evidence_excerpt="恒生中国企业指数周涨4.41%",
+    )
+
+    assert _resolve_market_evidence_excerpt(evidence, body) == (
+        "\u200b恒生中国企业指数上涨4.41%\u200b。"
+    )
+    assert _resolve_market_evidence_excerpt(
+        evidence.model_copy(update={"reported_change_pct": 5.41}),
+        body,
+    ) is None
 
 
 def test_collect_pages_does_not_expose_raw_reader_exception():
