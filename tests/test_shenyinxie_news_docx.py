@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 from skills.shenyinxie_news import docx_output
 from skills.shenyinxie_news.docx_output import write_shenyinxie_docx
@@ -169,7 +170,7 @@ def test_default_template_output_uses_real_paragraphs_and_preserves_styles(tmp_p
         if paragraph.text == "【动态一】微众银行科技创新取得新成果"
     )
     assert heading.style.name == "Heading 2"
-    assert heading.runs[0].font.name == "黑体"
+    assert heading.runs[0].font.name == "Hiragino Sans GB"
 
     body = next(
         paragraph
@@ -190,6 +191,53 @@ def test_default_template_output_uses_real_paragraphs_and_preserves_styles(tmp_p
         and relationship.is_external
         for relationship in doc.part.rels.values()
     )
+
+
+def test_default_template_output_maps_chinese_fonts_for_rendering(tmp_path):
+    path = write_shenyinxie_docx(
+        title="微众银行2026年7月第1期信息动态",
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 15),
+        issue_number="2026-13",
+        articles=[_article()],
+        output_dir=tmp_path / "out",
+    )
+
+    doc = Document(str(path))
+    heading = next(paragraph for paragraph in doc.paragraphs if paragraph.text.startswith("【动态一】"))
+    heading_fonts = heading.runs[0]._element.get_or_add_rPr().get_or_add_rFonts()
+    body_style_fonts = doc.styles["Normal (Web)"]._element.get_or_add_rPr().get_or_add_rFonts()
+
+    assert heading_fonts.get(qn("w:eastAsia")) == "Hiragino Sans GB"
+    assert body_style_fonts.get(qn("w:eastAsia")) == "Songti SC"
+
+
+def test_docx_output_removes_markdown_front_matter_defensively(tmp_path):
+    article = _article(
+        body=(
+            "---\n"
+            "title: 微众银行AI算力增长3.5倍\n"
+            "source: 上海证券报\n"
+            "canonical_url: https://example.com/article\n"
+            "---\n"
+            "微众银行持续推进AI原生银行建设。"
+        )
+    )
+
+    path = write_shenyinxie_docx(
+        title="微众银行2026年7月第1期信息动态",
+        period_start=date(2026, 7, 1),
+        period_end=date(2026, 7, 15),
+        issue_number="2026-13",
+        articles=[article],
+        output_dir=tmp_path / "out",
+    )
+
+    full_text = "\n".join(paragraph.text for paragraph in Document(str(path)).paragraphs)
+    assert "title:" not in full_text
+    assert "source:" not in full_text
+    assert "canonical_url:" not in full_text
+    assert "微众银行持续推进AI原生银行建设。" in full_text
 
 
 def test_docx_output_with_blank_template_falls_back_to_scratch(tmp_path):

@@ -35,6 +35,37 @@ _REPORTABLE_ACHIEVEMENT_TITLE_MARKERS = (
     "获奖",
     "荣誉",
 )
+_ROUNDUP_TITLE_MARKERS = (
+    "多家",
+    "等机构",
+    "等银行",
+    "民营银行",
+    "银行业",
+    "行业观察",
+    "行业综述",
+    "盘点",
+)
+_NEGATIVE_OR_AMBIGUOUS_TITLE_MARKERS = (
+    "怎么办",
+    "打水漂",
+    "被骗",
+    "诈骗",
+    "陷阱",
+    "投诉",
+    "逾期",
+    "违规",
+    "处罚",
+    "风险事件",
+)
+_KNOWN_MEDIA_TITLE_SUFFIX = re.compile(
+    r"(?:\s*[_|—-]\s*)"
+    r"(?:中国经济网(?:——国家经济门户)?|新华网客户端|"
+    r"中国日报网|央视网|人民网|央广网)\s*$"
+)
+_MARKDOWN_FRONT_MATTER = re.compile(
+    r"\A\s*---\s*\n(?P<header>.*?)\n---\s*(?:\n|\Z)",
+    re.DOTALL,
+)
 
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -202,6 +233,38 @@ class MediaWhitelist:
 
         return None
 
+    def media_info_by_name(self, name: str) -> dict[str, object] | None:
+        """只接受白名单中的明确媒体名，避免信任网页任意来源字段。"""
+        normalized = re.sub(r"[·•].*$", "", name).strip()
+        for source in self.sources:
+            if normalized == source.name:
+                return {
+                    "name": source.name,
+                    "category": source.category,
+                    "tier": source.tier,
+                }
+        return None
+
+
+def extract_markdown_front_matter(text: str) -> tuple[dict[str, str], str]:
+    """安全提取网页读取兜底返回的 YAML 前置元数据，并从正文移除。"""
+    match = _MARKDOWN_FRONT_MATTER.match(text)
+    if match is None:
+        return {}, text
+    try:
+        loaded = yaml.safe_load(match.group("header"))
+    except yaml.YAMLError:
+        return {}, text
+    if not isinstance(loaded, dict):
+        return {}, text
+
+    metadata: dict[str, str] = {}
+    for key in ("title", "source", "datetime", "date", "canonical_url"):
+        value = loaded.get(key)
+        if value is not None:
+            metadata[key] = str(value).strip()
+    return metadata, text[match.end() :].lstrip()
+
 
 def extract_publish_date(page: dict[str, str]) -> date | None:
     """从 web_reader 返回的页面字典中解析发布日期。"""
@@ -237,6 +300,9 @@ def hard_gate(candidate: NewsCandidate, period_start: date, period_end: date, wh
     """
     if not whitelist.is_allowed(candidate.url):
         return False, "域名不在权威媒体白名单"
+
+    if not candidate.title.strip():
+        return False, "无法从原文或搜索结果提取报道标题"
 
     publish_date = extract_publish_date(candidate.model_dump())
     if publish_date is None:
@@ -311,13 +377,35 @@ def apply_editorial_assessment(
         return None
 
     if assessment.decision == "full_text" and assessment.subject_strength == "primary":
+        if requires_positive_packaging(candidate.title):
+            return _apply_extract_packaging(candidate, assessment)
+        if any(marker in candidate.title for marker in _ROUNDUP_TITLE_MARKERS):
+            return None
         candidate.content_mode = "full_text"
         candidate.editor_note = ""
         candidate.is_core_subject = True
         return candidate
 
-    if assessment.decision != "extract" or assessment.subject_strength != "substantial":
+    if assessment.decision != "extract" or assessment.subject_strength not in {
+        "primary",
+        "substantial",
+    }:
         return None
+
+    return _apply_extract_packaging(candidate, assessment)
+
+
+def requires_positive_packaging(title: str) -> bool:
+    """识别不宜以原题全文直报的负面或疑问式标题。"""
+    normalized = title.strip()
+    return any(marker in normalized for marker in _NEGATIVE_OR_AMBIGUOUS_TITLE_MARKERS)
+
+
+def _apply_extract_packaging(
+    candidate: NewsCandidate,
+    assessment: ArticleAssessment,
+) -> NewsCandidate | None:
+    """只允许用原文逐字段落和准确的新标题做披露式摘编。"""
 
     title = assessment.suggested_title.strip()
     if not title or "微众" not in title or len(title) > 60:
@@ -630,6 +718,11 @@ def _text_similarity(a: str, b: str) -> float:
 def strip_trailing_media_title_suffix(title: str) -> str:
     """移除网页标题末尾由媒体站点自动追加的媒体名。"""
     normalized = title.strip()
+    while True:
+        cleaned = _KNOWN_MEDIA_TITLE_SUFFIX.sub("", normalized).strip()
+        if cleaned == normalized:
+            break
+        normalized = cleaned
     removed_media_suffix = False
     while normalized:
         changed = False

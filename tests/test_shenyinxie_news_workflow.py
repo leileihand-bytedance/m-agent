@@ -864,3 +864,260 @@ def test_workflow_reports_model_assessment_unavailable_when_all_candidates_fail(
 
     assert result.articles == []
     assert "候选内容判断" in result.message
+
+
+def test_workflow_rechecks_strong_candidate_after_one_model_false_negative(tmp_path):
+    url = "https://people.com.cn/recheck"
+    assessment_calls = 0
+
+    def llm_writer(payload):
+        nonlocal assessment_calls
+        assessment_calls += 1
+        if assessment_calls == 1:
+            return ArticleAssessment(
+                decision="reject",
+                is_positive_achievement=False,
+                subject_strength="mention",
+                reason="首次判断遗漏了正文中的成果。",
+            )
+        return ArticleAssessment(
+            decision="full_text",
+            is_positive_achievement=True,
+            subject_strength="primary",
+            reason="全文聚焦微众银行普惠金融成果。",
+            achievement_types=["普惠金融"],
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": lambda query, max_results=5: [
+                _search_result(url, "微众银行发布普惠金融成果")
+            ]
+            if query.startswith("微众银行 新闻 报道")
+            else [],
+            "web_reader": lambda value: _web_page(
+                title="微众银行发布普惠金融成果",
+                body="微众银行发布普惠金融成果，服务小微企业取得积极成效。" * 12,
+                publish_date="2026-06-10",
+                site="people.com.cn",
+                canonical_url=url,
+            ),
+            "llm_writer": llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月上半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert [article.original_url for article in result.articles] == [url]
+    assert assessment_calls == 2
+
+
+def test_workflow_repeats_each_search_query_and_unions_late_results(tmp_path):
+    url = "https://people.com.cn/late-result"
+    query_counts: dict[str, int] = {}
+
+    def search(query, max_results=5):
+        query_counts[query] = query_counts.get(query, 0) + 1
+        if query.startswith("微众银行 新闻 报道") and query_counts[query] == 2:
+            return [_search_result(url, "微众银行发布普惠金融成果")]
+        return []
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": search,
+            "web_reader": lambda value: _web_page(
+                title="微众银行发布普惠金融成果",
+                body="微众银行发布普惠金融成果，服务小微企业取得积极成效。" * 12,
+                publish_date="2026-06-10",
+                site="people.com.cn",
+                canonical_url=url,
+            ),
+            "llm_writer": lambda payload: ArticleAssessment(
+                decision="full_text",
+                is_positive_achievement=True,
+                subject_strength="primary",
+                reason="全文聚焦微众银行普惠金融成果。",
+                achievement_types=["普惠金融"],
+            ),
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月上半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert [article.original_url for article in result.articles] == [url]
+    assert all(count == 2 for count in query_counts.values())
+
+
+def test_workflow_ranks_repeated_relevant_result_before_single_hit_noise(tmp_path):
+    good_url = "https://people.com.cn/good"
+    noise_urls = [f"https://people.com.cn/noise-{index}" for index in range(35)]
+    calls: list[tuple[str, str]] = []
+
+    def search(query, max_results=5):
+        calls.append(("search", query))
+        if query.startswith("微众银行 新闻 报道"):
+            return [
+                _search_result(url, f"银行业资讯{index}")
+                for index, url in enumerate(noise_urls[:10])
+            ] + [_search_result(good_url, "微众银行发布科技创新成果")]
+        if query.startswith("深圳前海微众银行"):
+            return [
+                _search_result(url, f"金融行业动态{index}")
+                for index, url in enumerate(noise_urls[10:20], start=10)
+            ] + [_search_result(good_url, "微众银行发布科技创新成果")]
+        if query.startswith("微众银行 普惠金融"):
+            return [
+                _search_result(url, f"市场资讯{index}")
+                for index, url in enumerate(noise_urls[20:30], start=20)
+            ] + [_search_result(good_url, "微众银行发布科技创新成果")]
+        if query.startswith("微众银行 金融科技"):
+            return [
+                _search_result(url, f"行业数据{index}")
+                for index, url in enumerate(noise_urls[30:], start=30)
+            ] + [_search_result(good_url, "微众银行发布科技创新成果")]
+        return []
+
+    def web_reader(url):
+        calls.append(("web_reader", url))
+        if url == good_url:
+            return _web_page(
+                title="微众银行发布科技创新成果",
+                body="微众银行发布科技创新成果，以数字金融服务实体经济。" * 12,
+                publish_date="2026-06-10",
+                site="people.com.cn",
+                canonical_url=good_url,
+            )
+        return _web_page(
+            title="银行业资讯",
+            body="与微众银行无关的普通行业页面。" * 10,
+            publish_date="2026-06-10",
+            site="people.com.cn",
+            canonical_url=url,
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": search,
+            "web_reader": web_reader,
+            "llm_writer": lambda payload: (
+                ArticleAssessment(
+                    decision="full_text",
+                    is_positive_achievement=True,
+                    subject_strength="primary",
+                    reason="全文聚焦微众银行科技创新成果。",
+                    achievement_types=["科技创新"],
+                )
+                if payload["candidate_url"] == good_url
+                else ArticleAssessment(
+                    decision="reject",
+                    is_positive_achievement=False,
+                    subject_strength="mention",
+                    reason="页面与微众银行报送成果无关。",
+                )
+            ),
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月上半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert [article.original_url for article in result.articles] == [good_url]
+    assert ("web_reader", good_url) in calls
+
+
+def test_workflow_recovers_markdown_front_matter_and_canonical_source(tmp_path):
+    raw_url = "https://finance.sina.com.cn/roll/2026-05-27/article.shtml.md"
+    canonical_url = "https://finance.sina.com.cn/roll/2026-05-27/article.shtml"
+    body = (
+        "---\n"
+        "title: 微众银行AI算力增长3.5倍 服务个人客户超4.4亿\n"
+        "source: 上海证券报\n"
+        "datetime: 2026-05-27T22:13:00+08:00\n"
+        f"canonical_url: {canonical_url}\n"
+        "---\n"
+        "来源：上海证券报·中国证券网\n"
+        "微众银行集中展示AI原生银行、金融科技和普惠金融实践成果。\n"
+        "微众银行已构建70余个数字员工及超800个智能体，服务多个业务场景。\n"
+        "微众银行累计服务个人客户超过4.4亿，并持续提升无障碍金融服务。\n"
+        "相关技术成果进一步提升了金融服务的覆盖面和可获得性。"
+    )
+    gateway, _ = _make_gateway(
+        search_results={"微众银行 新闻 报道": [_search_result(raw_url, "")]},
+        web_pages={
+            raw_url: _web_page(
+                title="",
+                body=body,
+                publish_date="2026-05-27",
+                site="finance.sina.com.cn",
+                canonical_url="",
+            )
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年5月下半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert len(result.articles) == 1
+    article = result.articles[0]
+    assert article.title == "微众银行AI算力增长3.5倍 服务个人客户超4.4亿"
+    assert article.media_name == "上海证券报"
+    assert article.original_url == canonical_url
+    assert not article.original_url.endswith(".md")
+    assert not article.body.startswith("---")
+    assert "canonical_url:" not in article.body
+
+
+def test_workflow_rejects_candidate_when_title_cannot_be_recovered(tmp_path):
+    url = "https://people.com.cn/no-title"
+    gateway, _ = _make_gateway(
+        search_results={"微众银行 新闻 报道": [_search_result(url, "")]},
+        web_pages={
+            url: _web_page(
+                title="",
+                body="微众银行发布普惠金融成果并持续服务小微企业。" * 12,
+                publish_date="2026-06-10",
+                site="people.com.cn",
+                canonical_url=url,
+            )
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成2026年6月上半月深银协动态",
+            "output_dir": str(tmp_path / "output"),
+            "today": date(2026, 7, 19),
+        },
+        gateway,
+    )
+
+    assert result.articles == []
