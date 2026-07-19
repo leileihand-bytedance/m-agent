@@ -36,6 +36,22 @@ def test_read_web_page_extracts_title_and_paragraphs():
     assert result["text"] == "第一段正文。\n第二段正文。"
 
 
+def test_read_web_page_prefers_open_graph_title_over_site_decorated_title():
+    html = """
+    <html>
+      <head>
+        <title>微众科技助力数字经济发展 - 专题栏目 - 点新闻</title>
+        <meta property="og:title" content="微众科技助力数字经济发展">
+      </head>
+      <body><article><p>微众科技持续推进国际化技术输出。</p></article></body>
+    </html>
+    """
+
+    result = read_web_page("https://example.com/clean-title", fetcher=lambda _: html)
+
+    assert result["title"] == "微众科技助力数字经济发展"
+
+
 def test_read_web_page_rejects_non_http_urls():
     try:
         read_web_page("file:///home/example/.env", fetcher=lambda url: "secret")

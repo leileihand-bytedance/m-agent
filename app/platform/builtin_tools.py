@@ -537,7 +537,7 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         raise RuntimeError("缺少 beautifulsoup4，无法解析网页。") from exc
 
     soup = BeautifulSoup(html, "lxml")
-    title = soup.title.get_text(strip=True) if soup.title else ""
+    title = _extract_page_title(soup)
     canonical_url = _extract_canonical_url(soup, url)
     site = _extract_site(canonical_url or url)
     publish_date, date_source = _extract_verified_people_daily_issue_date(soup, canonical_url)
@@ -580,6 +580,16 @@ def _extract_canonical_url(soup: Any, fallback_url: str) -> str:
         if href:
             return urljoin(fallback_url, href)
     return fallback_url
+
+
+def _extract_page_title(soup: Any) -> str:
+    for attr, value in (("property", "og:title"), ("name", "twitter:title")):
+        node = soup.find("meta", {attr: value})
+        if node and node.get("content"):
+            title = str(node["content"]).strip()
+            if title:
+                return title
+    return soup.title.get_text(strip=True) if soup.title else ""
 
 
 def _extract_site(url: str) -> str:

@@ -630,18 +630,28 @@ def _text_similarity(a: str, b: str) -> float:
 def strip_trailing_media_title_suffix(title: str) -> str:
     """移除网页标题末尾由媒体站点自动追加的媒体名。"""
     normalized = title.strip()
-    for separator in (" - ", "-", "—", "_", "|"):
-        head, found, tail = normalized.rpartition(separator)
-        clean_tail = tail.strip()
-        if (
-            found
-            and head.strip()
-            and len(clean_tail) <= 20
-            and clean_tail.endswith(
+    removed_media_suffix = False
+    while normalized:
+        changed = False
+        for separator in (" - ", "-", "—", "_", "|"):
+            head, found, tail = normalized.rpartition(separator)
+            clean_tail = tail.strip()
+            if not found or not head.strip() or len(clean_tail) > 20:
+                continue
+            is_media_suffix = clean_tail.endswith(
                 ("网", "报", "报道", "新闻", "客户端", "日报", "时报", "投资界")
             )
-        ):
+            is_channel_suffix = removed_media_suffix and clean_tail in {
+                "行业动态",
+                "行业新闻",
+            }
+            if not is_media_suffix and not is_channel_suffix:
+                continue
             normalized = head.strip()
+            removed_media_suffix = removed_media_suffix or is_media_suffix
+            changed = True
+            break
+        if not changed:
             break
     return normalized
 

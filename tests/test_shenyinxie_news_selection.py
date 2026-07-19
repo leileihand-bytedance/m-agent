@@ -188,6 +188,12 @@ def test_strip_trailing_media_title_suffix_preserves_article_title():
         )
         == "微众银行：以党建引领金融高质量发展"
     )
+    assert (
+        strip_trailing_media_title_suffix(
+            '微众银行举办"守护信用，共赢未来"征信专场直播_行业动态_投资界'
+        )
+        == '微众银行举办"守护信用，共赢未来"征信专场直播'
+    )
     assert strip_trailing_media_title_suffix("微众银行发布新成果") == "微众银行发布新成果"
 
 
