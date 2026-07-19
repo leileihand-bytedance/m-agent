@@ -37,7 +37,7 @@ from skills.internal_weekly.selection import (
 )
 from skills.internal_weekly.source_registry import (
     peer_query_names,
-    section_source_entry_urls,
+    section_source_feed_urls,
 )
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
@@ -55,6 +55,58 @@ MAX_PAGES_PER_ASSESSMENT_BATCH = 5
 MAX_ORDINARY_BODY_CHARS = 12000
 WEB_READER_ATTEMPTS = 2
 MARKET_CLOSE_TIME = time(15, 0)
+PARTY_FEED_PRIORITY_MARKERS = (
+    "人工智能",
+    "科学技术",
+    "科技创新",
+    "科技强国",
+    "数字经济",
+    "数据要素",
+    "新质生产力",
+    "扩大内需",
+    "促进消费",
+    "小微企业",
+    "民营经济",
+    "营商环境",
+)
+PARTY_FEED_RELEVANCE_MARKERS = (
+    "宏观经济",
+    "高质量发展",
+    "经济",
+    "发展",
+    "科技",
+    "创新",
+    "数字",
+    "数据",
+    "内需",
+    "消费",
+    "小微",
+    "民营",
+    "就业",
+    "营商",
+    "金融",
+    "改革",
+    "开放",
+    "外贸",
+    "产业",
+    "投资",
+    "企业",
+    "市场",
+    "风险",
+    "党建",
+    "党的建设",
+    "全面从严治党",
+)
+PARTY_FEED_CENTRAL_MARKERS = (
+    "习近平",
+    "中共中央",
+    "中央政治局",
+    "国务院",
+    "李强",
+    "全国人大",
+    "全国政协",
+)
+PARTY_FEED_SECONDARY_MARKERS = ("评论员", "述评", "学习快评", "解读")
 _INVISIBLE_LAYOUT_MARKS = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u2060\ufeff")
 _WEEKLY_MARKET_MARKERS = (
     "上周",
@@ -202,7 +254,9 @@ def _build_candidate(search_item: dict[str, object], page: dict[str, object]) ->
         title=str(page.get("title") or search_item.get("title") or "").strip(),
         site=str(page.get("site") or "").strip(),
         publisher=str(page.get("publisher") or page.get("site") or "").strip(),
-        publish_date=str(page.get("publish_date") or "").strip(),
+        publish_date=str(
+            page.get("publish_date") or search_item.get("publish_date") or ""
+        ).strip(),
         date_extracted_from=str(page.get("date_extracted_from") or "").strip(),
         body=str(page.get("text") or "").strip(),
     )
@@ -274,6 +328,123 @@ def _collect_pages(
     return pages, warnings
 
 
+def _party_feed_link_score(title: str) -> int:
+    if not any(
+        marker in title
+        for marker in (*PARTY_FEED_PRIORITY_MARKERS, *PARTY_FEED_RELEVANCE_MARKERS)
+    ):
+        return 0
+    score = 1
+    score += 4 * sum(marker in title for marker in PARTY_FEED_PRIORITY_MARKERS)
+    score += 2 * sum(marker in title for marker in PARTY_FEED_CENTRAL_MARKERS)
+    score -= 3 * sum(marker in title for marker in PARTY_FEED_SECONDARY_MARKERS)
+    return max(score, 1)
+
+
+def _collect_source_feed_pages(
+    feed_urls: list[str],
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+    source_section: str,
+) -> tuple[list[WebCandidate], list[str]]:
+    """从登记的官方结构化列表发现文章，再按日期、主题和域名受限读取正文。"""
+    warnings: list[str] = []
+    link_candidates: list[tuple[int, dict[str, object]]] = []
+    for feed_url in feed_urls:
+        if not domain_allowed_for_section(feed_url, source_section):
+            continue
+        feed_page: object | None = None
+        for attempt in range(WEB_READER_ATTEMPTS):
+            try:
+                feed_page = tools.call("web_reader", feed_url)
+                break
+            except Exception:
+                if attempt == WEB_READER_ATTEMPTS - 1:
+                    warnings.append(f"固定信源列表读取失败：{hostname(feed_url) or '未知来源'}")
+        if not isinstance(feed_page, dict):
+            if feed_page is not None:
+                warnings.append(f"固定信源列表格式无效：{hostname(feed_url) or '未知来源'}")
+            continue
+        links = feed_page.get("links")
+        if not isinstance(links, list):
+            warnings.append(f"固定信源列表缺少链接：{hostname(feed_url) or '未知来源'}")
+            continue
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            url = str(link.get("url") or "").strip()
+            title = str(link.get("title") or "").strip()
+            publish_date = str(link.get("publish_date") or "").strip()
+            if not url or not title:
+                continue
+            if not domain_allowed_for_section(url, source_section):
+                continue
+            if not date_in_period(publish_date, period_start, period_end):
+                continue
+            score = _party_feed_link_score(title) if source_section == "党政要闻" else 1
+            if score <= 0:
+                continue
+            link_candidates.append((score, link))
+
+    pages: list[WebCandidate] = []
+    seen: set[str] = set()
+    for _, link in sorted(
+        link_candidates,
+        key=lambda pair: (
+            pair[0],
+            str(pair[1].get("publish_date") or ""),
+            str(pair[1].get("title") or ""),
+        ),
+        reverse=True,
+    ):
+        url = str(link.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        page: object | None = None
+        for attempt in range(WEB_READER_ATTEMPTS):
+            try:
+                page = tools.call("web_reader", url)
+                break
+            except Exception:
+                if attempt == WEB_READER_ATTEMPTS - 1:
+                    warnings.append(f"网页读取失败：{hostname(url) or '未知来源'}")
+        if not isinstance(page, dict):
+            continue
+        candidate = _build_candidate(link, page)
+        if not domain_allowed_for_section(
+            candidate.canonical_url or candidate.url,
+            source_section,
+        ):
+            continue
+        allowed, _ = candidate_allowed(
+            candidate,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        if allowed:
+            pages.append(candidate)
+        if len(pages) >= MAX_PAGES_PER_GROUP:
+            break
+    return pages, warnings
+
+
+def _merge_candidate_pages(*groups: list[WebCandidate]) -> list[WebCandidate]:
+    merged: list[WebCandidate] = []
+    seen: set[str] = set()
+    for pages in groups:
+        for page in pages:
+            if page.canonical_url in seen:
+                continue
+            seen.add(page.canonical_url)
+            merged.append(page)
+            if len(merged) >= MAX_PAGES_PER_GROUP:
+                return merged
+    return merged
+
+
 def _format_date_range(period_start: date, period_end: date) -> str:
     return (
         f"{period_start.year}年{period_start.month}月{period_start.day}日"
@@ -286,7 +457,6 @@ def _ordinary_query_groups(
     period_end: date,
 ) -> list[tuple[str, tuple[str, ...]]]:
     date_range = _format_date_range(period_start, period_end)
-    party_entry_urls = " ".join(section_source_entry_urls("党政要闻"))
     peer_queries: list[str] = []
     for category, suffix in (
         ("domestic_digital_banks", "经营 产品 科技 风险管理 合作"),
@@ -306,11 +476,11 @@ def _ordinary_query_groups(
             "党政要闻",
             (
                 "中国政府网 要闻列表 中共中央 国务院 中央重要会议 重大政策 "
-                f"宏观经济 高质量发展 原文 {party_entry_urls} {date_range}",
+                f"宏观经济 高质量发展 原文 {date_range}",
                 "中国政府网 要闻列表 科技创新 人工智能 数字经济 数据要素 "
-                f"新质生产力 原文 {party_entry_urls} {date_range}",
+                f"新质生产力 原文 {date_range}",
                 "中国政府网 要闻列表 扩大内需 促进消费 小微企业 民营经济 "
-                f"营商环境 就业 原文 {party_entry_urls} {date_range}",
+                f"营商环境 就业 原文 {date_range}",
                 "新华社 中共中央 中央政治局 国务院 宏观经济 高质量发展 "
                 f"科技创新 人工智能 重要部署 原文 {date_range}",
                 "人民网 中共中央 习近平 党的建设 宏观经济 科技创新 "
@@ -977,6 +1147,16 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
                 10 if section_name in {"党政要闻", "监管动态"} else 5
             ),
         )
+        if section_name == "党政要闻":
+            feed_pages, feed_warnings = _collect_source_feed_pages(
+                list(section_source_feed_urls(section_name)),
+                tools,
+                period_start=period_start,
+                period_end=period_end,
+                source_section=section_name,
+            )
+            pages = _merge_candidate_pages(feed_pages, pages)
+            group_warnings.extend(feed_warnings)
         ordinary_page_groups.append((section_name, pages))
         warnings.extend(group_warnings)
     market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []

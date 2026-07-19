@@ -96,6 +96,23 @@ def section_source_entry_urls(section: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def section_source_feed_urls(section: str) -> tuple[str, ...]:
+    """返回板块登记的官方结构化列表地址。"""
+    payload = load_source_registry()
+    section_sources = payload.get("section_sources", {})
+    if not isinstance(section_sources, dict):
+        return ()
+    entries = section_sources.get(section, [])
+    values: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        feed_url = str(entry.get("feed_url") or "").strip()
+        if feed_url:
+            values.append(feed_url)
+    return tuple(dict.fromkeys(values))
+
+
 def registered_domains() -> frozenset[str]:
     payload = load_source_registry()
     values: set[str] = set()

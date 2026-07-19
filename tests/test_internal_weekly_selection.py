@@ -24,6 +24,7 @@ from skills.internal_weekly.source_policy import candidate_allowed, domain_allow
 from skills.internal_weekly.source_registry import (
     load_source_registry,
     section_source_entry_urls,
+    section_source_feed_urls,
 )
 
 
@@ -144,6 +145,9 @@ def test_party_source_registry_includes_state_council_news_list_entry():
     )
     assert section_source_entry_urls("党政要闻") == (
         "https://www.gov.cn/yaowen/liebiao/",
+    )
+    assert section_source_feed_urls("党政要闻") == (
+        "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json",
     )
 
 
