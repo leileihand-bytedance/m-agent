@@ -187,6 +187,10 @@ def render_dashboard(
       gap: 14px;
       margin-bottom: 2px;
     }}
+    .architecture-status-content {{
+      min-width: 0;
+      padding: 0 16px 4px;
+    }}
     .architecture-filters {{
       display: flex;
       width: fit-content;
@@ -625,6 +629,7 @@ def render_dashboard(
       header {{ padding: 16px; }}
       main {{ width: calc(100% - 20px); }}
       .architecture-overview-head, .architecture-toolbar, .architecture-subsection-head {{ display: block; }}
+      .architecture-status-content {{ padding: 0 12px 2px; }}
       .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
       .architecture-detail {{ grid-template-columns: 1fr; gap: 10px; }}
       .architecture-graph-meta {{ align-items: flex-start; flex-direction: column; }}
@@ -656,7 +661,6 @@ def render_dashboard(
   <nav aria-label="控制台导航">
     <a href="#architecture">项目总览</a>
     <a href="#modules">板块</a>
-    <a href="#review-statistics">审核统计</a>
     <a href="#todos">待办</a>
     <a href="#runtime">运行</a>
     <a href="#changes">更新</a>
@@ -666,7 +670,6 @@ def render_dashboard(
   <main>
     {_render_architecture_section(overview)}
     {_render_modules_section(overview)}
-    {_render_review_statistics_section(overview)}
     {_render_todos_section(overview)}
     {_render_runtime_section(overview)}
     {_render_changes_section(overview)}
@@ -1017,7 +1020,9 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
         {filter_html}
       </div>
     </div>
-    <div class="architecture-flow">{groups}</div>
+    <div class="architecture-status-content">
+      <div class="architecture-flow">{groups}</div>
+    </div>
   </div>
   <script id="architecture-graph-data" type="application/json">{graph_data}</script>
 </section>"""
@@ -1225,54 +1230,6 @@ def _render_module_row(module: object) -> str:
   <td data-label="最新更新">{escape(str(getattr(module, "latest_change")))}</td>
   <td data-label="下一步">{escape(next_text)}</td>
 </tr>"""
-
-
-def _render_review_statistics_section(overview: ProjectOverview) -> str:
-    rows = "\n".join(
-        _render_review_statistics_row(statistic)
-        for statistic in overview.review_capability_stats
-    )
-    return f"""<section id="review-statistics">
-  <div class="section-head">
-    <div>
-      <h2>审核模块统计</h2>
-      <p class="hint">八类审核分别统计真实任务。这里只读取不含材料正文的状态和运行指标；平均耗时只计算已记录新指标的任务。</p>
-    </div>
-  </div>
-  <table>
-    <thead><tr>
-      <th>审核模块</th><th>任务</th><th>完成</th><th>失败</th><th>进行中</th>
-      <th>已交付</th><th>交付失败</th><th>平均耗时</th><th>模型调用</th><th>模型失败</th><th>问题数</th>
-    </tr></thead>
-    <tbody>{rows}</tbody>
-  </table>
-</section>"""
-
-
-def _render_review_statistics_row(statistic: object) -> str:
-    average_elapsed_ms = float(getattr(statistic, "average_elapsed_ms"))
-    elapsed_text = (
-        f"{average_elapsed_ms / 1000:.1f} 秒"
-        if int(getattr(statistic, "elapsed_sample_count")) > 0
-        else "暂无"
-    )
-    values = (
-        ("审核模块", f"<strong>{escape(str(getattr(statistic, 'capability_name')))}</strong>"),
-        ("任务", str(getattr(statistic, "total"))),
-        ("完成", str(getattr(statistic, "completed"))),
-        ("失败", str(getattr(statistic, "failed"))),
-        ("进行中", str(getattr(statistic, "incomplete"))),
-        ("已交付", str(getattr(statistic, "delivered"))),
-        ("交付失败", str(getattr(statistic, "delivery_failed"))),
-        ("平均耗时", escape(elapsed_text)),
-        ("模型调用", str(getattr(statistic, "model_calls"))),
-        ("模型失败", str(getattr(statistic, "model_failures"))),
-        ("问题数", str(getattr(statistic, "finding_count"))),
-    )
-    cells = "".join(
-        f'<td data-label="{label}">{value}</td>' for label, value in values
-    )
-    return f"<tr>{cells}</tr>"
 
 
 def _render_todos_section(overview: ProjectOverview) -> str:

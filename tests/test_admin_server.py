@@ -170,7 +170,7 @@ def test_render_dashboard_shows_project_overview_modules_todos_and_runtime(tmp_p
     assert "旧格式历史归档 1 个" in html
 
 
-def test_render_dashboard_shows_independent_review_capability_statistics(tmp_path):
+def test_render_dashboard_does_not_show_dedicated_review_capability_statistics(tmp_path):
     review_dir = tmp_path / "review" / "2026" / "07" / "task-1"
     review_dir.mkdir(parents=True)
     (review_dir / "meta.json").write_text(
@@ -192,11 +192,9 @@ def test_render_dashboard_shows_independent_review_capability_statistics(tmp_pat
         )
     )
 
-    assert 'href="#review-statistics"' in html
-    assert '<section id="review-statistics">' in html
-    assert "通用 Word 审核" in html
-    assert "模型调用" in html
-    assert "已交付" in html
+    assert 'href="#review-statistics"' not in html
+    assert '<section id="review-statistics">' not in html
+    assert "审核模块统计" not in html
 
 
 def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(tmp_path):
@@ -236,6 +234,7 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert "业务运行面" in html
     assert "管理与治理面" in html
     assert "功能与模块状态" in html
+    assert 'class="architecture-status-content"' in html
     assert "业务入口" in html
     assert "智能体底座" in html
     assert "共享工具服务" in html
