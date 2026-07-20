@@ -18,6 +18,7 @@ from app.platform.documents import DocumentService
 MAX_WEB_REDIRECTS = 5
 MAX_WEB_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_WEB_INDEX_LINKS = 500
+MAX_WEB_INDEX_RECORD_VALUE_CHARS = 1000
 
 
 def read_web_page(
@@ -42,24 +43,19 @@ def _extract_json_index(url: str, body: str) -> dict[str, object] | None:
     except (TypeError, ValueError):
         return None
 
-    records: object = payload
-    if isinstance(payload, dict):
-        for key in ("items", "results", "data", "list"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                records = value
-                break
-    if not isinstance(records, list):
-        records = []
+    article_page = _extract_json_article(url, payload)
+    if article_page is not None:
+        return article_page
+
+    records = _find_json_records(payload)
+    normalized_records = [_normalize_json_record(record) for record in records]
 
     links: list[dict[str, str]] = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
+    for record in normalized_records:
         raw_url = next(
             (
                 str(record.get(key) or "").strip()
-                for key in ("URL", "url", "href", "link")
+                for key in ("URL", "url", "href", "link", "docUrl")
                 if str(record.get(key) or "").strip()
             ),
             "",
@@ -72,7 +68,7 @@ def _extract_json_index(url: str, body: str) -> dict[str, object] | None:
         title = next(
             (
                 str(record.get(key) or "").strip()
-                for key in ("TITLE", "title", "name")
+                for key in ("TITLE", "title", "name", "docSubtitle", "docTitle")
                 if str(record.get(key) or "").strip()
             ),
             "",
@@ -85,6 +81,8 @@ def _extract_json_index(url: str, body: str) -> dict[str, object] | None:
                     "publish_date",
                     "published_at",
                     "date",
+                    "publishDate",
+                    "publishedTimeStr",
                 )
                 if str(record.get(key) or "").strip()
             ),
@@ -113,7 +111,105 @@ def _extract_json_index(url: str, body: str) -> dict[str, object] | None:
         "canonical_url": url,
         "date_extracted_from": "",
         "links": links,
+        "records": normalized_records,
     }
+
+
+def _find_json_records(payload: object, *, depth: int = 0) -> list[dict[str, object]]:
+    """查找常见公开列表接口中的记录数组，兼容 data.rows/data.results 等嵌套。"""
+    if depth > 5:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("items", "results", "rows", "data", "list"):
+        if key not in payload:
+            continue
+        records = _find_json_records(payload[key], depth=depth + 1)
+        if records:
+            return records
+    return []
+
+
+def _normalize_json_record(record: dict[str, object]) -> dict[str, str]:
+    """仅保留列表记录的标量字段，避免把大段嵌套内容透传给业务层。"""
+    normalized: dict[str, str] = {}
+    for key, value in record.items():
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        normalized[str(key)] = text[:MAX_WEB_INDEX_RECORD_VALUE_CHARS]
+    return normalized
+
+
+def _extract_json_article(url: str, payload: object) -> dict[str, object] | None:
+    """归一公开 JSON 原文接口，支持标题、发布日期和 HTML/纯文本正文。"""
+    article = payload
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        article = payload["data"]
+    if not isinstance(article, dict):
+        return None
+
+    raw_body = next(
+        (
+            str(article.get(key) or "").strip()
+            for key in ("docClob", "contentHtml", "content", "body", "text")
+            if str(article.get(key) or "").strip()
+        ),
+        "",
+    )
+    if not raw_body:
+        return None
+    title = next(
+        (
+            str(article.get(key) or "").strip()
+            for key in ("docTitle", "docSubtitle", "title", "name")
+            if str(article.get(key) or "").strip()
+        ),
+        "",
+    )
+    raw_publish_date = next(
+        (
+            str(article.get(key) or "").strip()
+            for key in (
+                "publishDate",
+                "publishedTimeStr",
+                "DOCRELPUBTIME",
+                "publish_date",
+                "published_at",
+                "date",
+            )
+            if str(article.get(key) or "").strip()
+        ),
+        "",
+    )
+    publish_date = _parse_date(raw_publish_date)
+    return {
+        "url": url,
+        "title": title,
+        "text": _html_fragment_text(raw_body)[:4000],
+        "publish_date": publish_date.isoformat() if publish_date else "",
+        "site": _extract_site(url),
+        "canonical_url": url,
+        "date_extracted_from": "json:publishDate" if publish_date else "",
+    }
+
+
+def _html_fragment_text(value: str) -> str:
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError as exc:
+        raise RuntimeError("缺少 beautifulsoup4，无法解析网页。") from exc
+    soup = BeautifulSoup(value, "lxml")
+    for tag in soup.find_all(["script", "style", "nav", "footer", "header"]):
+        tag.decompose()
+    paragraphs = _extract_article_paragraphs(soup)
+    if paragraphs:
+        return "\n".join(paragraphs)
+    return soup.get_text("\n", strip=True)
 
 
 def _validate_public_web_url(
@@ -618,7 +714,7 @@ def _read_limited_response_body(response: Any, *, max_bytes: int) -> str:
         return bytes(body).decode("utf-8", errors="replace")
 
 
-def _extract_page_text(url: str, html: str) -> dict[str, str]:
+def _extract_page_text(url: str, html: str) -> dict[str, object]:
     try:
         from bs4 import BeautifulSoup
     except ImportError as exc:
@@ -634,6 +730,7 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
     title = _extract_page_title(soup)
     canonical_url = _extract_canonical_url(soup, url)
     site = _extract_site(canonical_url or url)
+    links = _extract_dated_html_links(soup, url)
     publish_date, date_source = _extract_verified_people_daily_issue_date(soup, canonical_url)
     if publish_date is None:
         # 日期元数据常位于 JSON-LD script 中，必须在正文清洗前提取。
@@ -664,7 +761,40 @@ def _extract_page_text(url: str, html: str) -> dict[str, str]:
         "site": site,
         "canonical_url": canonical_url,
         "date_extracted_from": date_source,
+        "links": links,
     }
+
+
+def _extract_dated_html_links(soup: Any, page_url: str) -> list[dict[str, str]]:
+    """提取公开列表页中带发布日期的文章链接，不主动跟随链接。"""
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for anchor in soup.find_all("a", href=True):
+        raw_url = str(anchor.get("href") or "").strip()
+        if not raw_url or raw_url.startswith(("#", "javascript:", "mailto:")):
+            continue
+        resolved_url = urljoin(page_url, raw_url)
+        if urlparse(resolved_url).scheme not in {"http", "https"}:
+            continue
+        title = str(anchor.get("title") or anchor.get_text(" ", strip=True)).strip()
+        if not title:
+            continue
+        container = anchor.find_parent(["li", "tr"]) or anchor.parent
+        container_text = container.get_text(" ", strip=True) if container else ""
+        publish_date, _ = _extract_date_from_text(container_text)
+        if publish_date is None or resolved_url in seen:
+            continue
+        seen.add(resolved_url)
+        links.append(
+            {
+                "title": title,
+                "url": resolved_url,
+                "publish_date": publish_date.isoformat(),
+            }
+        )
+        if len(links) >= MAX_WEB_INDEX_LINKS:
+            break
+    return links
 
 
 def _extract_canonical_url(soup: Any, fallback_url: str) -> str:

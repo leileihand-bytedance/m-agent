@@ -98,19 +98,36 @@ def section_source_entry_urls(section: str) -> tuple[str, ...]:
 
 def section_source_feed_urls(section: str) -> tuple[str, ...]:
     """返回板块登记的官方结构化列表地址。"""
+    return tuple(
+        dict.fromkeys(
+            spec["feed_url"]
+            for spec in section_source_feed_specs(section)
+            if spec.get("feed_url")
+        )
+    )
+
+
+def section_source_feed_specs(section: str) -> tuple[dict[str, str], ...]:
+    """返回固定信源的采集参数；业务层只解释登记字段，不直接访问网络。"""
     payload = load_source_registry()
     section_sources = payload.get("section_sources", {})
     if not isinstance(section_sources, dict):
         return ()
     entries = section_sources.get(section, [])
-    values: list[str] = []
+    values: list[dict[str, str]] = []
     for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict):
             continue
         feed_url = str(entry.get("feed_url") or "").strip()
-        if feed_url:
-            values.append(feed_url)
-    return tuple(dict.fromkeys(values))
+        if not feed_url:
+            continue
+        spec = {
+            str(key): str(value).strip()
+            for key, value in entry.items()
+            if value is not None and not isinstance(value, (dict, list)) and str(value).strip()
+        }
+        values.append(spec)
+    return tuple(values)
 
 
 def registered_domains() -> frozenset[str]:

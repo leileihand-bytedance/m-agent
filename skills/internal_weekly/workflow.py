@@ -38,6 +38,7 @@ from skills.internal_weekly.selection import (
 from skills.internal_weekly.source_registry import (
     peer_query_names,
     section_source_feed_urls,
+    section_source_feed_specs,
 )
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
@@ -393,7 +394,7 @@ def _party_titles_describe_same_event(left: str, right: str) -> bool:
 
 
 def _collect_source_feed_pages(
-    feed_urls: list[str],
+    feed_sources: list[str | dict[str, str]],
     tools: ToolGateway,
     *,
     period_start: date,
@@ -403,7 +404,15 @@ def _collect_source_feed_pages(
     """从登记的官方结构化列表发现文章，再按日期、主题和域名受限读取正文。"""
     warnings: list[str] = []
     link_candidates: list[tuple[int, dict[str, object]]] = []
-    for feed_url in feed_urls:
+    for feed_source in feed_sources:
+        if isinstance(feed_source, dict):
+            feed_spec = feed_source
+            feed_url = str(feed_source.get("feed_url") or "").strip()
+        else:
+            feed_spec = {"feed_url": str(feed_source).strip()}
+            feed_url = str(feed_source).strip()
+        if not feed_url:
+            continue
         if not domain_allowed_for_section(feed_url, source_section):
             continue
         feed_page: object | None = None
@@ -418,10 +427,16 @@ def _collect_source_feed_pages(
             if feed_page is not None:
                 warnings.append(f"固定信源列表格式无效：{hostname(feed_url) or '未知来源'}")
             continue
-        links = feed_page.get("links")
+        links: object = feed_page.get("links")
         if not isinstance(links, list):
             warnings.append(f"固定信源列表缺少链接：{hostname(feed_url) or '未知来源'}")
             continue
+        if feed_spec.get("feed_adapter") == "nfra_docinfo":
+            records = feed_page.get("records")
+            if not isinstance(records, list):
+                warnings.append(f"固定信源列表缺少记录：{hostname(feed_url) or '未知来源'}")
+                continue
+            links = _nfra_feed_links(records, feed_spec)
         for link in links:
             if not isinstance(link, dict):
                 continue
@@ -451,20 +466,36 @@ def _collect_source_feed_pages(
         reverse=True,
     ):
         url = str(link.get("url") or "").strip()
+        fetch_url = str(link.get("fetch_url") or url).strip()
         if not url or url in seen:
             continue
         seen.add(url)
+        if not domain_allowed_for_section(fetch_url, source_section):
+            continue
         page: object | None = None
         for attempt in range(WEB_READER_ATTEMPTS):
             try:
-                page = tools.call("web_reader", url)
+                page = tools.call("web_reader", fetch_url)
                 break
             except Exception:
                 if attempt == WEB_READER_ATTEMPTS - 1:
                     warnings.append(f"网页读取失败：{hostname(url) or '未知来源'}")
         if not isinstance(page, dict):
             continue
-        candidate = _build_candidate(link, page)
+        normalized_page = dict(page)
+        normalized_page["title"] = str(
+            link.get("title") or normalized_page.get("title") or ""
+        ).strip()
+        normalized_page["publish_date"] = str(
+            link.get("publish_date") or normalized_page.get("publish_date") or ""
+        ).strip()
+        normalized_page["date_extracted_from"] = (
+            f"official-feed:{hostname(feed_url) or 'unknown'}"
+        )
+        if fetch_url != url:
+            normalized_page["url"] = url
+            normalized_page["canonical_url"] = url
+        candidate = _build_candidate(link, normalized_page)
         if not domain_allowed_for_section(
             candidate.canonical_url or candidate.url,
             source_section,
@@ -480,6 +511,93 @@ def _collect_source_feed_pages(
         if len(pages) >= MAX_PAGES_PER_GROUP:
             break
     return pages, warnings
+
+
+def _nfra_feed_links(
+    records: list[object],
+    feed_spec: dict[str, str],
+) -> list[dict[str, str]]:
+    """把总局官方 DocInfo 记录转换成人工可打开的原文链接与正文接口。"""
+    article_template = str(feed_spec.get("article_url_template") or "").strip()
+    content_template = str(feed_spec.get("content_url_template") or "").strip()
+    item_id = str(feed_spec.get("item_id") or "").strip()
+    if not article_template or not content_template or not item_id:
+        return []
+
+    links: list[dict[str, str]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        doc_id = str(record.get("docId") or "").strip()
+        title = str(
+            record.get("docSubtitle") or record.get("docTitle") or ""
+        ).strip()
+        publish_date = str(record.get("publishDate") or "").strip()
+        generaltype = str(record.get("generaltype") or "0").strip() or "0"
+        if not doc_id or not title or not publish_date:
+            continue
+        values = {
+            "docId": doc_id,
+            "itemId": item_id,
+            "generaltype": generaltype,
+        }
+        try:
+            article_url = article_template.format_map(values)
+            content_url = content_template.format_map(values)
+        except (KeyError, ValueError):
+            continue
+        links.append(
+            {
+                "title": title,
+                "url": article_url,
+                "fetch_url": content_url,
+                "publish_date": publish_date,
+            }
+        )
+    return links
+
+
+def _collect_regulatory_pages(
+    query_groups: list[tuple[str, tuple[str, ...]]],
+    feed_specs: list[dict[str, str]],
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+) -> tuple[list[WebCandidate], list[str]]:
+    """按机构先读固定官方入口；该机构无合格正文时才执行公开检索。"""
+    specs_by_group: dict[str, list[dict[str, str]]] = {}
+    for spec in feed_specs:
+        source_group = str(spec.get("source_group") or "").strip()
+        if source_group:
+            specs_by_group.setdefault(source_group, []).append(spec)
+
+    page_groups: list[list[WebCandidate]] = []
+    warnings: list[str] = []
+    for source_group, queries in query_groups:
+        group_pages: list[WebCandidate] = []
+        group_specs = specs_by_group.get(source_group, [])
+        if group_specs:
+            group_pages, group_warnings = _collect_source_feed_pages(
+                group_specs,
+                tools,
+                period_start=period_start,
+                period_end=period_end,
+                source_section="监管动态",
+            )
+            warnings.extend(group_warnings)
+        if not group_pages:
+            group_pages, group_warnings = _collect_pages(
+                list(queries),
+                tools,
+                period_start=period_start,
+                period_end=period_end,
+                source_section="监管动态",
+                max_results_per_query=10,
+            )
+            warnings.extend(group_warnings)
+        page_groups.append(group_pages)
+    return _merge_candidate_pages(*page_groups), warnings
 
 
 def _merge_candidate_pages(*groups: list[WebCandidate]) -> list[WebCandidate]:
@@ -501,6 +619,39 @@ def _format_date_range(period_start: date, period_end: date) -> str:
         f"{period_start.year}年{period_start.month}月{period_start.day}日"
         f"至{period_end.year}年{period_end.month}月{period_end.day}日"
     )
+
+
+def _regulatory_query_groups(
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, tuple[str, ...]]]:
+    date_range = _format_date_range(period_start, period_end)
+    return [
+        (
+            "pbc",
+            (
+                f"中国人民银行 {date_range} 发布 货币政策 金融统计 风险提示 党委 党建 原文",
+            ),
+        ),
+        (
+            "nfra",
+            (
+                f"国家金融监督管理总局 {date_range} 发布 监管 规定 风险 会议 党委 党建 原文",
+            ),
+        ),
+        (
+            "csrc",
+            (
+                f"中国证监会 {date_range} 发布 资本市场 监管 规定 风险提示 党委 党建 原文",
+            ),
+        ),
+        (
+            "safe",
+            (
+                f"国家外汇管理局 {date_range} 发布 外汇政策 跨境资金 监管统计 党委 党建 原文",
+            ),
+        ),
+    ]
 
 
 def _ordinary_query_groups(
@@ -540,13 +691,10 @@ def _ordinary_query_groups(
         ),
         (
             "监管动态",
-            (
-                f"中国人民银行 {date_range} 发布 货币政策 金融统计 风险提示 原文",
-                f"国家金融监督管理总局 {date_range} 发布 监管 规定 风险 会议",
-                f"中国证监会 {date_range} 发布 资本市场 监管 规定 风险提示",
-                f"国家外汇管理局 {date_range} 发布 外汇政策 跨境资金 监管统计",
-                "金融监管部门 党委 党组 党建 全面从严治党 "
-                f"原文 {date_range}",
+            tuple(
+                query
+                for _, queries in _regulatory_query_groups(period_start, period_end)
+                for query in queries
             ),
         ),
         (
@@ -1208,16 +1356,23 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     ordinary_page_groups: list[tuple[str, list[WebCandidate]]] = []
     warnings: list[str] = []
     for section_name, queries in _ordinary_query_groups(period_start, period_end):
-        pages, group_warnings = _collect_pages(
-            list(queries),
-            tools,
-            period_start=period_start,
-            period_end=period_end,
-            source_section=section_name,
-            max_results_per_query=(
-                10 if section_name in {"党政要闻", "监管动态"} else 5
-            ),
-        )
+        if section_name == "监管动态":
+            pages, group_warnings = _collect_regulatory_pages(
+                _regulatory_query_groups(period_start, period_end),
+                list(section_source_feed_specs(section_name)),
+                tools,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        else:
+            pages, group_warnings = _collect_pages(
+                list(queries),
+                tools,
+                period_start=period_start,
+                period_end=period_end,
+                source_section=section_name,
+                max_results_per_query=(10 if section_name == "党政要闻" else 5),
+            )
         if section_name == "党政要闻":
             feed_pages, feed_warnings = _collect_source_feed_pages(
                 list(section_source_feed_urls(section_name)),

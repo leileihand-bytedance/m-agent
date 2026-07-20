@@ -107,6 +107,96 @@ def test_read_web_page_extracts_links_from_public_json_index():
     assert result["canonical_url"].endswith("YAOWENLIEBIAO.json")
 
 
+def test_read_web_page_extracts_nested_csrc_json_index_records():
+    payload = json.dumps(
+        {
+            "data": {
+                "results": [
+                    {
+                        "title": "中国证监会部署资本市场监管重点工作",
+                        "url": "//www.csrc.gov.cn/csrc/c100028/c123/content.shtml",
+                        "publishedTimeStr": "2026-07-10 18:30:00",
+                        "manuscriptId": "123",
+                    }
+                ]
+            }
+        },
+        ensure_ascii=False,
+    )
+
+    result = read_web_page(
+        "https://www.csrc.gov.cn/searchList/channel?_isJson=true",
+        fetcher=lambda _: payload,
+    )
+
+    assert result["links"] == [
+        {
+            "title": "中国证监会部署资本市场监管重点工作",
+            "url": "https://www.csrc.gov.cn/csrc/c100028/c123/content.shtml",
+            "publish_date": "2026-07-10 18:30:00",
+        }
+    ]
+    assert result["records"][0]["manuscriptId"] == "123"
+
+
+def test_read_web_page_extracts_nfra_json_article_body():
+    payload = json.dumps(
+        {
+            "rptCode": 200,
+            "data": {
+                "docId": 123,
+                "docTitle": "金融监管总局部署银行业重点工作",
+                "publishDate": "2026-07-10 17:30:00",
+                "docClob": (
+                    "<html><body><p>金融监管总局召开专题会议。</p>"
+                    "<p>会议部署银行经营管理和风险防控重点工作。</p></body></html>"
+                ),
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    result = read_web_page(
+        "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId=123.json",
+        fetcher=lambda _: payload,
+    )
+
+    assert result["title"] == "金融监管总局部署银行业重点工作"
+    assert result["publish_date"] == "2026-07-10"
+    assert result["text"] == (
+        "金融监管总局召开专题会议。\n"
+        "会议部署银行经营管理和风险防控重点工作。"
+    )
+
+
+def test_read_web_page_extracts_dated_links_from_html_index():
+    html = """
+    <html><head><title>新闻</title></head><body><table>
+      <tr><td>
+        <a href="/goutongjiaoliu/113456/113469/202607101/index.html"
+           title="中国人民银行发布金融统计数据">新闻标题...</a>
+        <span>2026-07-10</span>
+      </td></tr>
+    </table></body></html>
+    """
+
+    result = read_web_page(
+        "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html",
+        fetcher=lambda _: html,
+    )
+
+    assert result["links"] == [
+        {
+            "title": "中国人民银行发布金融统计数据",
+            "url": (
+                "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/"
+                "202607101/index.html"
+            ),
+            "publish_date": "2026-07-10",
+        }
+    ]
+
+
 def test_read_web_page_prefers_open_graph_title_over_site_decorated_title():
     html = """
     <html>

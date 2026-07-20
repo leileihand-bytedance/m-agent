@@ -16,6 +16,7 @@ from skills.internal_weekly.schema import (
 )
 from skills.internal_weekly.workflow import (
     _collect_pages,
+    _collect_regulatory_pages,
     _collect_source_feed_pages,
     _evidence_in_body,
     _frontier_queries,
@@ -890,6 +891,163 @@ def test_collect_source_feed_pages_reads_only_in_period_relevant_party_links():
 
     assert read_urls == [feed_url, ai_url]
     assert [page.canonical_url for page in pages] == [ai_url]
+    assert warnings == []
+
+
+def test_collect_source_feed_pages_builds_nfra_article_from_official_api_record():
+    feed_url = (
+        "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectDocByItemIdAndChild/"
+        "data_itemId=915,pageIndex=1,pageSize=18.json"
+    )
+    content_url = (
+        "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/"
+        "data_docId=123.json"
+    )
+    article_url = (
+        "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?"
+        "docId=123&itemId=915&generaltype=0"
+    )
+    read_urls: list[str] = []
+
+    def web_reader(url: str):
+        read_urls.append(url)
+        if url == feed_url:
+            return {
+                "url": feed_url,
+                "canonical_url": feed_url,
+                "links": [],
+                "records": [
+                    {
+                        "docId": "123",
+                        "docSubtitle": "金融监管总局部署银行业重点工作",
+                        "publishDate": "2026-07-10 17:30:00",
+                        "generaltype": "0",
+                    }
+                ],
+            }
+        assert url == content_url
+        return {
+            "url": content_url,
+            "canonical_url": content_url,
+            "site": "nfra.gov.cn",
+            "publisher": "国家金融监督管理总局",
+            "title": "金融监管总局部署银行业重点工作",
+            "publish_date": "2026-07-10",
+            "date_extracted_from": "json:publishDate",
+            "text": "金融监管总局召开专题会议，部署银行经营管理和风险防控重点工作。",
+        }
+
+    gateway = ToolGateway(
+        allowed_tools=("web_reader",),
+        tools={"web_reader": web_reader},
+    )
+    feed_spec = {
+        "feed_url": feed_url,
+        "feed_adapter": "nfra_docinfo",
+        "item_id": "915",
+        "article_url_template": (
+            "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?"
+            "docId={docId}&itemId={itemId}&generaltype={generaltype}"
+        ),
+        "content_url_template": (
+            "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/"
+            "data_docId={docId}.json"
+        ),
+    }
+
+    pages, warnings = _collect_source_feed_pages(
+        [feed_spec],
+        gateway,
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+        source_section="监管动态",
+    )
+
+    assert read_urls == [feed_url, content_url]
+    assert [page.canonical_url for page in pages] == [article_url]
+    assert pages[0].body.startswith("金融监管总局召开专题会议")
+    assert warnings == []
+
+
+def test_collect_regulatory_pages_only_searches_missing_fixed_source_groups():
+    pbc_feed = "https://www.pbc.gov.cn/news/index.html"
+    pbc_article = "https://www.pbc.gov.cn/news/1.html"
+    nfra_feed = "https://www.nfra.gov.cn/news.json"
+    csrc_feed = "https://www.csrc.gov.cn/news.json"
+    csrc_article = "https://www.csrc.gov.cn/news/1.html"
+    search_calls: list[str] = []
+
+    feed_specs = [
+        {"feed_url": pbc_feed, "source_group": "pbc"},
+        {"feed_url": nfra_feed, "source_group": "nfra"},
+        {"feed_url": csrc_feed, "source_group": "csrc"},
+    ]
+    query_groups = [
+        ("pbc", ("人行查询",)),
+        ("nfra", ("总局查询",)),
+        ("csrc", ("证监会查询",)),
+        ("safe", ("外汇局查询",)),
+    ]
+
+    def search(query: str, max_results: int = 5):
+        search_calls.append(query)
+        return []
+
+    def web_reader(url: str):
+        if url == pbc_feed:
+            return {
+                "url": url,
+                "links": [
+                    {
+                        "url": pbc_article,
+                        "title": "中国人民银行部署货币政策重点工作",
+                        "publish_date": "2026-07-10",
+                    }
+                ],
+            }
+        if url == csrc_feed:
+            return {
+                "url": url,
+                "links": [
+                    {
+                        "url": csrc_article,
+                        "title": "中国证监会部署资本市场监管重点工作",
+                        "publish_date": "2026-07-09",
+                    }
+                ],
+            }
+        if url == nfra_feed:
+            return {"url": url, "links": []}
+        return {
+            "url": url,
+            "canonical_url": url,
+            "site": url.split("/")[2],
+            "publisher": "监管机构",
+            "title": (
+                "中国人民银行部署货币政策重点工作"
+                if url == pbc_article
+                else "中国证监会部署资本市场监管重点工作"
+            ),
+            "publish_date": "2026-07-10",
+            "date_extracted_from": "meta:publishdate",
+            "text": "监管机构召开专题会议，部署金融监管、经营管理和风险防控重点工作。",
+        }
+
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader"),
+        tools={"search": search, "web_reader": web_reader},
+    )
+
+    pages, warnings = _collect_regulatory_pages(
+        query_groups,
+        feed_specs,
+        gateway,
+        period_start=datetime(2026, 7, 6).date(),
+        period_end=datetime(2026, 7, 12).date(),
+    )
+
+    assert [page.canonical_url for page in pages] == [pbc_article, csrc_article]
+    assert search_calls == ["总局查询", "外汇局查询"]
     assert warnings == []
 
 

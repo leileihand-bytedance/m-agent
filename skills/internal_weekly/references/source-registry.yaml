@@ -1,5 +1,5 @@
 version: 1
-updated_on: "2026-07-19"
+updated_on: "2026-07-20"
 
 # 各板块优先信源。主流财经媒体可用于补充事实，但核心政策、监管动作、机构经营
 # 和研究报告应优先回到原发布主体。域名同时进入运行时网页读取白名单。
@@ -11,9 +11,48 @@ section_sources:
     - {name: 新华社, domain: news.cn, tier: primary}
     - {name: 人民网, domain: people.com.cn, tier: primary}
   监管动态:
-    - {name: 中国人民银行, domain: pbc.gov.cn, tier: primary}
-    - {name: 国家金融监督管理总局, domain: nfra.gov.cn, tier: primary}
-    - {name: 中国证监会, domain: csrc.gov.cn, tier: primary}
+    - name: 中国人民银行新闻发布
+      domain: pbc.gov.cn
+      tier: primary
+      source_group: pbc
+      entry_url: "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
+      feed_url: "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
+    - name: 国家金融监督管理总局监管动态
+      domain: nfra.gov.cn
+      tier: primary
+      source_group: nfra
+      item_id: "915"
+      entry_url: "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=915&itemUrl=ItemListRightList.html&itemName=监管动态"
+      feed_url: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectDocByItemIdAndChild/data_itemId=915,pageIndex=1,pageSize=18.json"
+      feed_adapter: nfra_docinfo
+      article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
+      content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
+    - name: 国家金融监督管理总局政策解读
+      domain: nfra.gov.cn
+      tier: primary
+      source_group: nfra
+      item_id: "917"
+      entry_url: "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=917&itemUrl=ItemListRightList.html&itemName=政策解读&itemsubPId=916"
+      feed_url: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectDocByItemIdAndChild/data_itemId=917,pageIndex=1,pageSize=18.json"
+      feed_adapter: nfra_docinfo
+      article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
+      content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
+    - name: 国家金融监督管理总局领导活动及讲话
+      domain: nfra.gov.cn
+      tier: primary
+      source_group: nfra
+      item_id: "919"
+      entry_url: "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=919&itemUrl=ItemListRightList.html&itemName=领导活动及讲话"
+      feed_url: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectDocByItemIdAndChild/data_itemId=919,pageIndex=1,pageSize=18.json"
+      feed_adapter: nfra_docinfo
+      article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
+      content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
+    - name: 中国证监会要闻
+      domain: csrc.gov.cn
+      tier: primary
+      source_group: csrc
+      entry_url: "https://www.csrc.gov.cn/csrc/c100028/common_xq_list.shtml"
+      feed_url: "https://www.csrc.gov.cn/searchList/a1a078ee0bc54721ab6b148884c784a8?_isAgg=true&_isJson=true&_pageSize=18&_template=index&_rangeTimeGte=&_channelName=&page=1"
     - {name: 国家外汇管理局, domain: safe.gov.cn, tier: primary}
     - {name: 新华财经, domain: cnfin.com, tier: secondary}
     - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
