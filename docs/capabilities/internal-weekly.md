@@ -26,7 +26,9 @@
 
 登记来源若出现一次临时网页读取失败，系统会在同一 URL 上重试一次；仍失败才记录待核，不转向未知来源。中国政府网文章页即使采用公共页头提前闭合 HTML 的非标准模板，网页工具也会切换解析方式恢复后续正文和发布日期，避免只把“首页、登录、无障碍”等导航交给模型。普通候选按最多 5 页一批筛选，模型必须逐条返回入选或不入选判断；如果整批返回空判断，系统会自动重试一次，连续空答则显式记录待核，避免把模型漏答误判为该板块没有新闻。某一批结构化输出失败不会再让整个同业或监管板块归零；超长正文会在保留原链接和原文校验的前提下限制进入模型的长度。
 
-同业动向首批覆盖境内民营/数字银行、国际及香港数字银行、国内银行科技子公司三组。国际组包括 Monzo、Starling、Revolut、N26、Nubank、KakaoBank、ZA Bank、Mox Bank；科技子公司组首批包括建信金科、工银科技、兴业数金、招银云创。微众银行自身不作为同业。实体别名、官方域名和各板块优先信源由 `skills/internal_weekly/references/source-registry.yaml` 统一维护。
+同业动向首批覆盖境内民营/数字银行、国际及香港数字银行、国内银行科技子公司三组。国际组包括 Monzo、Starling、Revolut、N26、Nubank、KakaoBank、ZA Bank、Mox Bank；科技子公司组首批包括建信金科、工银科技、兴业数金、招银云创。微众银行自身不作为同业。已核对的 5 期案例均没有同业动向板块，因此本栏目不照搬案例条数，而是按周报服务内部管理团队的定位独立建立规则。
+
+三类机构名单按每组最多 5 家分片，分别检索经营业绩与战略、产品科技与风险两类信息；各组通过域名、日期和正文校验后轮询合并。信源分为机构官网/投资者关系/年报、监管与交易所法定披露、权威媒体补充三级。同业条目按可比相关性、变化重要性、战略信号、证据质量、经营启示五项各 0 至 2 分评分，总分不低于 7 分才可入选；最多 5 条且不凑数。普通营销促销、获奖、一般会议、招聘和没有实质业务变化的宣传稿排除。实体别名、官方栏目、母行补充域名和查询模板由 `skills/internal_weekly/references/source-registry.yaml` 统一维护，完整细则见 `skills/internal_weekly/references/peer-activity-system.md`。
 
 市场观察第一项固定为“资本市场综述”，必须依次包含：
 
@@ -60,6 +62,7 @@
 | 用途 | 已核验的公开来源 | 当前可用方式 | 主要边界 |
 |---|---|---|---|
 | 金融监管动态 | [人民银行新闻发布](https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html)、[金融监管总局监管动态](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=915&itemUrl=ItemListRightList.html&itemName=%E7%9B%91%E7%AE%A1%E5%8A%A8%E6%80%81)、[政策解读](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=917&itemUrl=ItemListRightList.html&itemName=%E6%94%BF%E7%AD%96%E8%A7%A3%E8%AF%BB&itemsubPId=916)、[领导活动及讲话](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=919&itemUrl=ItemListRightList.html&itemName=%E9%A2%86%E5%AF%BC%E6%B4%BB%E5%8A%A8%E5%8F%8A%E8%AE%B2%E8%AF%9D)、[证监会要闻](https://www.csrc.gov.cn/csrc/c100028/common_xq_list.shtml) | 先读取栏目自己的列表或数据接口，按统计期发现原文，再逐篇读取正文 | 固定入口按机构独立判断；该机构无合格正文时才公开检索，外汇局仍为官网优先检索 |
+| 同业经营与创新 | [Monzo投资者信息](https://monzo.com/investor-information)、[Starling投资者信息](https://www.starlingbank.com/investors/)、[Revolut财务报告](https://www.revolut.com/reports-and-results/)、[Nubank投资者关系](https://www.investidores.nu/)、[Mox媒体中心](https://mox.com/media/)、[香港金管局认可机构登记](https://vpr.hkma.gov.hk/eng/regulatory-resources/registers/register-of-ais-and-lros/) | 官网和投资者关系确认经营、产品和战略事实，监管/交易所披露交叉核验牌照、财务和治理，媒体补充背景 | 官网营销稿不因来源官方自动入选；仍须达到同业价值评分和逐字证据要求 |
 | 国内宏观与市场定价 | [国家统计局数据发布](https://www.stats.gov.cn/sj/zxfb/)、[人民银行](https://www.pbc.gov.cn/)、[中国货币网](https://www.chinamoney.com.cn/chinese/bkccpr/)、[中债收益率曲线](https://yield.chinabond.com.cn/cbweb-cbrc-web/cbrc/showCbrc) | 用官方发布确认宏观数据、LPR、资金利率、人民币汇率和债券收益率等事实 | 中央政策部署仍归党政要闻；监管制度和处罚归监管动态 |
 | 全球宏观、央行与重大事件 | [美联储货币政策](https://www.federalreserve.gov/monetarypolicy.htm)、[欧洲央行货币政策决议](https://www.ecb.europa.eu/press/govcdec/mopo/html/index.en.html)、[美国劳工统计局新闻发布](https://www.bls.gov/newsroom/home.htm)、[美国经济分析局新闻](https://www.bea.gov/news)、[美国能源信息署石油数据](https://www.eia.gov/petroleum/)、[美国证券交易委员会新闻稿](https://www.sec.gov/newsroom/press-releases) | 官方来源确认决议、数据和公告，新华社、路透社、美联社等登记来源补充地缘、贸易、能源和跨市场传导 | 二手来源不得覆盖官方相反事实；未证实传闻和匿名预测不入选 |
 | 国际银行与金融稳定研究 | [BIS Working Papers](https://www.bis.org/wpapers/index.htm) | 报告落地页通常提供题名、作者、日期、摘要和 PDF 链接，可先摘录 HTML 摘要 | PDF 全文读取要等公共受限 PDF 工具接入 |

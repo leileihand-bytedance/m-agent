@@ -66,6 +66,16 @@ section_sources:
     - {name: 新华社, domain: news.cn, tier: secondary}
     - {name: 人民网, domain: people.com.cn, tier: secondary}
   同业动向:
+    # 监管、交易所和法定披露用于交叉核验牌照、财务、治理和风险事实。
+    - {name: 香港金融管理局认可机构登记, domain: hkma.gov.hk, tier: primary, entry_url: "https://vpr.hkma.gov.hk/eng/regulatory-resources/registers/register-of-ais-and-lros/"}
+    - {name: 香港交易所披露易, domain: hkexnews.hk, tier: primary, entry_url: "https://www.hkexnews.hk/"}
+    - {name: 美国证券交易委员会, domain: sec.gov, tier: primary, entry_url: "https://www.sec.gov/edgar/search/"}
+    - {name: 英国公司注册处, domain: find-and-update.company-information.service.gov.uk, match: exact, tier: primary, entry_url: "https://find-and-update.company-information.service.gov.uk/"}
+    - {name: 英国金融行为监管局, domain: fca.org.uk, tier: primary}
+    - {name: 英格兰银行审慎监管局, domain: bankofengland.co.uk, tier: primary}
+    - {name: 德国联邦金融监管局, domain: bafin.de, tier: primary}
+    - {name: 巴西中央银行, domain: bcb.gov.br, tier: primary}
+    - {name: 韩国金融监督院电子披露, domain: dart.fss.or.kr, tier: primary}
     - {name: 新华财经, domain: cnfin.com, tier: secondary}
     - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
     - {name: 上海证券报, domain: cnstock.com, tier: secondary}
@@ -74,6 +84,10 @@ section_sources:
     - {name: 第一财经, domain: yicai.com, tier: secondary}
     - {name: 财新, domain: caixin.com, tier: secondary}
     - {name: 每日经济新闻, domain: nbd.com.cn, tier: secondary}
+    - {name: 路透社, domain: reuters.com, tier: secondary}
+    - {name: 金融时报, domain: ft.com, tier: secondary}
+    - {name: 南华早报, domain: scmp.com, tier: secondary}
+    - {name: Sifted, domain: sifted.eu, tier: secondary}
   市场观察:
     # 国内宏观、货币与资产管理：价格/统计数据优先回到官方发布主体。
     - {name: 国家统计局数据发布, domain: stats.gov.cn, tier: primary, entry_url: "https://www.stats.gov.cn/sj/zxfb/"}
@@ -160,6 +174,31 @@ market_observation_topics:
     query_templates:
       - "证券交易所 美国证券交易委员会 新华财经 美联社 路透社 创纪录 IPO 重大违约 并购 重组 救助 退市 交易中断 市场影响 {date_range}"
 
+# 同业动向按机构类型分组，再在每组内分别搜索经营/战略和产品/科技/风险主题。
+# 每个查询模板只替换 {entity_names} 与 {date_range}；未登记机构和域名不能进入候选池。
+peer_activity_topics:
+  - id: domestic_digital_banks
+    name: 境内民营与数字银行
+    category: domestic_digital_banks
+    chunk_size: 5
+    query_templates:
+      - "{entity_names} 官网 年报 经营业绩 客户 存款 贷款 盈利 资本 战略 {date_range}"
+      - "{entity_names} 产品 小微金融 数字化 科技 人工智能 风险管理 合作 组织治理 {date_range}"
+  - id: international_digital_banks
+    name: 国际及香港数字银行
+    category: international_digital_banks
+    chunk_size: 5
+    query_templates:
+      - "{entity_names} official news annual report earnings customers deposits lending licence license 牌照 expansion partnership {date_range}"
+      - "{entity_names} product technology AI fraud risk management compliance acquisition leadership capital {date_range}"
+  - id: bank_technology_subsidiaries
+    name: 国内银行科技子公司
+    category: bank_technology_subsidiaries
+    chunk_size: 5
+    query_templates:
+      - "{entity_names} 官网 经营 战略 客户 合作 项目落地 组织治理 {date_range}"
+      - "{entity_names} 产品 科技 人工智能 大模型 数据 云 核心系统 风险管理 反欺诈 {date_range}"
+
 peer_entities:
   # 微众银行是本周报服务对象，不作为“同业动向”候选。
   domestic_digital_banks:
@@ -182,16 +221,49 @@ peer_entities:
     - {name: 裕民银行, aliases: [江西裕民银行], official_domain: ymbank.com, reference_url: "https://www.ymbank.com/"}
     - {name: 锡商银行, aliases: [无锡锡商银行], official_domain: wxsbank.com, reference_url: "http://www.wxsbank.com/"}
   international_digital_banks:
-    - {name: Monzo, aliases: [Monzo Bank], official_domain: monzo.com, reference_url: "https://monzo.com/about"}
-    - {name: Starling, aliases: [Starling Bank], official_domain: starlingbank.com, reference_url: "https://www.starlingbank.com/about/"}
-    - {name: Revolut, aliases: [Revolut Bank], official_domain: revolut.com, reference_url: "https://www.revolut.com/news/"}
-    - {name: N26, aliases: [N26 Bank], official_domain: n26.com, reference_url: "https://n26.com/en-de/about-n26/"}
-    - {name: Nubank, aliases: [Nubank Brasil], official_domain: nubank.com.br, reference_url: "https://international.nubank.com.br/about/"}
-    - {name: KakaoBank, aliases: [Kakao Bank], official_domain: kakaobank.com, reference_url: "https://eng.kakaobank.com/"}
-    - {name: ZA Bank, aliases: [众安银行], official_domain: za.group, reference_url: "https://bank.za.group/en"}
-    - {name: Mox Bank, aliases: [Mox], official_domain: mox.com, reference_url: "https://mox.com/about-us/"}
+    - name: Monzo
+      aliases: [Monzo Bank]
+      official_domain: monzo.com
+      reference_url: "https://monzo.com/about"
+      source_urls: ["https://monzo.com/press", "https://monzo.com/investor-information"]
+    - name: Starling
+      aliases: [Starling Bank]
+      official_domain: starlingbank.com
+      reference_url: "https://www.starlingbank.com/about/"
+      source_urls: ["https://www.starlingbank.com/news/", "https://www.starlingbank.com/investors/"]
+    - name: Revolut
+      aliases: [Revolut Bank]
+      official_domain: revolut.com
+      reference_url: "https://www.revolut.com/news/"
+      source_urls: ["https://www.revolut.com/news/", "https://www.revolut.com/reports-and-results/"]
+    - name: N26
+      aliases: [N26 Bank]
+      official_domain: n26.com
+      reference_url: "https://n26.com/en-de/about-n26/"
+      source_urls: ["https://n26.com/en-fr/press"]
+    - name: Nubank
+      aliases: [Nubank Brasil, Nu Holdings]
+      official_domain: nubank.com.br
+      additional_domains: [investidores.nu, investors.nu]
+      reference_url: "https://international.nubank.com.br/about/"
+      source_urls: ["https://international.nubank.com.br/newsroom/", "https://www.investidores.nu/"]
+    - name: KakaoBank
+      aliases: [Kakao Bank]
+      official_domain: kakaobank.com
+      reference_url: "https://www.kakaobank.com/view/main?lang=EN"
+      source_urls: ["https://www.kakaobank.com/view/main?lang=EN", "https://www.kakaobank.com/IR/Schedule/IREvents?lang=EN"]
+    - name: ZA Bank
+      aliases: [众安银行]
+      official_domain: za.group
+      reference_url: "https://bank.za.group/en"
+      source_urls: ["https://bank.za.group/en/about-us"]
+    - name: Mox Bank
+      aliases: [Mox]
+      official_domain: mox.com
+      reference_url: "https://mox.com/about-us/"
+      source_urls: ["https://mox.com/media/"]
   bank_technology_subsidiaries:
-    - {name: 建信金科, aliases: [建信金融科技], official_domain: jinnongkeji.com, reference_url: "https://www.jinnongkeji.com/"}
-    - {name: 工银科技, aliases: [工银科技有限公司], official_domain: tech.icbc.com.cn, reference_url: "https://www.tech.icbc.com.cn/about"}
-    - {name: 兴业数金, aliases: [兴业数字金融服务], official_domain: cibfintech.com, reference_url: "https://www.cibfintech.com/"}
-    - {name: 招银云创, aliases: [招银云创信息技术], official_domain: cmbyc.com, reference_url: "https://www.cmbyc.com/about/about-us"}
+    - {name: 建信金科, aliases: [建信金融科技], official_domain: jinnongkeji.com, additional_domains: [ccb.com], reference_url: "https://www.jinnongkeji.com/"}
+    - {name: 工银科技, aliases: [工银科技有限公司], official_domain: tech.icbc.com.cn, additional_domains: [icbc.com.cn], reference_url: "https://www.tech.icbc.com.cn/about"}
+    - {name: 兴业数金, aliases: [兴业数字金融服务], official_domain: cibfintech.com, additional_domains: [cib.com.cn], reference_url: "https://www.cibfintech.com/"}
+    - {name: 招银云创, aliases: [招银云创信息技术], official_domain: cmbyc.com, additional_domains: [cmbchina.com], reference_url: "https://www.cmbyc.com/about/about-us"}

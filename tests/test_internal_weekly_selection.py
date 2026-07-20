@@ -24,6 +24,8 @@ from skills.internal_weekly.source_policy import candidate_allowed, domain_allow
 from skills.internal_weekly.source_registry import (
     load_source_registry,
     market_observation_topic_specs,
+    peer_activity_topic_specs,
+    peer_source_tier,
     section_source_entry_urls,
     section_source_feed_urls,
     section_source_feed_specs,
@@ -199,6 +201,54 @@ def test_source_registry_keeps_official_references_for_expanded_peer_groups():
         assert peer_groups[category]
         assert all(item["official_domain"] for item in peer_groups[category])
         assert all(item["reference_url"].startswith("http") for item in peer_groups[category])
+
+
+def test_peer_activity_registry_has_grouped_queries_and_layered_sources():
+    specs = peer_activity_topic_specs()
+
+    assert [item["category"] for item in specs] == [
+        "domestic_digital_banks",
+        "international_digital_banks",
+        "bank_technology_subsidiaries",
+    ]
+    assert all(item["query_templates"] for item in specs)
+    assert all(item["chunk_size"] > 0 for item in specs)
+
+    registry = load_source_registry()
+    peer_domains = {
+        item["domain"] for item in registry["section_sources"]["同业动向"]
+    }
+    for domain in (
+        "hkma.gov.hk",
+        "hkexnews.hk",
+        "sec.gov",
+        "find-and-update.company-information.service.gov.uk",
+        "fca.org.uk",
+        "bafin.de",
+        "bcb.gov.br",
+        "dart.fss.or.kr",
+        "reuters.com",
+        "scmp.com",
+    ):
+        assert domain in peer_domains
+
+    international = {
+        item["name"]: item
+        for item in registry["peer_entities"]["international_digital_banks"]
+    }
+    assert "https://monzo.com/press" in international["Monzo"]["source_urls"]
+    assert (
+        "https://www.revolut.com/reports-and-results/"
+        in international["Revolut"]["source_urls"]
+    )
+    assert "investidores.nu" in international["Nubank"]["additional_domains"]
+
+    assert peer_source_tier("https://monzo.com/press/example",) == "primary"
+    assert (
+        peer_source_tier("https://www.investidores.nu/financials/results-center/")
+        == "primary"
+    )
+    assert peer_source_tier("https://www.reuters.com/business/finance/example") == "secondary"
 
 
 def test_party_source_registry_includes_state_council_news_list_entry():

@@ -29,6 +29,7 @@ from skills.internal_weekly.workflow import (
     _ordinary_items,
     _ordinary_query_groups,
     _party_major_event_keys,
+    _peer_activity_query_groups,
     _resolve_market_evidence_excerpt,
     is_market_update_request,
     run,
@@ -566,6 +567,173 @@ def test_market_observation_queries_are_registry_driven_and_grouped_by_topic():
     ]
     assert all(queries for _, queries in groups)
     assert all("2026年7月6日至2026年7月12日" in query for _, queries in groups for query in queries)
+
+
+def test_peer_activity_queries_are_registry_driven_and_grouped_by_entity_type():
+    groups = _peer_activity_query_groups(
+        datetime(2026, 7, 6).date(),
+        datetime(2026, 7, 12).date(),
+    )
+
+    group_ids = [group_id for group_id, _ in groups]
+    assert len(group_ids) == 7
+    assert sum(group_id.startswith("domestic_digital_banks_") for group_id in group_ids) == 4
+    assert sum(group_id.startswith("international_digital_banks_") for group_id in group_ids) == 2
+    assert sum(group_id.startswith("bank_technology_subsidiaries_") for group_id in group_ids) == 1
+    assert all(queries for _, queries in groups)
+    assert all(
+        "2026年7月6日至2026年7月12日" in query
+        for _, queries in groups
+        for query in queries
+    )
+    query_text = "\n".join(query for _, queries in groups for query in queries)
+    for marker in (
+        "经营业绩",
+        "客户",
+        "存款",
+        "贷款",
+        "产品",
+        "科技",
+        "风险管理",
+        "牌照",
+        "人工智能",
+        "项目落地",
+    ):
+        assert marker in query_text
+
+
+def test_peer_activity_applies_official_priority_score_floor_and_scope_instruction():
+    official = WebCandidate(
+        url="https://monzo.com/press/annual-results",
+        canonical_url="https://monzo.com/press/annual-results",
+        title="Monzo发布年度经营业绩",
+        site="monzo.com",
+        publisher="Monzo",
+        publish_date="2026-07-10",
+        body="Monzo公布年度经营业绩，客户存款和盈利能力显著增长。",
+    )
+    media = WebCandidate(
+        url="https://www.reuters.com/business/finance/revolut-expansion",
+        canonical_url="https://www.reuters.com/business/finance/revolut-expansion",
+        title="Revolut取得新市场银行牌照",
+        site="reuters.com",
+        publisher="路透社",
+        publish_date="2026-07-10",
+        body="Revolut取得新市场银行牌照，并计划扩大存贷款和支付业务。",
+    )
+    low_score = WebCandidate(
+        url="https://n26.com/en-eu/press/brand-campaign",
+        canonical_url="https://n26.com/en-eu/press/brand-campaign",
+        title="N26推出普通品牌营销活动",
+        site="n26.com",
+        publisher="N26",
+        publish_date="2026-07-10",
+        body="N26推出普通品牌营销活动，没有披露产品、经营或技术变化。",
+    )
+    assessments = {
+        official.canonical_url: ContentCandidateAssessment(
+            source_url=official.canonical_url,
+            include=True,
+            section="同业动向",
+            title=official.title,
+            summary="Monzo客户存款和盈利能力显著增长。",
+            evidence_excerpt="客户存款和盈利能力显著增长",
+            score=8,
+            reason="经营指标具有可比性",
+        ),
+        media.canonical_url: ContentCandidateAssessment(
+            source_url=media.canonical_url,
+            include=True,
+            section="同业动向",
+            title=media.title,
+            summary="Revolut取得新市场银行牌照并计划扩大业务。",
+            evidence_excerpt="计划扩大存贷款和支付业务",
+            score=8,
+            reason="国际数字银行扩张信号",
+        ),
+        low_score.canonical_url: ContentCandidateAssessment(
+            source_url=low_score.canonical_url,
+            include=True,
+            section="同业动向",
+            title=low_score.title,
+            summary="N26推出普通品牌活动。",
+            evidence_excerpt="没有披露产品、经营或技术变化",
+            score=6.9,
+            reason="只有营销信息",
+        ),
+    }
+    instructions: list[str] = []
+
+    def llm_writer(payload):
+        instructions.append(payload["instruction"])
+        urls = [material["url"] for material in payload["materials"]]
+        return ContentAssessmentBatch(items=[assessments[url] for url in urls])
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [media, low_score, official],
+        gateway,
+        expected_section="同业动向",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert [item.title for item in items] == [official.title, media.title]
+    assert len(records) == 2
+    assert any("同业价值评分低于7分" in warning for warning in warnings)
+    assert "经营业绩、产品业务、科技与风控、战略合作、组织治理" in instructions[0]
+    assert "普通营销活动" in instructions[0]
+
+
+def test_peer_activity_caps_items_at_five():
+    pages = [
+        WebCandidate(
+            url=f"https://monzo.com/press/peer-{index}",
+            canonical_url=f"https://monzo.com/press/peer-{index}",
+            title=f"Monzo发布重大经营进展{index}",
+            site="monzo.com",
+            publisher="Monzo",
+            publish_date="2026-07-10",
+            body=f"Monzo发布重大经营进展{index}，披露存款、贷款和盈利能力变化。",
+        )
+        for index in range(6)
+    ]
+    assessments = {
+        page.canonical_url: ContentCandidateAssessment(
+            source_url=page.canonical_url,
+            include=True,
+            section="同业动向",
+            title=page.title,
+            summary=f"Monzo重大经营进展{index}反映存贷款和盈利变化。",
+            evidence_excerpt="披露存款、贷款和盈利能力变化",
+            score=9 - index * 0.1,
+            reason="具有同业经营参考价值",
+        )
+        for index, page in enumerate(pages)
+    }
+
+    def llm_writer(payload):
+        urls = [material["url"] for material in payload["materials"]]
+        return ContentAssessmentBatch(items=[assessments[url] for url in urls])
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        pages,
+        gateway,
+        expected_section="同业动向",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert len(items) == 5
+    assert len(records) == 5
+    assert warnings == []
 
 
 def test_balanced_market_merge_preserves_every_topic_before_second_page():

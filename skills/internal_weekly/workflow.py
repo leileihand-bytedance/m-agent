@@ -37,7 +37,9 @@ from skills.internal_weekly.selection import (
 )
 from skills.internal_weekly.source_registry import (
     market_observation_topic_specs,
+    peer_activity_topic_specs,
     peer_query_names,
+    peer_source_tier,
     section_source_feed_urls,
     section_source_feed_specs,
     section_source_tier,
@@ -56,6 +58,8 @@ MAX_PAGES_PER_GROUP = 30
 MAX_ITEMS_PER_ORDINARY_SECTION = 6
 MAX_MARKET_OBSERVATION_ITEMS = 5
 MIN_MARKET_OBSERVATION_SCORE = 7.0
+MAX_PEER_ACTIVITY_ITEMS = 5
+MIN_PEER_ACTIVITY_SCORE = 7.0
 MAX_PAGES_PER_ASSESSMENT_BATCH = 5
 MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
 MAX_ORDINARY_BODY_CHARS = 12000
@@ -417,12 +421,15 @@ def _ordinary_assessment_rank(
 ) -> float:
     if expected_section == "党政要闻":
         return _party_assessment_rank(assessment)
-    if expected_section != "市场观察":
+    if expected_section not in {"同业动向", "市场观察"}:
         return assessment.score
     page = page_map.get(assessment.source_url)
     if page is None:
         return assessment.score
-    tier = section_source_tier(page.canonical_url or page.url, "市场观察")
+    if expected_section == "同业动向":
+        tier = peer_source_tier(page.canonical_url or page.url)
+    else:
+        tier = section_source_tier(page.canonical_url or page.url, "市场观察")
     return assessment.score + (0.5 if tier == "primary" else 0.0)
 
 
@@ -846,25 +853,47 @@ def _market_observation_query_groups(
     return groups
 
 
+def _peer_activity_query_groups(
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """按机构类型和名单分片生成同业动向查询组。"""
+    date_range = _format_date_range(period_start, period_end)
+    groups: list[tuple[str, tuple[str, ...]]] = []
+    for spec in peer_activity_topic_specs():
+        topic_id = str(spec.get("id") or "").strip()
+        category = str(spec.get("category") or "").strip()
+        chunk_size = spec.get("chunk_size")
+        templates = spec.get("query_templates", ())
+        if (
+            not topic_id
+            or not category
+            or not isinstance(chunk_size, int)
+            or chunk_size <= 0
+            or not isinstance(templates, tuple)
+        ):
+            continue
+        names = peer_query_names(category)
+        for chunk_index, offset in enumerate(range(0, len(names), chunk_size), start=1):
+            entity_names = " ".join(names[offset : offset + chunk_size])
+            queries = tuple(
+                template.replace("{entity_names}", entity_names).replace(
+                    "{date_range}",
+                    date_range,
+                )
+                for template in templates
+                if isinstance(template, str) and template.strip()
+            )
+            if queries:
+                groups.append((f"{topic_id}_{chunk_index}", queries))
+    return groups
+
+
 def _ordinary_query_groups(
     period_start: date,
     period_end: date,
 ) -> list[tuple[str, tuple[str, ...]]]:
     date_range = _format_date_range(period_start, period_end)
-    peer_queries: list[str] = []
-    for category, suffix in (
-        ("domestic_digital_banks", "经营 产品 科技 风险管理 合作"),
-        (
-            "international_digital_banks",
-            "digital bank earnings product technology risk management",
-        ),
-        ("bank_technology_subsidiaries", "银行科技子公司 产品 技术 经营 合作"),
-    ):
-        names = peer_query_names(category)
-        for offset in range(0, len(names), 5):
-            peer_queries.append(
-                f"{' '.join(names[offset:offset + 5])} {suffix} {date_range}"
-            )
     return [
         (
             "党政要闻",
@@ -891,7 +920,14 @@ def _ordinary_query_groups(
         ),
         (
             "同业动向",
-            tuple(peer_queries),
+            tuple(
+                query
+                for _, queries in _peer_activity_query_groups(
+                    period_start,
+                    period_end,
+                )
+                for query in queries
+            ),
         ),
         (
             "市场观察",
@@ -1094,6 +1130,18 @@ def _ordinary_items(
         if expected_section == "市场观察"
         else ""
     )
+    peer_scope_instruction = (
+        "同业动向只跟踪登记名单中的境内民营/数字银行、国际及香港数字银行、"
+        "国内银行科技子公司。重点覆盖经营业绩、产品业务、科技与风控、战略合作、"
+        "组织治理五类实质变化。每条include=true候选按可比相关性、变化重要性、"
+        "战略信号、证据质量、经营启示五项各0至2分评分，总分不得低于7分，并在"
+        "reason中说明对微众银行经营管理或竞争判断的参考意义。机构官网、投资者"
+        "关系、年报和监管/交易所披露优先于媒体，同一事件只留来源最权威、信息最"
+        "完整的一条。最多选5条，不设最低凑数要求；普通营销活动、优惠促销、获奖、"
+        "一般会议、招聘、公益和没有实质产品/经营/技术变化的宣传稿一律排除。"
+        if expected_section == "同业动向"
+        else ""
+    )
     for batch_index, offset in enumerate(
         range(0, len(pages), MAX_PAGES_PER_ASSESSMENT_BATCH),
         start=1,
@@ -1117,6 +1165,7 @@ def _ordinary_items(
                             "宏观经济金融、风险管理、数字化经营直接相关的信息。"
                             f"{party_scope_instruction}"
                             f"{market_scope_instruction}"
+                            f"{peer_scope_instruction}"
                             "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
                             "每一条候选都必须返回判断；不入选也要返回 include=false，不能漏答或返回空列表。"
                             "只形成事实摘要，并返回可在原文逐字核对的证据句。"
@@ -1171,6 +1220,14 @@ def _ordinary_items(
         ):
             warnings.append(
                 f"《{assessment.title}》市场影响评分低于7分，已排除"
+            )
+            continue
+        if (
+            expected_section == "同业动向"
+            and assessment.score < MIN_PEER_ACTIVITY_SCORE
+        ):
+            warnings.append(
+                f"《{assessment.title}》同业价值评分低于7分，已排除"
             )
             continue
         evidence = assessment.evidence_excerpt.strip()
@@ -1294,7 +1351,11 @@ def _ordinary_items(
         item_limit = (
             MAX_MARKET_OBSERVATION_ITEMS
             if expected_section == "市场观察"
-            else MAX_ITEMS_PER_ORDINARY_SECTION
+            else (
+                MAX_PEER_ACTIVITY_ITEMS
+                if expected_section == "同业动向"
+                else MAX_ITEMS_PER_ORDINARY_SECTION
+            )
         )
         if expected_section != "党政要闻" and len(items) >= item_limit:
             break
@@ -1711,6 +1772,24 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
                 period_start=period_start,
                 period_end=period_end,
             )
+        elif section_name == "同业动向":
+            peer_page_groups: list[list[WebCandidate]] = []
+            group_warnings = []
+            for _, peer_queries in _peer_activity_query_groups(
+                period_start,
+                period_end,
+            ):
+                peer_pages, peer_warnings = _collect_pages(
+                    list(peer_queries),
+                    tools,
+                    period_start=period_start,
+                    period_end=period_end,
+                    source_section=section_name,
+                    max_results_per_query=10,
+                )
+                peer_page_groups.append(peer_pages)
+                group_warnings.extend(peer_warnings)
+            pages = _merge_candidate_pages_balanced(*peer_page_groups)
         elif section_name == "市场观察":
             market_topic_page_groups: list[list[WebCandidate]] = []
             group_warnings = []
