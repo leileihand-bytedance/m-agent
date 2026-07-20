@@ -37,6 +37,9 @@ def test_check_config_reports_ready_shape(tmp_path):
     assert report["model_name"] == "MiniMax-M2.7"
     assert report["has_api_key"] is True
     assert report["model_max_tokens"] == 4096
+    assert report["model_timeout_seconds"] == 180.0
+    assert report["model_max_attempts"] == 2
+    assert report["model_retry_backoff_seconds"] == 1.0
     assert report["direct_report_critic_mode"] == "advisory"
     assert report["chat_log_enabled"] is True
     assert report["chat_log_dir"] == str(tmp_path / "chat_logs")
@@ -55,6 +58,9 @@ def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
                 "MODEL_BASE_URL=https://api.deepseek.com/v1",
                 "MODEL_API_KEY=model-key",
                 "M_AGENT_MODEL_MAX_TOKENS=6144",
+                "M_AGENT_MODEL_TIMEOUT_SECONDS=90",
+                "M_AGENT_MODEL_MAX_ATTEMPTS=3",
+                "M_AGENT_MODEL_RETRY_BACKOFF_SECONDS=2.5",
                 "M_AGENT_DIRECT_REPORT_CRITIC_MODE=rewrite",
                 "M_AGENT_CHAT_LOG_ENABLED=false",
                 "M_AGENT_CHAT_LOG_DIR=custom-chat-logs",
@@ -73,6 +79,9 @@ def test_load_config_prefers_model_api_settings_over_legacy_anthropic(tmp_path):
     assert config.anthropic_base_url == "https://api.deepseek.com/v1"
     assert config.anthropic_api_key == "model-key"
     assert config.model_max_tokens == 6144
+    assert config.model_timeout_seconds == 90
+    assert config.model_max_attempts == 3
+    assert config.model_retry_backoff_seconds == 2.5
     assert config.direct_report_critic_mode == "rewrite"
     assert config.chat_log_enabled is False
     assert config.chat_log_dir == Path(__file__).resolve().parent.parent / "custom-chat-logs"

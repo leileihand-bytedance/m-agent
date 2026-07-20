@@ -176,6 +176,54 @@ def test_inspection_exposes_only_safe_delivery_evidence(tmp_path: Path):
     assert "已经生成的结果" not in str(inspection.items)
 
 
+def test_list_pending_exposes_only_recoverable_delivery_metadata(tmp_path: Path):
+    repository, task_id, _task_dir = _failed_delivery_task(
+        tmp_path,
+        checkpoint_status="delivery_unknown",
+        safe_error_code="delivery_status_uncertain",
+    )
+
+    pending = _service(tmp_path, repository).list_pending()
+
+    assert len(pending) == 1
+    assert pending[0].task_id == task_id
+    assert pending[0].source == "writing"
+    assert pending[0].delivery_status == "delivery_unknown"
+    assert pending[0].safe_error_code == "delivery_status_uncertain"
+    assert pending[0].item_count == 1
+    assert "user-1" not in str(pending[0])
+    assert "已经生成的结果" not in str(pending[0])
+
+
+def test_list_pending_ignores_non_delivery_failures(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    task = repository.submit(
+        idempotency_key="ordinary-failure",
+        channel="wecom",
+        user_id="user-1",
+        task_type="writing_writer1",
+        cost_class="writing_llm",
+        payload={"task_dir": str(tmp_path / "tasks" / "missing")},
+        max_attempts=1,
+        resumable=False,
+    )
+    claimed = repository.claim_next(
+        ClaimLimits(global_limit=1, per_user_limit=1),
+        worker_id="worker-1",
+        lease_duration=timedelta(seconds=30),
+    )
+    assert claimed is not None
+    repository.fail(
+        task.task_id,
+        worker_id="worker-1",
+        lease_token=claimed.lease_token or "",
+        safe_error_code="internal_error",
+        retryable=False,
+    )
+
+    assert _service(tmp_path, repository).list_pending() == ()
+
+
 def test_unknown_delivery_can_retry_after_explicit_manual_confirmation(tmp_path: Path):
     repository, task_id, task_dir = _failed_delivery_task(
         tmp_path,

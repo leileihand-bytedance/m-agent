@@ -57,6 +57,18 @@ class DeliveryRecoveryInspection:
     items: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True)
+class DeliveryRecoveryCandidate:
+    source: str
+    task_id: str
+    task_type: str
+    updated_at: str
+    queue_status: str
+    delivery_status: str
+    safe_error_code: str
+    item_count: int
+
+
 class DeliveryRecoveryService:
     """只供本机运维使用的交付恢复入口，不接受企业微信用户调用。"""
 
@@ -98,6 +110,32 @@ class DeliveryRecoveryService:
             safe_error_code=task.safe_error_code or "",
             items=safe_items,
         )
+
+    def list_pending(self, *, limit: int = 50) -> tuple[DeliveryRecoveryCandidate, ...]:
+        """List recoverable delivery failures without user content or local paths."""
+
+        bounded_limit = max(1, min(int(limit), 200))
+        candidates: list[DeliveryRecoveryCandidate] = []
+        for source, repository in self._repositories.items():
+            for task in repository.list_failed_deliveries(limit=bounded_limit):
+                try:
+                    inspection = self.inspect(task.task_id)
+                except DeliveryRecoveryError:
+                    continue
+                candidates.append(
+                    DeliveryRecoveryCandidate(
+                        source=source,
+                        task_id=task.task_id,
+                        task_type=task.task_type,
+                        updated_at=task.updated_at,
+                        queue_status=inspection.queue_status,
+                        delivery_status=inspection.delivery_status,
+                        safe_error_code=inspection.safe_error_code,
+                        item_count=len(inspection.items),
+                    )
+                )
+        candidates.sort(key=lambda item: (item.updated_at, item.task_id), reverse=True)
+        return tuple(candidates[:bounded_limit])
 
     def recover(
         self,

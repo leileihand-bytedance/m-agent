@@ -83,6 +83,7 @@ Pydantic AI Agent
 - `app/platform/task_relations.py`：跨 Skill 任务关系层，按入口和 `userid` 维护多任务卡片、版本、材料角色、父子任务和待确认状态；固定区分续改、补料、派生、新建、回答追问、切换、取消和需要确认。明确指令由代码优先处理，模糊场景才调用结构化模型，高置信度结果仍须通过目标任务和状态硬校验。
 - `app/platform/delivery_state.py`：企业微信文本和附件共用的交付状态合同，把 SDK 回执统一收敛为“已确认送达、明确未送达、送达未知”，保存判断依据、时间、本地尝试编号和脱敏回执关联标识。
 - `app/platform/delivery_recovery.py`：只供本机运维使用的交付恢复入口；按原检查点重发、确认已送达或关闭送达未知任务，不重新调用模型。
+- `app/platform/model_reliability.py`：写作、审核和模型搜索共用的调用可靠性合同；统一超时、有限重试、供应商无关安全错误码和不含正文的调用报告，不自动跨供应商切换模型。
 - `app/platform/attachment_delivery.py`：公共附件交付，统一任务目录校验、串行上传、动态超时、上传阶段重试、主动/被动媒体发送、交付状态、运维事件和“处理编号”兜底。进入最终媒体发送后，状态未知不会自动重发。
 - `app/platform/documents/enrichment.py`：扫描 PDF 按需 OCR 以及 PDF/PPTX 逐页渲染；外部文档工具使用绝对命令、隔离环境和资源限制，失败时保留文本解析结果并记录结构化告警。
 - `app/platform/cli.py`：新底座 CLI，可做配置检查和本地消息测试。
@@ -247,6 +248,7 @@ app/platform/builtin_tools.py
 
 ```text
 app/platform/pydantic_runtime.py
+app/platform/model_reliability.py
 ```
 
 当前核心类：
@@ -261,6 +263,7 @@ PydanticAIWriter
 - 使用项目 `.env` 中的模型配置。
 - 读取 skill 规则和 prompt。
 - 要求模型返回 Pydantic 结构化结果。
+- 按公共策略设置请求超时和有限重试，并把供应商异常转换为安全错误码。
 
 当前 direct_report 输出模型：
 
@@ -276,6 +279,9 @@ MODEL_NAME
 MODEL_BASE_URL
 MODEL_API_KEY
 M_AGENT_MODEL_MAX_TOKENS
+M_AGENT_MODEL_TIMEOUT_SECONDS
+M_AGENT_MODEL_MAX_ATTEMPTS
+M_AGENT_MODEL_RETRY_BACKOFF_SECONDS
 ```
 
 是写作底座优先读取的标准配置。旧的：
@@ -298,6 +304,8 @@ M_AGENT_MODEL_MAX_TOKENS=4096
 `app/platform/pydantic_runtime.py` 只要识别到 `deepseek.com`，就会使用 `OpenAIChatModel`，并把写作生成请求地址固定为 `https://api.deepseek.com/v1`。公共 `search_web` 是另一条协议链：同一 DeepSeek Key 和模型通过 `https://api.deepseek.com/anthropic/v1/messages` 声明 `web_search_20250305`，解析服务器返回的搜索结果，再交给 `web_reader` 读取原文。审核 Bot 使用独立模型配置；写作生成、公共搜索和审核三条链路不要混写。
 
 `M_AGENT_MODEL_MAX_TOKENS` 控制单次模型输出上限。默认值为 `4096`。此前写作底座硬编码为 `2048`，DeepSeek 在直报长 prompt、结构化输出和质量校验场景下可能在生成任何可用结果前触顶，导致企业微信侧返回“处理失败”。
+
+模型调用超时默认 `180` 秒，单个阶段默认最多调用 `2` 次、最多允许配置为 `3` 次。超时、限流、连接中断、服务不可用和无效结构化输出可以在预算内重试；鉴权失败不重试。持久任务收到模型层最终失败后以对应安全错误码停止，不能再由任务层把整个工作流重复执行多轮。审核阶段保留各自既定调用预算，但共用相同错误分类。公共搜索同样复用该策略，单次超时上限为 `30` 秒。系统不自动切换供应商。
 
 `deepseek-v4-flash` 默认可能进入 thinking mode，而 Pydantic AI 结构化输出依赖 tool_choice。写作底座对 DeepSeek 模型应通过 `extra_body={"thinking": {"type": "disabled"}}` 关闭 thinking mode，不能只传布尔值 `thinking=False`。
 
@@ -399,14 +407,14 @@ M_AGENT_OPS_BOT_SECRET=
 M_AGENT_OPS_ADMIN_USER_ID=
 M_AGENT_DATA_DIR=../M-Agent-Files
 M_AGENT_OPS_HEARTBEAT_MAX_AGE_SECONDS=180
-M_AGENT_OPS_MONITORED_SERVICES=writing_bot,review_bot
+M_AGENT_OPS_MONITORED_SERVICES=writing_bot,review_bot,rewrite_bot
 M_AGENT_OPS_DAILY_REPORT_HOUR=9
 M_AGENT_OPS_DAILY_REPORT_MINUTE=0
 ```
 
 当前仍需注意的边界：
 
-- 运维 Bot 自身如果进程退出，无法靠自己发送告警；生产阶段应使用 `launchd`、进程管理器或系统级守护来拉起。
+- 运维 Bot 自身无法向自己发送掉线告警，因此由 macOS LaunchAgent 负责异常拉起；管理台和开放前体检同时读取其心跳。
 - 管理后台、政策库更新、银行信息库导入目前是本机维护工具，不属于已接入实时告警的用户入口。
 
 ### 11. 会话状态层

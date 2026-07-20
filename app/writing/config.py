@@ -29,6 +29,9 @@ class WritingBotConfig:
     conversation_dir: Path
     intake_dir: Path | None = None
     model_max_tokens: int = 4096
+    model_timeout_seconds: float = 180.0
+    model_max_attempts: int = 2
+    model_retry_backoff_seconds: float = 1.0
     direct_report_critic_mode: str = "advisory"
     chat_log_enabled: bool = True
     chat_log_dir: Path | None = None
@@ -225,6 +228,21 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         conversation_dir=conversation_dir,
         intake_dir=intake_dir,
         model_max_tokens=model_max_tokens,
+        model_timeout_seconds=max(
+            1.0,
+            float(values.get("M_AGENT_MODEL_TIMEOUT_SECONDS", "180") or "180"),
+        ),
+        model_max_attempts=max(
+            1,
+            min(3, int(values.get("M_AGENT_MODEL_MAX_ATTEMPTS", "2") or "2")),
+        ),
+        model_retry_backoff_seconds=max(
+            0.0,
+            min(
+                30.0,
+                float(values.get("M_AGENT_MODEL_RETRY_BACKOFF_SECONDS", "1") or "1"),
+            ),
+        ),
         direct_report_critic_mode=normalize_direct_report_critic_mode(
             values.get("M_AGENT_DIRECT_REPORT_CRITIC_MODE")
         ),

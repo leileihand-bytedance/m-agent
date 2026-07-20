@@ -8,6 +8,11 @@ from time import perf_counter
 from typing import Generic, TypeVar
 
 from .metrics import ReviewRunMetrics
+from app.platform.model_reliability import (
+    ModelCallError,
+    classify_model_error,
+    is_retryable_model_error,
+)
 
 
 T = TypeVar("T")
@@ -34,10 +39,15 @@ def create_model_message(
     started_at = perf_counter()
     try:
         return client.messages.create(**kwargs)
-    except Exception:
+    except Exception as exc:
         if metrics is not None:
             metrics.record_model_failure(stage)
-        raise
+        safe_error_code = classify_model_error(exc)
+        raise ModelCallError(
+            safe_error_code,
+            attempts=1,
+            retryable=is_retryable_model_error(safe_error_code),
+        ) from exc
     finally:
         if metrics is not None:
             metrics.record_model_elapsed(stage, (perf_counter() - started_at) * 1000)
@@ -55,8 +65,26 @@ async def run_with_retries(
     for attempt in range(max_attempts):
         try:
             value, error = await operation(attempt)
+        except ModelCallError as exc:
+            value, error = None, exc.safe_error_code
+            if not exc.retryable:
+                errors.append(error)
+                return RetryOutcome(
+                    value=None,
+                    errors=tuple(errors),
+                    attempts=attempt + 1,
+                    succeeded=False,
+                )
         except Exception as exc:
-            value, error = None, str(exc)
+            value, error = None, classify_model_error(exc)
+            if not is_retryable_model_error(error):
+                errors.append(error)
+                return RetryOutcome(
+                    value=None,
+                    errors=tuple(errors),
+                    attempts=attempt + 1,
+                    succeeded=False,
+                )
         if error is None:
             return RetryOutcome(
                 value=value,

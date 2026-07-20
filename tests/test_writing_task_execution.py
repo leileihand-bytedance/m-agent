@@ -11,6 +11,7 @@ from app.platform.conversation import ConversationStore
 from app.platform.delivery_state import DeliveryOutcome
 from app.platform.identity import AccessPolicy
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
+from app.platform.model_reliability import ModelCallError
 from app.platform.storage import JobStore
 from app.platform.registry import SkillRegistry
 from app.platform.task_execution import (
@@ -369,6 +370,39 @@ def test_previous_draft_revision_can_enter_persistent_queue(tmp_path: Path):
     request = json.loads(request_path.read_text(encoding="utf-8"))
     assert request["task_relation"] == "continue"
     assert request["route"]["inputs"]["revision"] is True
+
+
+def test_model_failure_uses_safe_code_without_rerunning_whole_task(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    notifications: list[str] = []
+
+    async def processor(_workspace):
+        raise ModelCallError("model_timeout", attempts=2, retryable=True)
+
+    async def notify(_recipient: str, error_code: str, _task_id: str) -> None:
+        notifications.append(error_code)
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        failure_notifier=notify,
+    )
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="model-timeout-message",
+        skill_id="writer1",
+        text="写简报：https://example.com",
+    )
+
+    with pytest.raises(SafeTaskError) as captured:
+        asyncio.run(service.handle(submission.task))
+
+    assert captured.value.safe_error_code == "model_timeout"
+    assert captured.value.retryable is False
+    assert notifications == ["model_timeout"]
 
 
 def test_structured_submission_copies_input_files_into_owned_workspace(tmp_path: Path):

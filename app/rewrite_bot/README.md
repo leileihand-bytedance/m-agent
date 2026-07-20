@@ -39,11 +39,15 @@ M_AGENT_REWRITE_CONVERSATION_DIR     # 可选
 uv run --locked python -m app.rewrite_bot --check-config
 ```
 
-启动：
+生产常驻服务：
 
 ```bash
-uv run --locked python -m app.rewrite_bot
+uv run --locked python scripts/bot_services.py install rewrite
+uv run --locked python scripts/bot_services.py status rewrite
+uv run --locked python scripts/bot_services.py restart rewrite
 ```
+
+直接执行 `uv run --locked python -m app.rewrite_bot` 只用于前台排障，必须先停止常驻 `rewrite` 服务，避免同一企业微信 Bot 重复连接。
 
 测试：
 

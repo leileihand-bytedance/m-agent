@@ -24,6 +24,7 @@ from app.platform.delivery_state import (
 )
 from app.platform.gateway.wecom import format_text_reply
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
+from app.platform.model_reliability import ModelCallError
 from app.platform.storage import JobContext
 from app.platform.task_execution import (
     SafeTaskError,
@@ -234,6 +235,14 @@ class WritingTaskService:
                 self._write_checkpoint(workspace.task_dir, checkpoint)
             except asyncio.CancelledError:
                 raise
+            except ModelCallError as exc:
+                await self._finalize_failure(workspace)
+                await self._notify_failure(
+                    task.user_id,
+                    exc.safe_error_code,
+                    task.task_id,
+                )
+                raise SafeTaskError(exc.safe_error_code, retryable=False) from exc
             except Exception as exc:
                 retryable = task.attempts < task.max_attempts
                 if not retryable:

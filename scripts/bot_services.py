@@ -53,6 +53,18 @@ BOT_SERVICES = {
         module="app.review.main",
         log_prefix="review-bot-service",
     ),
+    "rewrite": BotService(
+        key="rewrite",
+        label="com.magent.rewrite-bot",
+        module="app.rewrite_bot",
+        log_prefix="rewrite-bot-service",
+    ),
+    "ops": BotService(
+        key="ops",
+        label="com.magent.ops-bot",
+        module="app.platform.ops.bot",
+        log_prefix="ops-bot-service",
+    ),
     "admin": BotService(
         key="admin",
         label="com.magent.admin-console",
@@ -360,7 +372,7 @@ def selected_services(value: str) -> tuple[BotService, ...]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="管理写作、审核和管理台常驻服务"
+        description="管理 M-Agent 生产常驻服务"
     )
     parser.add_argument(
         "command",

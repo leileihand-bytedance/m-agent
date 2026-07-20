@@ -216,12 +216,36 @@ def test_parse_launchctl_status_is_concise():
     assert parse_launchctl_status("state = waiting\n") == ("waiting", None)
 
 
-def test_all_services_include_admin_console():
+def test_all_services_include_every_production_process():
     assert [service.key for service in selected_services("all")] == [
         "writing",
         "review",
+        "rewrite",
+        "ops",
         "admin",
     ]
+
+
+def test_rewrite_and_ops_launch_agents_use_dedicated_modules(tmp_path: Path):
+    logs_dir = tmp_path / "M-Agent-Files" / "runtime" / "logs"
+
+    rewrite = build_launch_agent(
+        BOT_SERVICES["rewrite"],
+        project_root=tmp_path / "M-Agent",
+        uv_path=Path("/opt/local/bin/uv"),
+        logs_dir=logs_dir,
+    )
+    ops = build_launch_agent(
+        BOT_SERVICES["ops"],
+        project_root=tmp_path / "M-Agent",
+        uv_path=Path("/opt/local/bin/uv"),
+        logs_dir=logs_dir,
+    )
+
+    assert rewrite["ProgramArguments"][-1] == "app.rewrite_bot"
+    assert rewrite["StandardErrorPath"].endswith("rewrite-bot-service.err.log")
+    assert ops["ProgramArguments"][-1] == "app.platform.ops.bot"
+    assert ops["StandardErrorPath"].endswith("ops-bot-service.err.log")
 
 
 def test_script_can_run_directly_without_pythonpath():
@@ -235,5 +259,5 @@ def test_script_can_run_directly_without_pythonpath():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "管理写作、审核和管理台常驻服务" in result.stdout
+    assert "管理 M-Agent 生产常驻服务" in result.stdout
     assert "admin" in result.stdout

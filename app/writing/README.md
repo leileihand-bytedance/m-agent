@@ -44,6 +44,7 @@
 - DOCX 素材含图片时，图片只提取到任务 `work/` 用于确认存在性，不默认 OCR，也不嵌入综合调研稿；模型材料保留原位置提醒，正文在对应小节保留人工评估提示，连续的同部门提醒合并计数。
 - 扫描 PDF 可只对识别为扫描页的页面按需 OCR；PPTX 在写作链路中仍主要作为文字和结构素材读取。底座可显式渲染页面，不等于已经支持 PPT 视觉审核或版式修改。
 - 结果附件按文件大小设置等待时间并串行上传；最终发送前的明确上传失败可重试，发送已经发起但回执未知时停止自动重发。超限、明确失败或状态未知时都保留本机结果，并向用户返回“处理编号”供管理员定位，详细错误进入运维事件。当前不自动压缩文档图片。
+- 底座统一限制模型单次请求时间和最多尝试次数。超时、限流、连接失败、鉴权失败、服务不可用和结构化响应错误转换为固定安全错误码；模型层重试耗尽后，后台任务不会再从头执行整篇写作，避免重复生成和放大故障。
 - 本地预览可直接打开：
 
 ```text
@@ -85,6 +86,9 @@ WRITING_BOT_SECRET
 M_AGENT_PORTAL_BASE_URL
 M_AGENT_DATA_DIR
 M_AGENT_DOCUMENT_MAX_MB
+M_AGENT_MODEL_TIMEOUT_SECONDS
+M_AGENT_MODEL_MAX_ATTEMPTS
+M_AGENT_MODEL_RETRY_BACKOFF_SECONDS
 M_AGENT_INTAKE_DIR
 M_AGENT_WRITING_TASK_QUEUE_DB
 M_AGENT_TASK_RELATION_DB

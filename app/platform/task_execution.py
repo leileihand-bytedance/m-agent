@@ -483,6 +483,29 @@ class TaskRepository:
         self._notify_transition(record)
         return record
 
+    def list_failed_deliveries(self, *, limit: int = 50) -> tuple[TaskRecord, ...]:
+        """Return only delivery failures that the local recovery service may inspect."""
+
+        bounded_limit = max(1, min(int(limit), 200))
+        allowed_codes = (
+            "delivery_failed",
+            "delivery_not_delivered",
+            "delivery_status_uncertain",
+        )
+        placeholders = ", ".join("?" for _ in allowed_codes)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM tasks
+                WHERE status = 'failed'
+                  AND safe_error_code IN ({placeholders})
+                ORDER BY updated_at DESC, task_id DESC
+                LIMIT ?
+                """,
+                (*allowed_codes, bounded_limit),
+            ).fetchall()
+        return tuple(self._row_to_record(row) for row in rows)
+
     def count_tasks(self) -> int:
         with closing(self._connect()) as conn:
             row = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()

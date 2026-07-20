@@ -247,7 +247,7 @@ def _record_connection_event(
     )
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="材料润色 Bot")
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
@@ -277,11 +277,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     except RuntimeEnvironmentError as exc:
         print(f"错误：{exc}")
-        return
+        return 2
 
     if not config.bot_id or not config.bot_secret:
         print("错误：缺少 M_AGENT_REWRITE_BOT_ID 或 M_AGENT_REWRITE_BOT_SECRET 配置")
-        return
+        return 2
 
     if args.check_config:
         platform_app = PlatformApp.from_config(config.platform_config)
@@ -292,7 +292,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         if route.skill_id != "rewrite":
             print("错误：rewrite Skill 未启用或入口隔离配置无效")
-            return
+            return 2
         print("配置检查通过。")
         print(f"运行环境: {config.runtime_mode}")
         print(f"数据根目录: {config.data_root}")
@@ -302,11 +302,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"会话目录: {config.platform_config.conversation_dir}")
         print(f"任务关系库: {config.platform_config.task_relation_db_path}")
         print(f"待处理原文目录: {config.intake_dir}")
-        return
+        return 0
 
     print("正在连接企业微信材料润色 Bot...", flush=True)
     asyncio.run(run_bot(config))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

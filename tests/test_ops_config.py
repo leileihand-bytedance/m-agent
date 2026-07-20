@@ -56,6 +56,11 @@ def test_ops_load_config_does_not_embed_a_real_admin_default(tmp_path):
     config = load_config(env_path)
 
     assert config.admin_user_id == ""
+    assert config.monitored_services == (
+        "writing_bot",
+        "review_bot",
+        "rewrite_bot",
+    )
 
 
 def test_ops_load_config_uses_single_external_data_root(tmp_path):

@@ -9,6 +9,11 @@ except ImportError:  # pragma: no cover - exercised indirectly in test environme
     ModelSettings = None
 
 from skills.direct_report.schema import DirectReportResult
+from app.platform.model_reliability import (
+    ModelCallPolicy,
+    ModelCallReport,
+    run_model_call,
+)
 
 
 class PydanticAIWriter:
@@ -20,6 +25,10 @@ class PydanticAIWriter:
         skill_dir: Path,
         agent_factory: Callable[[object, type[BaseModel], str, ModelSettings], Any] | None = None,
         model_max_tokens: int = 4096,
+        model_timeout_seconds: float = 180.0,
+        model_max_attempts: int = 2,
+        model_retry_backoff_seconds: float = 1.0,
+        model_call_observer: Callable[[ModelCallReport], object] | None = None,
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -27,6 +36,12 @@ class PydanticAIWriter:
         self.skill_dir = skill_dir
         self.agent_factory = agent_factory
         self.model_max_tokens = model_max_tokens
+        self.model_policy = ModelCallPolicy(
+            timeout_seconds=model_timeout_seconds,
+            max_attempts=model_max_attempts,
+            backoff_seconds=model_retry_backoff_seconds,
+        )
+        self.model_call_observer = model_call_observer
 
     def write(self, payload: dict[str, object]) -> dict[str, object]:
         output_type = self._resolve_output_type(payload)
@@ -47,10 +62,18 @@ class PydanticAIWriter:
     ) -> dict[str, object]:
         """调用同一受控模型，并按调用方提供的 Pydantic 模型返回结果。"""
         agent = self._create_agent(instructions, output_type)
-        result = agent.run_sync(prompt)
-        output = result.output
-        if not isinstance(output, output_type):
-            output = output_type.model_validate(output)
+        def operation() -> BaseModel:
+            result = agent.run_sync(prompt)
+            output = result.output
+            if not isinstance(output, output_type):
+                output = output_type.model_validate(output)
+            return output
+
+        output = run_model_call(
+            operation,
+            policy=self.model_policy,
+            observer=self.model_call_observer,
+        )
         return output.model_dump(mode="json")
 
     def _create_agent(self, instructions: str, output_type: type[BaseModel]) -> Any:
@@ -62,10 +85,15 @@ class PydanticAIWriter:
         if self._is_deepseek():
             model_settings = ModelSettings(
                 max_tokens=self.model_max_tokens,
+                timeout=self.model_policy.timeout_seconds,
                 extra_body={"thinking": {"type": "disabled"}},
             )
         else:
-            model_settings = ModelSettings(max_tokens=self.model_max_tokens, thinking=False)
+            model_settings = ModelSettings(
+                max_tokens=self.model_max_tokens,
+                timeout=self.model_policy.timeout_seconds,
+                thinking=False,
+            )
         if self.agent_factory:
             return self.agent_factory(model, output_type, instructions, model_settings)
 

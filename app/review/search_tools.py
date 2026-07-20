@@ -12,6 +12,7 @@ from typing import Literal
 from typing import Any
 
 from .model_config import build_anthropic_client, resolve_review_llm_config
+from .core.model_runtime import create_model_message
 
 # 搜索数据源配置
 SEARCH_SOURCES: dict[str, dict] = {
@@ -186,7 +187,10 @@ def _fetch_page_llm(url: str) -> str:
     """降级：用 MiniMax LLM 提取页面内容。"""
     client, model = get_client()
     try:
-        response = client.messages.create(
+        response = create_model_message(
+            client,
+            metrics=None,
+            stage="web_content_extraction",
             model=model,
             max_tokens=8192,
             messages=[{

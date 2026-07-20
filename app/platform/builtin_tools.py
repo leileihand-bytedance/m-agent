@@ -13,6 +13,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from app.platform.documents import DocumentService
+from app.platform.model_reliability import ModelCallPolicy, run_model_call
 
 
 MAX_WEB_REDIRECTS = 5
@@ -271,11 +272,17 @@ def search_web(
     model_name: str = "",
     max_results: int = 5,
     requester: Callable[[str, dict[str, object], dict[str, str], int], str] | None = None,
+    model_policy: ModelCallPolicy | None = None,
 ) -> list[dict[str, str]]:
     if not api_key:
         raise RuntimeError("缺少搜索 API 配置，无法调用搜索工具。")
 
     provider = _search_provider(base_url)
+    policy = model_policy or ModelCallPolicy(
+        timeout_seconds=30,
+        max_attempts=2,
+        backoff_seconds=1,
+    )
     if provider == "deepseek":
         if not model_name:
             raise RuntimeError("缺少 DeepSeek 搜索模型配置，无法调用联网搜索。")
@@ -303,8 +310,13 @@ def search_web(
             ],
         }
         request = requester or _default_search_request
-        raw_text = request(search_url, payload, headers, 30)
-        return _extract_deepseek_search_results(raw_text, max_results=max_results)
+        return run_model_call(
+            lambda: _extract_deepseek_search_results(
+                request(search_url, payload, headers, 30),
+                max_results=max_results,
+            ),
+            policy=policy,
+        )
 
     if provider != "minimax":
         raise RuntimeError("当前搜索 API 供应商不支持联网搜索。")
@@ -317,8 +329,10 @@ def search_web(
         "MM-API-Source": "Minimax-MCP",
     }
     request = requester or _default_search_request
-    raw_text = request(search_url, {"q": query}, headers, 30)
-    payload = json.loads(raw_text or "{}")
+    payload = run_model_call(
+        lambda: json.loads(request(search_url, {"q": query}, headers, 30) or "{}"),
+        policy=policy,
+    )
     organic = payload.get("organic", [])
     if not isinstance(organic, list):
         return []
@@ -1006,10 +1020,18 @@ class LLMWriter:
     def write(self, payload: dict[str, object]) -> dict[str, str]:
         prompt = self._build_prompt(payload)
         client = self.client or self._create_client()
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
+        response = run_model_call(
+            lambda: client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=180.0,
+            ),
+            policy=ModelCallPolicy(
+                timeout_seconds=180,
+                max_attempts=2,
+                backoff_seconds=1,
+            ),
         )
         text = self._response_text(response)
         return self._parse_title_body(text)

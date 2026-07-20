@@ -27,6 +27,7 @@ from app.platform.conversation import ConversationStore
 from app.platform.identity import AccessPolicy
 from app.platform.intent import ConversationIntent, classify_conversation_intent, select_draft_version
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
+from app.platform.model_reliability import ModelCallPolicy
 from app.platform.pydantic_runtime import PydanticAIWriter
 from app.platform.registry import SkillRegistry
 from app.platform.router import URL_RE, route_message
@@ -99,6 +100,9 @@ class PlatformApp:
             model_name=config.model_name,
             skill_dir=config.skills_dir,
             model_max_tokens=config.model_max_tokens,
+            model_timeout_seconds=config.model_timeout_seconds,
+            model_max_attempts=config.model_max_attempts,
+            model_retry_backoff_seconds=config.model_retry_backoff_seconds,
         )
         tools = build_platform_tools(config, writer=writer)
         enabled_skill_ids = [skill.id for skill in registry.list_enabled()]
@@ -1199,6 +1203,9 @@ def build_platform_tools(
         model_name=config.model_name,
         skill_dir=config.skills_dir,
         model_max_tokens=config.model_max_tokens,
+        model_timeout_seconds=config.model_timeout_seconds,
+        model_max_attempts=config.model_max_attempts,
+        model_retry_backoff_seconds=config.model_retry_backoff_seconds,
     )
     return {
         "web_reader": read_web_page,
@@ -1208,6 +1215,11 @@ def build_platform_tools(
             base_url=config.search_api_base_url or config.anthropic_base_url,
             model_name=config.model_name,
             max_results=max_results,
+            model_policy=ModelCallPolicy(
+                timeout_seconds=min(config.model_timeout_seconds, 30),
+                max_attempts=config.model_max_attempts,
+                backoff_seconds=config.model_retry_backoff_seconds,
+            ),
         ),
         "policy_search": lambda query, limit=5, category=None: policy_search(
             query,

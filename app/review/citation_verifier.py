@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .model_config import build_anthropic_client
+from .core.model_runtime import create_model_message
 
 def _get_client() -> tuple[Any, str]:
     """获取审核模块使用的 API 客户端。"""
@@ -98,7 +99,10 @@ def verify_citation(summary: str, original: str) -> VerificationResult:
     client, model_name = _get_client()
     prompt = build_citation_prompt(summary, original)
 
-    message = client.messages.create(
+    message = create_model_message(
+        client,
+        metrics=None,
+        stage="citation_verification",
         model=model_name,
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],

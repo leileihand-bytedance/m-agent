@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from app.review.time_calibration import get_beijing_time
 from app.review.citation_verifier import extract_original_text, verify_citation
 from app.review.search_tools import SEARCH_SOURCES, search_web, fetch_page, identify_content_source, SearchResult, get_client
+from app.review.core.model_runtime import create_model_message
 
 
 async def review_with_search(
@@ -335,7 +336,10 @@ def _llm_compare_multiple(summary: str, candidates_text: str) -> str | None:
 }}"""
 
     try:
-        response = client.messages.create(
+        response = create_model_message(
+            client,
+            metrics=None,
+            stage="search_source_verification",
             model=model,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
@@ -420,7 +424,10 @@ def _llm_compare_with_source(summary: str, original: str, source_title: str) -> 
 - "持续加强"/"进一步深化"等修饰词被替换为"建立"等"""
 
     try:
-        response = client.messages.create(
+        response = create_model_message(
+            client,
+            metrics=None,
+            stage="search_summary_verification",
             model=model,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],

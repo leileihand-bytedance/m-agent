@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import re
+import secrets
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
@@ -22,6 +23,11 @@ from app.admin.services import (
 )
 from app.platform.config import DEFAULT_ENV_PATH, parse_env_file
 from app.platform.data_paths import DataPaths, configured_path
+from app.platform.delivery_recovery import (
+    DeliveryRecoveryCandidate,
+    DeliveryRecoveryService,
+    build_default_service as build_delivery_recovery_service,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +56,9 @@ def render_dashboard(
     paths: AdminPaths = DEFAULT_PATHS,
     *,
     show_sensitive: bool = False,
+    delivery_recoveries: tuple[DeliveryRecoveryCandidate, ...] = (),
+    delivery_recovery_error: bool = False,
+    csrf_token: str = "",
 ) -> str:
     overview = build_project_overview(paths)
     skills = list_skills(paths.skills_dir)
@@ -59,7 +68,9 @@ def render_dashboard(
         '<a href="#users">权限</a><a href="#jobs">任务</a>' if show_sensitive else ""
     )
     sensitive_sections = (
-        _render_users_section(users) + _render_jobs_section(jobs) if show_sensitive else ""
+        _render_users_section(users, csrf_token) + _render_jobs_section(jobs)
+        if show_sensitive
+        else ""
     )
     sensitive_toggle = (
         '<a class="sensitive-access-link" href="/">隐藏用户权限与任务记录</a>'
@@ -666,6 +677,11 @@ def render_dashboard(
       border-color: var(--accent);
       color: #fff;
     }}
+    button.danger {{
+      border-color: #f0b4ae;
+      color: var(--danger);
+    }}
+    .action-cluster {{ display: flex; flex-wrap: wrap; gap: 6px; }}
     input[type="text"] {{
       width: 100%;
       min-height: 34px;
@@ -742,6 +758,7 @@ def render_dashboard(
     <a href="#modules">板块</a>
     <a href="#todos">待办</a>
     <a href="#runtime">运行</a>
+    <a href="#delivery-recovery">交付恢复</a>
     <a href="#changes">更新</a>
     <a href="#skills">Skills</a>
     {sensitive_nav}
@@ -751,8 +768,9 @@ def render_dashboard(
     {_render_modules_section(overview)}
     {_render_todos_section(overview)}
     {_render_runtime_section(overview)}
+    {_render_delivery_recovery_section(delivery_recoveries, delivery_recovery_error, csrf_token)}
     {_render_changes_section(overview)}
-    {_render_skills_section(skills)}
+    {_render_skills_section(skills, csrf_token)}
     <div class="sensitive-access">{sensitive_toggle}</div>
     {sensitive_sections}
   </main>
@@ -935,7 +953,17 @@ def render_dashboard(
 </html>"""
 
 
-def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHandler]:
+def create_handler(
+    paths: AdminPaths = DEFAULT_PATHS,
+    *,
+    recovery_service_factory: Callable[[], DeliveryRecoveryService] | None = None,
+    csrf_token: str | None = None,
+) -> type[BaseHTTPRequestHandler]:
+    recovery_factory = recovery_service_factory or (
+        lambda: build_delivery_recovery_service(project_root=PROJECT_ROOT)
+    )
+    expected_csrf_token = csrf_token or secrets.token_urlsafe(32)
+
     class AdminHandler(BaseHTTPRequestHandler):
         server_version = "MAgentAdmin/0.1"
 
@@ -946,12 +974,27 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
                 return
             query = parse_qs(request.query, keep_blank_values=True)
             show_sensitive = query.get("show_sensitive") == ["1"]
-            self._send_html(render_dashboard(paths, show_sensitive=show_sensitive))
+            recovery_error = False
+            try:
+                recoveries = recovery_factory().list_pending()
+            except Exception:  # noqa: BLE001
+                recoveries = ()
+                recovery_error = True
+            self._send_html(
+                render_dashboard(
+                    paths,
+                    show_sensitive=show_sensitive,
+                    delivery_recoveries=recoveries,
+                    delivery_recovery_error=recovery_error,
+                    csrf_token=expected_csrf_token,
+                )
+            )
 
         def do_POST(self) -> None:
             handlers: dict[str, Callable[[dict[str, list[str]]], None]] = {
                 "/skills/toggle": self._handle_skill_toggle,
                 "/users/update": self._handle_user_update,
+                "/delivery/recover": self._handle_delivery_recovery,
             }
             handler = handlers.get(self.path)
             if handler is None:
@@ -960,12 +1003,18 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
 
             try:
                 form = self._read_form()
+                _require_csrf(form, expected_csrf_token)
                 handler(form)
             except Exception as exc:  # noqa: BLE001
                 self._send_text(f"操作失败：{exc}", HTTPStatus.BAD_REQUEST)
                 return
             self.send_response(HTTPStatus.SEE_OTHER)
-            redirect = "/?show_sensitive=1#users" if self.path == "/users/update" else "/"
+            if self.path == "/users/update":
+                redirect = "/?show_sensitive=1#users"
+            elif self.path == "/delivery/recover":
+                redirect = "/#delivery-recovery"
+            else:
+                redirect = "/"
             self.send_header("Location", redirect)
             self.end_headers()
 
@@ -985,8 +1034,25 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
             allowed_skills = [item.strip() for item in raw_skills.split(",") if item.strip()]
             set_user_skills(paths.policy_path, userid, allowed_skills)
 
+        def _handle_delivery_recovery(self, form: dict[str, list[str]]) -> None:
+            task_id = _one(form, "task_id").strip()
+            action = _one(form, "action").strip()
+            if not task_id:
+                raise ValueError("处理编号不能为空")
+            if action not in {"retry", "confirm-delivered", "close"}:
+                raise ValueError("不支持的交付恢复操作")
+            confirm_unknown = form.get("confirm_unknown_not_delivered") == ["true"]
+            recovery_factory().recover(
+                task_id,
+                action=action,
+                confirm_unknown_not_delivered=confirm_unknown,
+                operator="admin-console",
+            )
+
         def _read_form(self) -> dict[str, list[str]]:
             length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 16 * 1024:
+                raise ValueError("请求大小无效")
             body = self.rfile.read(length).decode("utf-8")
             return parse_qs(body, keep_blank_values=True)
 
@@ -994,6 +1060,14 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
             data = html.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "form-action 'self'; frame-ancestors 'none'",
+            )
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -1002,6 +1076,8 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
             data = text.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -1478,12 +1554,93 @@ def _render_changes_section(overview: ProjectOverview) -> str:
 </section>"""
 
 
-def _render_skills_section(skills: object) -> str:
+def _render_delivery_recovery_section(
+    candidates: tuple[DeliveryRecoveryCandidate, ...],
+    load_failed: bool,
+    csrf_token: str,
+) -> str:
+    if load_failed:
+        body = '<div class="empty">交付状态读取失败，请查看管理台服务日志。</div>'
+    elif not candidates:
+        body = '<div class="empty">当前没有需要人工处理的交付任务。</div>'
+    else:
+        rows = "\n".join(
+            _render_delivery_recovery_row(candidate, csrf_token)
+            for candidate in candidates
+        )
+        body = f"""<table>
+  <thead>
+    <tr>
+      <th style="width: 18%">处理编号</th>
+      <th style="width: 12%">来源</th>
+      <th style="width: 16%">交付状态</th>
+      <th style="width: 18%">更新时间</th>
+      <th>人工操作</th>
+    </tr>
+  </thead>
+  <tbody>{rows}</tbody>
+</table>"""
+    return f"""<section id="delivery-recovery">
+  <div class="section-head">
+    <div>
+      <h2>交付恢复</h2>
+      <p class="hint">只处理已经生成、但企业微信交付失败或状态未知的结果；不会重新调用模型。送达未知必须先人工核实。</p>
+    </div>
+  </div>
+  {body}
+</section>"""
+
+
+def _render_delivery_recovery_row(
+    candidate: DeliveryRecoveryCandidate,
+    csrf_token: str,
+) -> str:
+    status_labels = {
+        "confirmed_not_delivered": "明确未送达",
+        "delivery_unknown": "送达未知",
+    }
+    source_labels = {"writing": "写作", "review": "审核"}
+    status = status_labels.get(candidate.delivery_status, candidate.delivery_status)
+    source = source_labels.get(candidate.source, candidate.source)
+    hidden = (
+        _csrf_input(csrf_token)
+        + f'<input type="hidden" name="task_id" value="{escape(candidate.task_id)}">'
+    )
+    if candidate.delivery_status == "confirmed_not_delivered":
+        actions = f"""<form class="inline" method="post" action="/delivery/recover" onsubmit="return confirm('确认按原结果重新发送？系统不会重新生成内容。')">
+  {hidden}<input type="hidden" name="action" value="retry">
+  <button class="primary" type="submit">重新发送</button>
+</form>"""
+    else:
+        actions = f"""<div class="action-cluster">
+<form class="inline" method="post" action="/delivery/recover" onsubmit="return confirm('已向用户核实确实没有收到结果，并重新发送？')">
+  {hidden}<input type="hidden" name="action" value="retry"><input type="hidden" name="confirm_unknown_not_delivered" value="true">
+  <button class="primary" type="submit">确认未收到并重发</button>
+</form>
+<form class="inline" method="post" action="/delivery/recover" onsubmit="return confirm('确认用户实际已经收到结果？')">
+  {hidden}<input type="hidden" name="action" value="confirm-delivered">
+  <button type="submit">确认已送达</button>
+</form>
+<form class="inline" method="post" action="/delivery/recover" onsubmit="return confirm('关闭后系统不会再自动处理这项交付，确认继续？')">
+  {hidden}<input type="hidden" name="action" value="close">
+  <button class="danger" type="submit">关闭未知状态</button>
+</form>
+</div>"""
+    return f"""<tr>
+  <td data-label="处理编号"><strong>{escape(candidate.task_id)}</strong><br><span class="muted">{escape(candidate.task_type)}</span></td>
+  <td data-label="来源">{escape(source)}<br><span class="muted">{candidate.item_count} 个交付项</span></td>
+  <td data-label="交付状态"><span class="status status-focus">{escape(status)}</span><br><code>{escape(candidate.safe_error_code)}</code></td>
+  <td data-label="更新时间">{escape(candidate.updated_at)}</td>
+  <td data-label="人工操作">{actions}</td>
+</tr>"""
+
+
+def _render_skills_section(skills: object, csrf_token: str = "") -> str:
     skill_list = list(skills)
     if not skill_list:
         body = '<div class="empty">暂无 Skill</div>'
     else:
-        rows = "\n".join(_render_skill_row(skill) for skill in skill_list)
+        rows = "\n".join(_render_skill_row(skill, csrf_token) for skill in skill_list)
         body = f"""<table>
   <thead>
     <tr>
@@ -1508,7 +1665,7 @@ def _render_skills_section(skills: object) -> str:
 </section>"""
 
 
-def _render_skill_row(skill: object) -> str:
+def _render_skill_row(skill: object, csrf_token: str = "") -> str:
     enabled = bool(getattr(skill, "enabled"))
     status_class = "status-on" if enabled else "status-off"
     status_text = "开启" if enabled else "关闭"
@@ -1524,6 +1681,7 @@ def _render_skill_row(skill: object) -> str:
   <td data-label="工作流">{escape(str(getattr(skill, "workflow")))}</td>
   <td data-label="操作">
     <form class="inline" method="post" action="/skills/toggle">
+      {_csrf_input(csrf_token)}
       <input type="hidden" name="skill_id" value="{escape(str(getattr(skill, "id")))}">
       <input type="hidden" name="enabled" value="{next_enabled}">
       <button type="submit">{action_text}</button>
@@ -1532,11 +1690,14 @@ def _render_skill_row(skill: object) -> str:
 </tr>"""
 
 
-def _render_users_section(users: dict[str, list[str]]) -> str:
+def _render_users_section(users: dict[str, list[str]], csrf_token: str = "") -> str:
     if not users:
         body = '<div class="empty">暂无用户权限配置</div>'
     else:
-        rows = "\n".join(_render_user_row(userid, skills) for userid, skills in sorted(users.items()))
+        rows = "\n".join(
+            _render_user_row(userid, skills, csrf_token)
+            for userid, skills in sorted(users.items())
+        )
         body = f"""<table>
   <thead>
     <tr>
@@ -1558,7 +1719,7 @@ def _render_users_section(users: dict[str, list[str]]) -> str:
 </section>"""
 
 
-def _render_user_row(userid: str, skills: list[str]) -> str:
+def _render_user_row(userid: str, skills: list[str], csrf_token: str = "") -> str:
     skills_text = ", ".join(skills)
     form_id = f"user-form-{_html_id(userid)}"
     return f"""<tr>
@@ -1568,6 +1729,7 @@ def _render_user_row(userid: str, skills: list[str]) -> str:
   </td>
   <td data-label="操作">
     <form id="{form_id}" method="post" action="/users/update">
+      {_csrf_input(csrf_token)}
       <input type="hidden" name="userid" value="{escape(userid)}">
       <button class="primary" type="submit">保存</button>
     </form>
@@ -1625,6 +1787,16 @@ def _one(form: dict[str, list[str]], key: str) -> str:
     if not values:
         raise ValueError(f"缺少参数：{key}")
     return values[0]
+
+
+def _csrf_input(token: str) -> str:
+    return f'<input type="hidden" name="csrf_token" value="{escape(token)}">'
+
+
+def _require_csrf(form: dict[str, list[str]], expected_token: str) -> None:
+    provided = form.get("csrf_token", [""])[0]
+    if not expected_token or not secrets.compare_digest(provided, expected_token):
+        raise ValueError("页面令牌已失效，请刷新后重试")
 
 
 def _html_id(value: str) -> str:

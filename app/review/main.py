@@ -2110,6 +2110,11 @@ async def run_review_bot(config: ReviewConfig) -> None:
             ),
         }
         message = messages.get(error_code)
+        if message is None and error_code.startswith("model_"):
+            message = (
+                "模型服务暂时不可用，审核任务已经安全停止并提醒管理员排查。"
+                f"处理编号：{task_id}"
+            )
         if message:
             await send_active_text(recipient, message, label="审核任务异常提示")
 
@@ -2649,7 +2654,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         heartbeat_task.cancel()
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M-Agent 智能审核 Bot")
     parser.add_argument("--check-config", action="store_true", help="只检查本地配置")
     parser.add_argument(
@@ -2681,7 +2686,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     except RuntimeEnvironmentError as exc:
         print(f"错误：{exc}")
-        return
+        return 2
 
     # 配置结构化日志
     setup_logging(
@@ -2690,6 +2695,13 @@ def main(argv: list[str] | None = None) -> None:
         max_bytes=config.log_max_bytes,
     )
     redirect_stdout_to_logging(logger)
+
+    if not config.wecom_bot_id or not config.wecom_bot_secret:
+        logger.error(
+            "缺少 REVIEW_BOT_ID/SECRET 或 WECOM_BOT_ID/SECRET 配置。",
+            extra=log_extra("system", "system"),
+        )
+        return 2
 
     if args.check_config:
         logger.info("配置检查通过。", extra=log_extra("system", "system"))
@@ -2708,11 +2720,12 @@ def main(argv: list[str] | None = None) -> None:
                 "管理员: %s (%s)", config.admin_name, config.admin_user_id,
                 extra=log_extra("system", "system"),
             )
-        return
+        return 0
 
     logger.info("正在连接企业微信审核 Bot。按 Ctrl+C 可停止。", extra=log_extra("system", "system"))
     asyncio.run(run_review_bot(config))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

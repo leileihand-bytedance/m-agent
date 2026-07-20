@@ -1,11 +1,14 @@
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.pydantic_runtime import PydanticAIWriter
 from skills.direct_report.schema import DirectReportResult
 from skills.rewrite.schema import RewriteResult
 from pydantic import BaseModel
+from app.platform.model_reliability import ModelCallError
 
 
 class _FakeRunResult:
@@ -26,6 +29,78 @@ class _FakeAgent:
 class _RelationOutput(BaseModel):
     relation: str
     confidence: float
+
+
+class _FlakyAgent:
+    def __init__(self, output, errors):
+        self.output = output
+        self.errors = list(errors)
+        self.calls = 0
+
+    def run_sync(self, _prompt):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return _FakeRunResult(self.output)
+
+
+def test_pydantic_writer_uses_shared_timeout_and_bounded_retry():
+    fake_agent = _FlakyAgent(
+        _RelationOutput(relation="continue", confidence=0.9),
+        [TimeoutError("provider timeout")],
+    )
+    settings = {}
+
+    def factory(model, output_type, instructions, model_settings=None):
+        settings.update(model_settings or {})
+        return fake_agent
+
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=factory,
+        model_timeout_seconds=45,
+        model_max_attempts=2,
+        model_retry_backoff_seconds=0,
+    )
+
+    result = writer.run_structured(
+        instructions="判断任务关系",
+        prompt="继续修改",
+        output_type=_RelationOutput,
+    )
+
+    assert result["relation"] == "continue"
+    assert fake_agent.calls == 2
+    assert settings["timeout"] == 45
+
+
+def test_pydantic_writer_does_not_retry_auth_failure():
+    fake_agent = _FlakyAgent(
+        _RelationOutput(relation="continue", confidence=0.9),
+        [RuntimeError("401 credential rejected")],
+    )
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=lambda *args: fake_agent,
+        model_max_attempts=3,
+        model_retry_backoff_seconds=0,
+    )
+
+    with pytest.raises(ModelCallError) as captured:
+        writer.run_structured(
+            instructions="判断任务关系",
+            prompt="继续修改",
+            output_type=_RelationOutput,
+        )
+
+    assert fake_agent.calls == 1
+    assert captured.value.safe_error_code == "model_auth_failed"
 
 
 def test_pydantic_writer_runs_generic_structured_classification():

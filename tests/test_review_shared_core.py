@@ -26,6 +26,7 @@ from app.review.rules.profiles import (
     NEICAN_PROFILE,
     REVIEW_PROFILES,
 )
+from app.platform.model_reliability import ModelCallError
 
 
 class _TextBlock:
@@ -215,13 +216,16 @@ def test_shared_model_runtime_records_stage_calls_and_failures() -> None:
     assert metrics.model_failures == 0
 
     failed_client = _Client(error=RuntimeError("network"))
-    with pytest.raises(RuntimeError, match="network"):
+    with pytest.raises(ModelCallError) as captured:
         create_model_message(
             failed_client,
             metrics=metrics,
             stage="whole_document_logic",
             model="fake-model",
         )
+
+    assert captured.value.safe_error_code == "model_call_failed"
+    assert "network" not in str(captured.value)
 
     assert metrics.model_calls == 2
     assert metrics.model_failures == 1
@@ -244,6 +248,21 @@ def test_shared_retry_stops_after_first_success_without_extra_call() -> None:
     assert outcome.errors == ("invalid JSON",)
     assert outcome.attempts == 2
     assert attempts == [0, 1]
+
+
+def test_shared_retry_stops_on_unknown_exception() -> None:
+    attempts: list[int] = []
+
+    async def operation(attempt: int) -> tuple[list[str], str | None]:
+        attempts.append(attempt)
+        raise RuntimeError("unexpected implementation detail")
+
+    outcome = asyncio.run(run_with_retries(operation, max_attempts=3))
+
+    assert not outcome.succeeded
+    assert outcome.errors == ("model_call_failed",)
+    assert outcome.attempts == 1
+    assert attempts == [0]
 
 
 def test_general_text_profile_uses_shared_runtime_without_extra_model_call(

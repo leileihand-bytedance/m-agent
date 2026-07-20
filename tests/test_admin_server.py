@@ -3,9 +3,12 @@ import os
 import re
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.admin.server import AdminPaths, render_dashboard  # noqa: E402
+from app.admin.server import AdminPaths, _require_csrf, render_dashboard  # noqa: E402
+from app.platform.delivery_recovery import DeliveryRecoveryCandidate  # noqa: E402
 
 
 def _write_skill(root: Path, skill_id: str, *, enabled: bool) -> None:
@@ -195,6 +198,61 @@ def test_render_dashboard_does_not_show_dedicated_review_capability_statistics(t
     assert 'href="#review-statistics"' not in html
     assert '<section id="review-statistics">' not in html
     assert "审核模块统计" not in html
+
+
+def test_render_dashboard_shows_safe_delivery_recovery_actions(tmp_path):
+    pending = (
+        DeliveryRecoveryCandidate(
+            source="writing",
+            task_id="task-safe-001",
+            task_type="writing_writer1",
+            updated_at="2026-07-20T09:00:00+00:00",
+            queue_status="failed",
+            delivery_status="delivery_unknown",
+            safe_error_code="delivery_status_uncertain",
+            item_count=2,
+        ),
+        DeliveryRecoveryCandidate(
+            source="review",
+            task_id="task-safe-002",
+            task_type="review_docx",
+            updated_at="2026-07-20T08:00:00+00:00",
+            queue_status="failed",
+            delivery_status="confirmed_not_delivered",
+            safe_error_code="delivery_not_delivered",
+            item_count=1,
+        ),
+    )
+
+    html = render_dashboard(
+        AdminPaths(
+            skills_dir=tmp_path / "skills",
+            policy_path=tmp_path / "policy.yaml",
+            jobs_dir=tmp_path / "jobs",
+            project_root=tmp_path,
+        ),
+        delivery_recoveries=pending,
+        csrf_token="safe-csrf-token",
+    )
+
+    assert 'id="delivery-recovery"' in html
+    assert "task-safe-001" in html
+    assert "送达未知" in html
+    assert "确认未收到并重发" in html
+    assert "确认已送达" in html
+    assert "关闭未知状态" in html
+    assert "task-safe-002" in html
+    assert "明确未送达" in html
+    assert 'name="csrf_token" value="safe-csrf-token"' in html
+    assert "user-1" not in html
+    assert "已经生成的结果" not in html
+
+
+def test_admin_post_actions_require_matching_page_token():
+    _require_csrf({"csrf_token": ["expected"]}, "expected")
+
+    with pytest.raises(ValueError, match="刷新"):
+        _require_csrf({"csrf_token": ["wrong"]}, "expected")
 
 
 def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(tmp_path):

@@ -391,6 +391,9 @@ def test_build_platform_config_uses_writing_bot_runtime_settings(tmp_path):
         bank_db_path=tmp_path / "bank" / "bank.sqlite3",
         conversation_dir=tmp_path / "conversations",
         model_max_tokens=6144,
+        model_timeout_seconds=90,
+        model_max_attempts=3,
+        model_retry_backoff_seconds=2.5,
         direct_report_critic_mode="advisory",
         chat_log_enabled=False,
         chat_log_dir=tmp_path / "chat_logs",
@@ -405,6 +408,9 @@ def test_build_platform_config_uses_writing_bot_runtime_settings(tmp_path):
     assert platform_config.model_name == "MiniMax-M2.7"
     assert platform_config.anthropic_api_key == "api-key"
     assert platform_config.model_max_tokens == 6144
+    assert platform_config.model_timeout_seconds == 90
+    assert platform_config.model_max_attempts == 3
+    assert platform_config.model_retry_backoff_seconds == 2.5
     assert platform_config.direct_report_critic_mode == "advisory"
     assert platform_config.chat_log_enabled is False
     assert platform_config.chat_log_dir == tmp_path / "chat_logs"
@@ -428,6 +434,9 @@ def test_writing_load_config_prefers_model_api_settings_over_legacy_anthropic(tm
                 "MODEL_BASE_URL=https://api.deepseek.com/v1",
                 "MODEL_API_KEY=model-key",
                 "M_AGENT_MODEL_MAX_TOKENS=6144",
+                "M_AGENT_MODEL_TIMEOUT_SECONDS=90",
+                "M_AGENT_MODEL_MAX_ATTEMPTS=3",
+                "M_AGENT_MODEL_RETRY_BACKOFF_SECONDS=2.5",
                 "M_AGENT_DIRECT_REPORT_CRITIC_MODE=off",
                 "M_AGENT_CHAT_LOG_ENABLED=false",
                 "M_AGENT_CHAT_LOG_DIR=custom-writing-chat-logs",
@@ -447,6 +456,9 @@ def test_writing_load_config_prefers_model_api_settings_over_legacy_anthropic(tm
     assert config.anthropic_base_url == "https://api.deepseek.com/v1"
     assert config.anthropic_api_key == "model-key"
     assert config.model_max_tokens == 6144
+    assert config.model_timeout_seconds == 90
+    assert config.model_max_attempts == 3
+    assert config.model_retry_backoff_seconds == 2.5
     assert config.direct_report_critic_mode == "off"
     assert config.chat_log_enabled is False
     assert config.chat_log_dir == Path(__file__).resolve().parent.parent / "custom-writing-chat-logs"

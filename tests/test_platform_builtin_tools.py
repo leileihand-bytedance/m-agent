@@ -452,6 +452,25 @@ def test_search_web_calls_deepseek_native_web_search_and_normalizes_results():
     ]
 
 
+def test_search_web_retries_one_transient_provider_timeout():
+    calls = 0
+
+    def requester(_url, _payload, _headers, _timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("temporary")
+        return json.dumps({"organic": []})
+
+    assert search_web(
+        "小微企业融资",
+        api_key="test-key",
+        base_url="https://api.minimaxi.com/anthropic",
+        requester=requester,
+    ) == []
+    assert calls == 2
+
+
 def test_search_web_rejects_unsupported_search_provider():
     try:
         search_web(

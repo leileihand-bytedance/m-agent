@@ -17,7 +17,11 @@ class OpsBotConfig:
     chat_log_dir: Path
     state_path: Path
     heartbeat_dir: Path
-    monitored_services: tuple[str, ...] = ("writing_bot", "review_bot")
+    monitored_services: tuple[str, ...] = (
+        "writing_bot",
+        "review_bot",
+        "rewrite_bot",
+    )
     heartbeat_max_age_seconds: int = 180
     daily_report_hour: int = 9
     daily_report_minute: int = 0
@@ -82,4 +86,4 @@ def _int_from_env(raw: str | None, default: int) -> int:
 
 def _services_from_env(raw: str | None) -> tuple[str, ...]:
     services = tuple(item.strip() for item in str(raw or "").split(",") if item.strip())
-    return services or ("writing_bot", "review_bot")
+    return services or ("writing_bot", "review_bot", "rewrite_bot")

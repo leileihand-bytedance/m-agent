@@ -73,14 +73,23 @@ uv run --locked pytest tests/test_platform_runtime_environment.py tests/test_pla
 
 ### 生产常驻服务交付
 
-写作、审核和本机管理台由 macOS LaunchAgent 托管。修改 `scripts/bot_services.py` 或常驻服务文档时，至少运行：
+写作、审核、材料润色、运维和本机管理台由 macOS LaunchAgent 托管。修改 `scripts/bot_services.py` 或常驻服务文档时，至少运行：
 
 ```bash
 uv run --locked pytest tests/test_bot_services.py tests/test_platform_runtime_environment.py tests/test_project_documentation.py -v
 uv run --locked python scripts/project_docs.py check
 ```
 
-常驻服务只能在任务分支完成离线测试，不能指向任务工作区或连接生产 Bot。代码通过 `finish-task` 合并并推送到 `main` 后，才在 `main` 执行生产重启和验收：只影响写作时重启 `writing`，只影响审核时重启 `review`，只影响管理台时重启 `admin`；公共底座、公共配置或依赖变化时先执行 `uv sync --locked`，再重启 `all`。重启后必须确认 `scripts/bot_services.py status` 显示运行中；Bot 还要确认对应心跳恢复更新，写作 Bot 另需确认本地素材入口端口恢复监听，管理台需确认 `127.0.0.1:8787` 返回成功。服务安装、启停和日志位置以 `docs/operations/bots.md` 为准。
+常驻服务只能在任务分支完成离线测试，不能指向任务工作区或连接生产 Bot。代码通过 `finish-task` 合并并推送到 `main` 后，才在 `main` 执行生产重启和验收：按影响范围分别重启 `writing`、`review`、`rewrite`、`ops` 或 `admin`；公共底座、公共配置或依赖变化时先执行 `uv sync --locked`，再重启 `all`。重启后必须确认 `scripts/bot_services.py status all` 中五项均运行；四个 Bot 还要确认对应心跳恢复更新，写作 Bot 另需确认本地素材入口端口恢复监听，管理台需确认 `127.0.0.1:8787` 返回成功。服务安装、启停和日志位置以 `docs/operations/bots.md` 为准。
+
+合并前后分别运行离线和生产只读准备度检查：
+
+```bash
+uv run --locked python scripts/platform_readiness.py offline
+uv run --locked python scripts/platform_readiness.py production
+```
+
+离线模式自动验证重复消息幂等、多个用户隔离调度和进程重启后的租约恢复；生产模式在此基础上核对五个 LaunchAgent、四个 Bot 心跳、写作/审核 SQLite 完整性和待人工恢复交付数量。它不替代专用测试 Bot 的真实企业微信发送故障验收。
 
 ## 测试分层
 
@@ -109,15 +118,23 @@ uv run --locked pytest tests/test_admin_services.py tests/test_admin_server.py -
 uv run --locked python scripts/project_docs.py check
 ```
 
-重点验证五层架构完整性、关系端点全部属于已登记能力、仓库内每个已安装 Skill 均映射到架构节点、功能状态随 TODO/Skill/代码证据变化、写作/审核/材料润色/运维四个 Bot 的心跳降级、本地 `vis-network` 版本和许可证存在、页面不依赖 CDN、写作统计只读 `status.json`、审核总量兼容 `meta.md`/`meta.json`/`output/report.md`、八类审核子能力能按任务类型独立统计处理/交付/耗时/模型调用/问题数量且不读取结果正文、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
+重点验证架构节点和关系端点完整、仓库内每个已安装 Skill 均映射到状态清单、功能状态随 TODO/Skill/代码证据变化、写作/审核/材料润色/运维四个 Bot 的心跳降级、原生 SVG 页面不依赖 CDN、写作统计只读 `status.json`、审核总量兼容历史任务、交付恢复不读取正文和路径、状态转换受限且表单校验 CSRF、Git 查询固定且只读、动态文字全部转义，以及页面不展示密钥或材料正文。涉及关系图布局时，还要用浏览器分别检查桌面和手机尺寸，确认画布非空、筛选和双视图切换正常、文字与控件不重叠。
 
 ### 1. 平台单元测试
 
 验证底座区：
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_delivery_recovery.py tests/test_platform_model_reliability.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_platform_readiness.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
 ```
+
+修改模型调用、结构化输出或联网搜索适配时，至少运行：
+
+```bash
+uv run --locked pytest tests/test_platform_model_reliability.py tests/test_platform_pydantic_runtime.py tests/test_platform_builtin_tools.py tests/test_platform_app.py tests/test_writing_task_execution.py tests/test_review_shared_core.py tests/test_review_task_execution.py -v
+```
+
+重点确认请求超时有明确上限，超时、限流、连接、鉴权、服务不可用和结构化响应错误使用固定安全错误码；只有可重试错误在最多三次的预算内重试，鉴权错误立即停止，任务层不会在模型层重试耗尽后重新执行整项任务。日志和用户提示不得包含密钥、供应商响应正文或堆栈。
 
 修改公共任务组装内核时，至少额外运行：
 

@@ -1352,7 +1352,10 @@ def review_text(
         try:
             client, model_name = _get_anthropic_client()
             prompt = _build_prompt(rules_text, paragraphs, filename)
-            message = client.messages.create(
+            message = create_model_message(
+                client,
+                metrics=None,
+                stage="legacy_semantic_review",
                 model=model_name,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],

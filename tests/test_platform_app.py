@@ -990,17 +990,12 @@ def test_build_platform_tools_passes_model_name_to_search(monkeypatch, tmp_path)
 
     tools["search"]("微众银行", max_results=3)
 
-    assert calls == [
-        (
-            "微众银行",
-            {
-                "api_key": "deepseek-key",
-                "base_url": "https://api.deepseek.com/anthropic",
-                "model_name": "deepseek-v4-flash",
-                "max_results": 3,
-            },
-        )
-    ]
+    assert calls[0][0] == "微众银行"
+    assert calls[0][1]["api_key"] == "deepseek-key"
+    assert calls[0][1]["base_url"] == "https://api.deepseek.com/anthropic"
+    assert calls[0][1]["model_name"] == "deepseek-v4-flash"
+    assert calls[0][1]["max_results"] == 3
+    assert calls[0][1]["model_policy"].max_attempts == 2
 
 
 def test_platform_app_runs_writer1_end_to_end_with_policy_materials(tmp_path):

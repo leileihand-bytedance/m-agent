@@ -71,6 +71,9 @@ def build_platform_config(config) -> PlatformConfig:
         bank_db_path=config.bank_db_path,
         conversation_dir=config.conversation_dir,
         model_max_tokens=config.model_max_tokens,
+        model_timeout_seconds=config.model_timeout_seconds,
+        model_max_attempts=config.model_max_attempts,
+        model_retry_backoff_seconds=config.model_retry_backoff_seconds,
         direct_report_critic_mode=config.direct_report_critic_mode,
         chat_log_enabled=config.chat_log_enabled,
         chat_log_dir=config.chat_log_dir,
@@ -1259,6 +1262,8 @@ async def run_bot(config) -> None:
             "invalid_task_payload": "写作任务状态异常，已经提醒管理员排查。",
         }
         message = messages.get(error_code)
+        if message is None and error_code.startswith("model_"):
+            message = "模型服务暂时不可用，任务已经安全停止并提醒管理员排查。"
         if message:
             await _send_active_writing_text(
                 ws_client,
@@ -1434,7 +1439,7 @@ async def run_bot(config) -> None:
         portal_server.server_close()
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="直报写作 Bot")
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
@@ -1464,11 +1469,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     except RuntimeEnvironmentError as exc:
         print(f"错误：{exc}")
-        return
+        return 2
 
     if not config.wecom_bot_id or not config.wecom_bot_secret:
         print("错误：缺少 WRITING_BOT_ID 或 WRITING_BOT_SECRET 配置")
-        return
+        return 2
 
     if args.check_config:
         platform_config = build_platform_config(config)
@@ -1478,6 +1483,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Bot ID: {mask_config_value(config.wecom_bot_id)}")
         print(f"模型: {config.model_name}")
         print(f"模型输出上限: {config.model_max_tokens}")
+        print(f"模型调用超时: {config.model_timeout_seconds:g} 秒")
+        print(f"模型单次阶段最多调用: {config.model_max_attempts} 次")
         print(f"直报 critic 模式: {config.direct_report_critic_mode}")
         print(f"Skills 目录: {config.skills_dir}")
         print(f"任务目录: {config.jobs_dir}")
@@ -1490,11 +1497,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"任务关系库: {config.task_relation_db_path}")
         print(f"写作 worker: {config.task_worker_count} 个")
         print(f"权限配置: {config.access_policy_path or '未配置，本地开发默认允许已启用 skill'}")
-        return
+        return 0
 
     print("正在连接企业微信写作 Bot...", flush=True)
     asyncio.run(run_bot(config))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

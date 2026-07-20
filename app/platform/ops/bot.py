@@ -236,7 +236,7 @@ def _save_state(path: Path, state: OpsBotState) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M-Agent 运维 Bot")
     parser.add_argument("--check-config", action="store_true", help="检查配置")
     args = parser.parse_args(argv)
@@ -258,7 +258,11 @@ def main(argv: list[str] | None = None) -> None:
         )
     except RuntimeEnvironmentError as exc:
         print(f"错误：{exc}")
-        return
+        return 2
+
+    if not config.bot_id or not config.bot_secret or not config.admin_user_id:
+        print("错误：缺少运维 Bot ID、Secret 或管理员用户配置")
+        return 2
 
     if args.check_config:
         print("运维 Bot 配置检查：")
@@ -273,15 +277,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"监控服务: {', '.join(config.monitored_services)}")
         print(f"心跳超时: {config.heartbeat_max_age_seconds} 秒")
         print(f"日报时间: 工作日 {config.daily_report_hour:02d}:{config.daily_report_minute:02d}")
-        return
-
-    if not config.bot_id or not config.bot_secret:
-        print("错误：缺少 M_AGENT_OPS_BOT_ID 或 M_AGENT_OPS_BOT_SECRET 配置")
-        return
+        return 0
 
     print("正在连接企业微信运维 Bot...", flush=True)
     asyncio.run(run_bot(config))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

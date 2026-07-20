@@ -25,6 +25,7 @@ from app.platform.delivery_state import (
     normalize_delivery_outcome,
 )
 from app.platform.models import UploadedFile
+from app.platform.model_reliability import ModelCallError
 from app.platform.task_execution import (
     SafeTaskError,
     TaskHandlerResult,
@@ -370,6 +371,18 @@ class GeneralReviewTaskService:
                 )
             except asyncio.CancelledError:
                 raise
+            except ModelCallError as exc:
+                update_task_status(
+                    workspace.task_dir,
+                    processing_status="failed",
+                    source="review_task_processing",
+                )
+                await self._notify_failure(
+                    task.user_id,
+                    exc.safe_error_code,
+                    task.task_id,
+                )
+                raise SafeTaskError(exc.safe_error_code, retryable=False) from exc
             except Exception as exc:
                 retryable = task.attempts < task.max_attempts
                 update_task_status(
