@@ -15,6 +15,12 @@ from app.platform.identity import AccessPolicy  # noqa: E402
 from app.platform.models import UploadedFile  # noqa: E402
 from app.platform.registry import SkillRegistry  # noqa: E402
 from app.platform.storage import JobStore  # noqa: E402
+from app.platform.task_relations import (  # noqa: E402
+    MaterialRole,
+    TaskCardStatus,
+    TaskRelationRepository,
+    TaskRelationService,
+)
 from app.platform.user_registry import UserRegistry  # noqa: E402
 
 
@@ -34,6 +40,236 @@ def _tools():
             "body": _compliant_body(),
         },
     }
+
+
+def _relation_service(tmp_path):
+    return TaskRelationService(TaskRelationRepository(tmp_path / "task-relations.sqlite3"))
+
+
+def _relation_app(tmp_path, *, tools=None):
+    return PlatformApp(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools=tools or _tools(),
+        job_store=JobStore(tmp_path / "jobs"),
+        conversation_store=ConversationStore(tmp_path / "conversations"),
+        task_relation_service=_relation_service(tmp_path),
+        access_policy=AccessPolicy.allow_all_for_skills(
+            ["direct_report", "writer1", "writer2", "rewrite"]
+        ),
+    )
+
+
+def test_platform_app_uses_task_cards_to_target_one_of_multiple_completed_drafts(tmp_path):
+    seen_payloads = []
+    app = _relation_app(
+        tmp_path,
+        tools={
+            "web_reader": lambda url: {
+                "title": "网页标题",
+                "text": "网页正文，包含可供写作的核心事实。",
+                "url": url,
+            },
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {
+                "title": (
+                    "普惠金融简报（修改稿）"
+                    if payload.get("revision")
+                    else ("普惠金融简报" if "brief" in str(payload) else "数字金融直报")
+                ),
+                "body": _compliant_body(),
+            },
+        },
+    )
+
+    app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写简报：https://example.com/brief",
+    )
+    app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写直报：https://example.com/report",
+    )
+
+    ambiguous = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="第二段再短一点",
+    )
+    assert ambiguous.needs_clarification is True
+    assert "普惠金融简报" in ambiguous.message
+    assert "数字金融直报" in ambiguous.message
+
+    revised = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="普惠金融那篇",
+    )
+    assert revised.skill_id == "writer1"
+    revision_payload = next(payload for payload in reversed(seen_payloads) if payload.get("revision"))
+    assert revision_payload["revision"] is True
+    assert revision_payload["revision_request"] == "第二段再短一点"
+    assert "普惠金融简报" in revision_payload["materials"][0]["text"]
+
+
+def test_platform_app_records_derived_task_without_overwriting_parent(tmp_path):
+    app = _relation_app(tmp_path)
+    first = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写直报：https://example.com/original",
+    )
+    assert first.skill_id == "direct_report"
+    parent = app.task_relation_service.repository.list_tasks(
+        channel="wecom", user_id="user-001"
+    )[0]
+
+    derived = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="沿用上一份的结构，根据这个链接另写一份直报：https://example.com/new",
+    )
+
+    assert derived.skill_id == "direct_report"
+    cards = app.task_relation_service.repository.list_tasks(
+        channel="wecom", user_id="user-001"
+    )
+    assert len(cards) == 2
+    child = next(card for card in cards if card.task_id != parent.task_id)
+    assert child.parent_task_id == parent.task_id
+    assert parent.current_version == 1
+
+
+def test_platform_app_tracks_pending_skill_question_on_its_task_card(tmp_path):
+    call_count = 0
+
+    def llm_writer(_payload):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {
+                "title": "",
+                "body": "",
+                "needs_clarification": True,
+                "message": "是否继续使用已经读取的素材？",
+            }
+        return {"title": "普惠金融简报", "body": _compliant_body()}
+
+    app = _relation_app(
+        tmp_path,
+        tools={
+            "web_reader": lambda url: {
+                "title": "网页标题",
+                "text": "网页正文，包含可供写作的核心事实。",
+                "url": url,
+            },
+            "llm_writer": llm_writer,
+        },
+    )
+    first = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写简报：https://example.com/brief",
+    )
+    assert first.needs_clarification is True
+    card = app.task_relation_service.repository.list_tasks(
+        channel="wecom", user_id="user-001"
+    )[0]
+    assert card.status is TaskCardStatus.NEEDS_INPUT
+    assert card.pending_question == "是否继续使用已经读取的素材？"
+
+    resumed = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="继续使用已读取素材写",
+    )
+    assert resumed.skill_id == "writer1"
+    assert resumed.needs_clarification is False
+    card = app.task_relation_service.repository.get_task(card.task_id)
+    assert card.status is TaskCardStatus.COMPLETED
+    assert card.current_version == 2
+
+
+def test_platform_app_adds_new_material_to_a_selected_task_without_creating_another_card(tmp_path):
+    seen_payloads = []
+    app = _relation_app(
+        tmp_path,
+        tools={
+            "web_reader": lambda url: {
+                "title": "网页标题",
+                "text": "网页正文，包含可供简报写作的核心事实。",
+                "url": url,
+            },
+            "bank_materials": lambda user_instruction, materials, limit=3: [],
+            "policy_materials": lambda user_instruction, materials, limit=3: [],
+            "policy_research": lambda **kwargs: {"materials": []},
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {
+                "title": "普惠金融简报",
+                "body": "微众银行围绕小微企业融资需求完善服务。" * 20,
+            },
+        },
+    )
+    app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写简报：https://example.com/brief",
+    )
+    card = app.task_relation_service.repository.list_tasks(
+        channel="wecom", user_id="user-001"
+    )[0]
+
+    result = app.handle_structured_request(
+        channel="wecom",
+        sender_userid="user-001",
+        skill_id="writer1",
+        text="把这组新数据补到第二段",
+        material_text="新增数据显示，小微企业融资服务覆盖面进一步扩大。" * 3,
+        task_relation="add_material",
+        target_task_id=card.task_id,
+        material_role="supplement",
+    )
+
+    assert result.skill_id == "writer1"
+    cards = app.task_relation_service.repository.list_tasks(
+        channel="wecom", user_id="user-001"
+    )
+    assert len(cards) == 1
+    assert cards[0].current_version == 2
+    revision_payload = next(payload for payload in reversed(seen_payloads) if payload.get("revision"))
+    assert [item["source"] for item in revision_payload["materials"]][:2] == [
+        "previous_draft",
+        "user_text",
+    ]
+    assert any(
+        item.get("material_role") == "supplement"
+        for item in revision_payload["materials"]
+    )
+    assert "材料处理要求" in revision_payload["instruction"]
+
+
+def test_platform_app_waits_when_the_target_draft_has_not_finished(tmp_path):
+    app = _relation_app(tmp_path)
+    app.prepare_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写简报：https://example.com/brief",
+    )
+
+    result = app.handle_text_message(
+        channel="wecom",
+        sender_userid="user-001",
+        text="把第二段再压缩一点",
+    )
+
+    assert result.needs_clarification is True
+    assert "还在生成中" in result.message
+    assert len(
+        app.task_relation_service.repository.list_tasks(
+            channel="wecom", user_id="user-001"
+        )
+    ) == 1
 
 
 def test_platform_app_handles_allowed_text_request_and_records_job(tmp_path):

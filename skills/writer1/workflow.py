@@ -58,13 +58,39 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
 
 def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
     payload = build_revision_payload(inputs, skill_id="writer1")
+    sources = previous_sources(inputs)
+    if inputs.get("supplement_materials"):
+        supplemental = _source_materials(inputs=inputs, tools=tools)
+        if not _has_usable_materials(supplemental) or _has_read_errors(supplemental):
+            return BriefResult(
+                title="",
+                body="",
+                sources=sources,
+                needs_clarification=True,
+                message=_missing_material_message(supplemental)
+                if not _has_usable_materials(supplemental)
+                else _partial_read_error_message(supplemental),
+            )
+        _apply_material_role(supplemental, inputs)
+        payload["materials"].extend(supplemental)
+        sources.extend(
+            str(item.get("url", ""))
+            for item in supplemental
+            if str(item.get("url", "")).strip()
+        )
     payload["planning_note"] = build_brief_plan(str(payload.get("instruction", "") or ""), payload["materials"], multi_source=False)
     return _generate_and_validate(
         payload=payload,
         tools=tools,
-        sources=previous_sources(inputs),
+        sources=list(dict.fromkeys(sources)),
         default_message="已根据上一稿完成简报修改。",
     )
+
+
+def _apply_material_role(materials: list[dict[str, object]], inputs: dict[str, object]) -> None:
+    role = str(inputs.get("material_role", "supplement") or "supplement")
+    for item in materials:
+        item["material_role"] = role
 
 
 def _generate_and_validate(

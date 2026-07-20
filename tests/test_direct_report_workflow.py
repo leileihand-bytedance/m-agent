@@ -118,6 +118,46 @@ def test_direct_report_workflow_revises_previous_draft_without_refetching_source
     assert "原直报正文" in seen_payloads[0]["materials"][0]["text"]
 
 
+def test_direct_report_revision_can_replace_facts_with_new_material():
+    seen_payloads = []
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "llm_writer"),
+        tools={
+            "web_reader": lambda url: {
+                "title": "更新后的业务数据",
+                "text": "新材料显示，业务覆盖范围已经更新。",
+                "url": url,
+            },
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {"title": "修改后直报标题", "body": "已按新材料更新正文。"},
+        },
+    )
+
+    result = run(
+        inputs={
+            "revision": True,
+            "supplement_materials": True,
+            "material_role": "replace",
+            "revision_request": "用新材料替换第二段数据",
+            "text": "用新材料替换第二段数据",
+            "previous_title": "原直报标题",
+            "previous_body": "原直报正文。",
+            "previous_sources": ["https://example.com/old"],
+            "urls": ["https://example.com/new"],
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert result.sources == ["https://example.com/old", "https://example.com/new"]
+    replacement = next(
+        item
+        for item in seen_payloads[0]["materials"]
+        if item.get("url") == "https://example.com/new"
+    )
+    assert replacement["material_role"] == "replace"
+
+
 def test_direct_report_workflow_asks_when_no_material_is_available():
     gateway = ToolGateway(allowed_tools=("web_reader", "llm_writer"), tools={})
 

@@ -32,12 +32,26 @@ class PydanticAIWriter:
         output_type = self._resolve_output_type(payload)
         instructions = self._build_instructions(payload, output_type)
         prompt = self._build_prompt(payload)
+        return self.run_structured(
+            instructions=instructions,
+            prompt=prompt,
+            output_type=output_type,
+        )
+
+    def run_structured(
+        self,
+        *,
+        instructions: str,
+        prompt: str,
+        output_type: type[BaseModel],
+    ) -> dict[str, object]:
+        """调用同一受控模型，并按调用方提供的 Pydantic 模型返回结果。"""
         agent = self._create_agent(instructions, output_type)
         result = agent.run_sync(prompt)
         output = result.output
         if not isinstance(output, output_type):
             output = output_type.model_validate(output)
-        return output.model_dump()
+        return output.model_dump(mode="json")
 
     def _create_agent(self, instructions: str, output_type: type[BaseModel]) -> Any:
         model = self._model()

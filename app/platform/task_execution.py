@@ -380,6 +380,66 @@ class TaskRepository:
             raise KeyError(f"未知任务：{task_id}")
         return self._row_to_record(row)
 
+    def find_by_idempotency_key(
+        self,
+        *,
+        idempotency_key: str,
+        channel: str,
+        user_id: str,
+        task_type: str,
+        cost_class: str,
+    ) -> TaskRecord | None:
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key 不能为空")
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        self._ensure_idempotency_identity(
+            row,
+            channel=channel,
+            user_id=user_id,
+            task_type=task_type,
+            cost_class=cost_class,
+        )
+        return self._row_to_record(row)
+
+    def find_task_by_payload_value(
+        self,
+        *,
+        user_id: str,
+        key: str,
+        value: str,
+        task_types: set[str] | None = None,
+    ) -> TaskRecord | None:
+        """按已知用户和任务类型查找受控 payload 字段，不接受任意 SQL 表达式。"""
+
+        if not user_id.strip() or not key.strip() or not value.strip():
+            return None
+        if not re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", key):
+            raise ValueError("payload key 格式无效")
+        params: list[object] = [user_id]
+        clause = ""
+        if task_types:
+            ordered = sorted(item for item in task_types if item.strip())
+            if ordered:
+                placeholders = ", ".join("?" for _ in ordered)
+                clause = f"AND task_type IN ({placeholders})"
+                params.extend(ordered)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"SELECT * FROM tasks WHERE user_id = ? {clause} ORDER BY created_at DESC, task_id DESC",
+                params,
+            ).fetchall()
+        for row in rows:
+            record = self._row_to_record(row)
+            if str(record.payload.get(key, "")) == value:
+                return record
+        return None
+
     def recover_failed_delivery(
         self,
         task_id: str,

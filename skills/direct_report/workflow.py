@@ -175,14 +175,39 @@ def _truncate_material_texts(materials: list[dict[str, object]], max_length: int
 
 
 def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> DirectReportResult:
-    draft = tools.call("llm_writer", build_revision_payload(inputs, skill_id="direct_report"))
+    payload = build_revision_payload(inputs, skill_id="direct_report")
+    sources = previous_sources(inputs)
+    if inputs.get("supplement_materials"):
+        supplemental, read_errors = _source_materials(inputs=inputs, tools=tools)
+        if read_errors:
+            return DirectReportResult(
+                title="",
+                body="",
+                sources=sources,
+                needs_clarification=True,
+                message="；".join(read_errors),
+            )
+        _apply_material_role(supplemental, inputs)
+        payload["materials"].extend(_truncate_material_texts(supplemental, max_length=2000))
+        sources.extend(
+            str(item.get("url", ""))
+            for item in supplemental
+            if str(item.get("url", "")).strip()
+        )
+    draft = tools.call("llm_writer", payload)
     return DirectReportResult(
         title=str(draft.get("title", "")),
         body=str(draft.get("body", "")),
-        sources=previous_sources(inputs),
+        sources=list(dict.fromkeys(sources)),
         needs_clarification=False,
         message=str(draft.get("message", "已根据上一稿完成修改。") or "已根据上一稿完成修改。"),
     )
+
+
+def _apply_material_role(materials: list[dict[str, object]], inputs: dict[str, object]) -> None:
+    role = str(inputs.get("material_role", "supplement") or "supplement")
+    for item in materials:
+        item["material_role"] = role
 
 
 def _source_materials(inputs: dict[str, object], tools: ToolGateway) -> tuple[list[dict[str, object]], list[str]]:

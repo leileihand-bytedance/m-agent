@@ -1,0 +1,74 @@
+[
+  {
+    "name": "自然表达续改指定简报",
+    "text": "普惠金融那篇第二段只保留一个案例",
+    "route_skill_id": null,
+    "has_new_material": false,
+    "expected_relation": "continue",
+    "expected_target": "task-a",
+    "expected_material_role": "none"
+  },
+  {
+    "name": "新增数据补充指定直报",
+    "text": "把这份新数据补到数字金融政策直报第二段",
+    "route_skill_id": null,
+    "has_new_material": true,
+    "expected_relation": "add_material",
+    "expected_target": "task-b",
+    "expected_material_role": "supplement"
+  },
+  {
+    "name": "新材料替换旧数据",
+    "text": "用这份新材料替换普惠金融简报第二段的数据",
+    "route_skill_id": null,
+    "has_new_material": true,
+    "expected_relation": "add_material",
+    "expected_target": "task-a",
+    "expected_material_role": "replace"
+  },
+  {
+    "name": "沿用结构派生新稿",
+    "text": "沿用普惠金融简报的结构，根据下面新材料另写一份",
+    "route_skill_id": "writer1",
+    "has_new_material": true,
+    "expected_relation": "derive",
+    "expected_target": "task-a",
+    "expected_material_role": "new_task"
+  },
+  {
+    "name": "明确新建直报",
+    "text": "新任务：根据这个链接写一篇直报 https://example.com/new",
+    "route_skill_id": "direct_report",
+    "has_new_material": true,
+    "expected_relation": "new_task",
+    "expected_target": "",
+    "expected_material_role": "new_task"
+  },
+  {
+    "name": "切换到指定任务",
+    "text": "切换到数字金融政策直报",
+    "route_skill_id": null,
+    "has_new_material": false,
+    "expected_relation": "switch",
+    "expected_target": "task-b",
+    "expected_material_role": "none"
+  },
+  {
+    "name": "取消指定任务",
+    "text": "取消普惠金融简报这个任务",
+    "route_skill_id": null,
+    "has_new_material": false,
+    "expected_relation": "cancel",
+    "expected_target": "task-a",
+    "expected_material_role": "none"
+  },
+  {
+    "name": "多个任务下模糊改稿",
+    "text": "第二段再短一点",
+    "route_skill_id": null,
+    "has_new_material": false,
+    "expected_relation": "needs_clarification",
+    "expected_target": "",
+    "expected_material_role": "none"
+  }
+]

@@ -64,6 +64,10 @@ class IntakeDecision:
     urls: tuple[str, ...] = ()
     files: tuple[UploadedFile, ...] = ()
     ack_message: str = ""
+    task_relation: str = "new_task"
+    target_task_id: str = ""
+    parent_task_id: str = ""
+    material_role: str = "new_task"
 
     def to_platform_outcome(self, *, channel: str, sender_userid: str) -> IntakeOutcome:
         if self.action == "bypass":
@@ -89,7 +93,13 @@ class IntakeDecision:
                 task_type=self.skill_id,
                 instructions=instructions,
                 materials=tuple(materials),
-                metadata={"source": "writing_intake"},
+            metadata={
+                "source": "writing_intake",
+                "task_relation": self.task_relation,
+                "target_task_id": self.target_task_id,
+                "parent_task_id": self.parent_task_id,
+                "material_role": self.material_role,
+            },
             ),
             reply=self.ack_message,
         )
@@ -299,6 +309,60 @@ class WritingIntakeStore:
         key = (channel, sender_userid)
         self._sessions.pop(key, None)
         self._remove_persisted_session(key, preserve_files=False)
+
+    def has_materials(self, *, channel: str, sender_userid: str) -> bool:
+        session = self._get_active_session((channel, sender_userid))
+        return bool(session and session.materials)
+
+    def apply_task_relation(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        instruction: str,
+        skill_id: str,
+        task_relation: str,
+        target_task_id: str = "",
+        parent_task_id: str = "",
+        material_role: str = "supplement",
+    ) -> IntakeDecision:
+        key = (channel, sender_userid)
+        session = self._get_active_session(key)
+        if session is None or not session.materials:
+            return IntakeDecision(
+                action="wait",
+                reply="我还没有收到要关联的新材料，请先发送文字、链接或文件。",
+            )
+        clean_instruction = instruction.strip()
+        if clean_instruction:
+            session.instructions.append(clean_instruction)
+        session.updated_at = time.time()
+        self._persist_session(key, session)
+        material_texts = [item.text for item in session.materials if item.kind == "text" and item.text]
+        urls = tuple(item.url for item in session.materials if item.kind == "url" and item.url)
+        files = tuple(
+            item.file
+            for item in session.materials
+            if item.kind == "file" and item.file is not None
+        )
+        label = _skill_label(skill_id)
+        return IntakeDecision(
+            action="run",
+            skill_id=skill_id,
+            text="\n".join(session.instructions).strip(),
+            material_text="\n\n".join(material_texts).strip(),
+            urls=urls,
+            files=files,
+            ack_message=(
+                f"收到，正在把新材料补充到{label}中，请稍后……"
+                if task_relation == "add_material"
+                else f"收到，正在基于原任务派生新的{label}，请稍后……"
+            ),
+            task_relation=task_relation,
+            target_task_id=target_task_id,
+            parent_task_id=parent_task_id,
+            material_role=material_role,
+        )
 
     def prepare_direct_revision(self, *, channel: str, sender_userid: str) -> bool:
         """允许上一稿改稿绕过空暂存，但不覆盖已经收集的新材料。"""

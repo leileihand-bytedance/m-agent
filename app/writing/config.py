@@ -44,6 +44,7 @@ class WritingBotConfig:
     document_max_bytes: int = 50 * 1024 * 1024
     document_ocr_enabled: bool = True
     task_queue_db_path: Path | None = None
+    task_relation_db_path: Path | None = None
     task_worker_count: int = 1
     task_poll_seconds: float = 0.25
     task_recovery_seconds: float = 5.0
@@ -183,6 +184,12 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
         data_paths.task_queue_db.with_name("writing.sqlite3"),
         project_root=ROOT,
     )
+    task_relation_db_path = configured_path(
+        values,
+        "M_AGENT_TASK_RELATION_DB",
+        data_paths.task_relation_db,
+        project_root=ROOT,
+    )
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
     portal_host = values.get("M_AGENT_PORTAL_HOST", "127.0.0.1") or "127.0.0.1"
@@ -243,6 +250,7 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> WritingBotConfig:
             default=True,
         ),
         task_queue_db_path=task_queue_db_path,
+        task_relation_db_path=task_relation_db_path,
         task_worker_count=max(
             1,
             int(values.get("M_AGENT_WRITING_TASK_WORKERS", "1") or "1"),

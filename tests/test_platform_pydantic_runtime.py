@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.pydantic_runtime import PydanticAIWriter
 from skills.direct_report.schema import DirectReportResult
 from skills.rewrite.schema import RewriteResult
+from pydantic import BaseModel
 
 
 class _FakeRunResult:
@@ -20,6 +21,42 @@ class _FakeAgent:
     def run_sync(self, prompt):
         self.last_prompt = prompt
         return _FakeRunResult(self.output)
+
+
+class _RelationOutput(BaseModel):
+    relation: str
+    confidence: float
+
+
+def test_pydantic_writer_runs_generic_structured_classification():
+    fake_agent = _FakeAgent(_RelationOutput(relation="continue", confidence=0.91))
+    calls = {}
+
+    def agent_factory(model, output_type, instructions, model_settings=None):
+        calls["output_type"] = output_type
+        calls["instructions"] = instructions
+        return fake_agent
+
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=agent_factory,
+    )
+
+    result = writer.run_structured(
+        instructions="判断任务关系",
+        prompt="把第二段压缩一点",
+        output_type=_RelationOutput,
+    )
+
+    assert result == {"relation": "continue", "confidence": 0.91}
+    assert calls == {
+        "output_type": _RelationOutput,
+        "instructions": "判断任务关系",
+    }
+    assert fake_agent.last_prompt == "把第二段压缩一点"
 
 
 def test_pydantic_writer_uses_agent_and_structured_output():

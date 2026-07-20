@@ -15,6 +15,12 @@ from app.platform.config import PlatformConfig  # noqa: E402
 from app.platform.intent import ConversationIntent  # noqa: E402
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile  # noqa: E402
 from app.platform.ops.events import OpsEventLogger, read_ops_events  # noqa: E402
+from app.platform.task_relations import (  # noqa: E402
+    MaterialRole,
+    TaskCardStatus,
+    TaskRelationRepository,
+    TaskRelationService,
+)
 from app.platform.task_status import write_task_status  # noqa: E402
 from app.writing.bot import build_platform_config, handle_file_with_platform, handle_text_with_platform, mask_config_value  # noqa: E402
 from app.writing.config import WritingBotConfig, load_config  # noqa: E402
@@ -196,13 +202,14 @@ def _frame(content: str, *, msgid: str = ""):
 
 
 class FakeWritingTaskService:
-    def __init__(self, *, created: bool = True):
+    def __init__(self, *, created: bool = True, active: bool = False):
         self.created = created
+        self.active = active
         self.text_submissions = []
         self.structured_submissions = []
 
     def has_active_task(self, _sender_userid: str) -> bool:
-        return False
+        return self.active
 
     def submit_text(self, **kwargs):
         self.text_submissions.append(kwargs)
@@ -217,6 +224,135 @@ class FakeWritingTaskService:
             created=self.created,
             task=SimpleNamespace(task_id="task-writing-002", status="queued"),
         )
+
+
+@pytest.mark.anyio
+async def test_active_user_can_submit_an_explicit_independent_task_to_the_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(
+        skill_id="direct_report",
+        intent=ConversationIntent.NEW_TASK,
+    )
+    task_service = FakeWritingTaskService(active=True)
+
+    await handle_text_with_platform(
+        frame=_frame("新任务：写直报 https://example.com/new", msgid="message-new-002"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        task_service=task_service,
+    )
+
+    assert len(task_service.text_submissions) == 1
+    assert task_service.text_submissions[0]["message_id"] == "message-new-002"
+    assert "完成后会自动发送初稿" in ws_client.stream_replies[-1][2]
+
+
+@pytest.mark.anyio
+async def test_active_user_revision_is_queued_for_the_identified_existing_task():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(
+        skill_id="direct_report",
+        intent=ConversationIntent.REVISE_PREVIOUS,
+    )
+    task_service = FakeWritingTaskService(active=True)
+
+    await handle_text_with_platform(
+        frame=_frame("把第二段再压缩一点"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        task_service=task_service,
+    )
+
+    assert len(task_service.text_submissions) == 1
+    assert task_service.text_submissions[0]["skill_id"] == "direct_report"
+    assert "修改稿" in ws_client.stream_replies[-1][2]
+
+
+def test_writing_intake_can_bind_collected_material_to_an_existing_task(tmp_path):
+    store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+    store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="新增数据.docx", content=b"new-data"),
+    )
+
+    decision = store.apply_task_relation(
+        channel="wecom",
+        sender_userid="user-001",
+        instruction="把这份数据补到第二段",
+        skill_id="writer1",
+        task_relation="add_material",
+        target_task_id="logical-task-001",
+        material_role="supplement",
+    )
+
+    assert decision.action == "run"
+    assert decision.skill_id == "writer1"
+    assert decision.target_task_id == "logical-task-001"
+    assert decision.task_relation == "add_material"
+    assert decision.files[0].filename == "新增数据.docx"
+
+
+@pytest.mark.anyio
+async def test_material_relation_clarification_answer_resumes_with_original_file(tmp_path):
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    for task_id, title in (("task-a", "普惠金融简报"), ("task-b", "数字金融简报")):
+        repository.create_task(
+            task_id=task_id,
+            channel="wecom",
+            user_id="user-001",
+            skill_id="writer1",
+            title=title,
+            status=TaskCardStatus.COMPLETED,
+            current_job_id=f"{task_id}-job",
+            materials=[("url", f"https://example.com/{task_id}", MaterialRole.NEW_TASK)],
+        )
+    relation_service = TaskRelationService(repository)
+    platform_app = FakePlatformApp(skill_id="writer1")
+    platform_app.task_relation_service = relation_service
+    platform_app.resolve_task_relation = lambda **kwargs: relation_service.resolve_text(
+        channel=kwargs["channel"],
+        user_id=kwargs["sender_userid"],
+        text=kwargs["text"],
+        route_skill_id=kwargs.get("route_skill_id"),
+        has_new_material=kwargs.get("has_new_material", False),
+        persist=kwargs.get("persist", True),
+    )
+    intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="新增数据.docx", content=b"new-data"),
+    )
+    task_service = FakeWritingTaskService()
+    ws_client = FakeWsClient()
+
+    await handle_text_with_platform(
+        frame=_frame("把这份数据补到第二段", msgid="relation-question"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+    assert "我需要确认你指的是哪一项" in ws_client.stream_replies[-1][2]
+
+    await handle_text_with_platform(
+        frame=_frame("数字金融那篇", msgid="relation-answer"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-002",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+
+    assert len(task_service.structured_submissions) == 1
+    submission = task_service.structured_submissions[0]
+    assert submission["target_task_id"] == "task-b"
+    assert submission["task_relation"] == "add_material"
+    assert submission["files"][0].filename == "新增数据.docx"
 
 
 def _file_frame(filename: str = "material.docx", *, size: int | None = None):
@@ -551,7 +687,7 @@ async def test_shenyinxie_news_is_accepted_into_persistent_queue():
 
 
 @pytest.mark.anyio
-async def test_revision_stays_on_existing_realtime_path_when_queue_is_enabled():
+async def test_revision_uses_persistent_queue_when_queue_is_enabled():
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(
         skill_id="direct_report",
@@ -567,10 +703,10 @@ async def test_revision_stays_on_existing_realtime_path_when_queue_is_enabled():
         task_service=task_service,
     )
 
-    assert task_service.text_submissions == []
-    assert platform_app.calls == [("wecom", "user-001", "标题再稳一点")]
-    assert ws_client.stream_replies[0][2] == "收到，我沿着上一稿继续改。"
-    assert ws_client.stream_replies[-1][2] == "标题\n\n正文"
+    assert len(task_service.text_submissions) == 1
+    assert task_service.text_submissions[0]["text"] == "标题再稳一点"
+    assert platform_app.calls == []
+    assert ws_client.stream_replies[-1][2] == "已进入直报写作队列，完成后会自动发送修改稿。"
 
 
 @pytest.mark.anyio

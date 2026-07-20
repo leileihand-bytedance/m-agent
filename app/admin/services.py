@@ -396,6 +396,13 @@ _COMPONENT_GROUP_SPECS = (
                 "optimize",
             ),
             _CapabilitySpec(
+                "task_relations",
+                "任务关系与多任务卡片",
+                "按用户维护多项任务，识别续改、补料、派生、新建、追问恢复、切换和取消。",
+                "stable",
+                ("app/platform/task_relations.py",),
+            ),
+            _CapabilitySpec(
                 "task_intake",
                 "公共任务组装",
                 "共用安全暂存、恢复、文件限制和结构化任务提交协议。",

@@ -608,6 +608,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert "general_review" not in capabilities
     assert capabilities["attachment_delivery"].status == "building"
     assert capabilities["task_execution"].status == "building"
+    assert capabilities["task_relations"].status == "stable"
     assert overview.component_status_counts["building"] >= 1
     assert overview.component_status_counts["stable"] >= 1
 
@@ -619,6 +620,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert groups_by_capability["admin_console"] == "管理与治理"
     assert groups_by_capability["ops_bot"] == "管理与治理"
     assert groups_by_capability["task_files"] == "智能体底座"
+    assert groups_by_capability["task_relations"] == "智能体底座"
     assert groups_by_capability["document_service"] == "共享工具服务"
     assert groups_by_capability["shared_review_core"] == "领域公共组件"
     assert groups_by_capability["policy_admin"] == "知识资产"

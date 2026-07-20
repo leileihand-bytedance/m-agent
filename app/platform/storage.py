@@ -40,6 +40,10 @@ class JobStore:
         self._root_dir = root_dir
         self._message_preview_chars = message_preview_chars
 
+    @property
+    def root_dir(self) -> Path:
+        return self._root_dir
+
     def create_job(
         self,
         *,
@@ -170,6 +174,52 @@ class JobStore:
                 needs_clarification=bool(result.get("needs_clarification", False)),
                 message=str(result.get("message", "")),
                 output=result.get("output", {}) if isinstance(result.get("output", {}), dict) else {},
+            )
+        return None
+
+    def find_result_by_job_id(
+        self,
+        job_id: str,
+        *,
+        sender_userid: str,
+        channel: str,
+    ) -> StoredJobResult | None:
+        if not job_id.strip() or not self._root_dir.exists():
+            return None
+        candidates: list[Path] = []
+        if len(job_id) >= 6 and job_id[:6].isdigit():
+            candidates.append(
+                self._root_dir / job_id[:4] / job_id[4:6] / job_id / "output" / "result.json"
+            )
+        candidates.extend(self._root_dir.glob(f"**/{job_id}/output/result.json"))
+        seen: set[Path] = set()
+        for result_path in candidates:
+            if result_path in seen or not result_path.is_file():
+                continue
+            seen.add(result_path)
+            job_dir = result_path.parent.parent
+            meta = _read_json(job_dir / "meta.json")
+            result = _read_json(result_path)
+            if not meta or not result:
+                continue
+            if str(meta.get("job_id", job_dir.name)) != job_id:
+                continue
+            if str(meta.get("sender_userid", "")) != sender_userid:
+                continue
+            if str(meta.get("channel", "")) != channel:
+                continue
+            output = result.get("output", {})
+            return StoredJobResult(
+                job_id=job_id,
+                job_dir=job_dir,
+                channel=channel,
+                sender_userid=sender_userid,
+                sender_name=str(meta.get("sender_name", sender_userid)),
+                created_at=str(meta.get("created_at", "")),
+                skill_id=str(result["skill_id"]) if result.get("skill_id") is not None else None,
+                needs_clarification=bool(result.get("needs_clarification", False)),
+                message=str(result.get("message", "")),
+                output=output if isinstance(output, dict) else {},
             )
         return None
 

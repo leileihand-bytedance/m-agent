@@ -268,6 +268,7 @@ def main(argv: list[str] | None = None) -> None:
                 platform.chat_log_dir,
                 platform.user_registry_path,
                 platform.task_queue_db_path,
+                platform.task_relation_db_path,
                 config.intake_dir,
                 config.ops_events_dir,
                 config.heartbeat_dir,
@@ -299,6 +300,7 @@ def main(argv: list[str] | None = None) -> None:
         print("允许的 Skill: rewrite")
         print(f"任务目录: {config.platform_config.jobs_dir}")
         print(f"会话目录: {config.platform_config.conversation_dir}")
+        print(f"任务关系库: {config.platform_config.task_relation_db_path}")
         print(f"待处理原文目录: {config.intake_dir}")
         return
 

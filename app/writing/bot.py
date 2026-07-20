@@ -27,6 +27,7 @@ from app.platform.task_execution import (
     TaskLifecycleObserver,
     TaskRepository,
 )
+from app.platform.task_relations import RelationAction, TaskCardStatus, TaskRelation
 from app.platform.runtime_environment import (
     RuntimeEnvironment,
     RuntimeEnvironmentError,
@@ -78,6 +79,7 @@ def build_platform_config(config) -> PlatformConfig:
         document_max_bytes=config.document_max_bytes,
         document_ocr_enabled=config.document_ocr_enabled,
         task_queue_db_path=config.task_queue_db_path,
+        task_relation_db_path=config.task_relation_db_path,
         search_api_key=config.search_api_key,
         search_api_base_url=config.search_api_base_url,
         runtime_mode=config.runtime_mode,
@@ -117,15 +119,86 @@ async def handle_text_with_platform(
         )
         return
 
-    if task_service is not None and task_service.has_active_task(sender_userid):
+    control_reply = _handle_task_control(
+        platform_app=platform_app,
+        task_service=task_service,
+        sender_userid=sender_userid,
+        content=content.strip(),
+    )
+    if control_reply:
         await _reply_stream_safely(
             ws_client,
             frame,
             stream_id,
-            "你上一项写作任务还在处理中，完成后会自动发给你。请收到结果后再继续改稿或提交新材料。",
+            control_reply,
             True,
         )
         return
+
+    if (
+        intake_store is not None
+        and intake_store.has_materials(channel="wecom", sender_userid=sender_userid)
+        and (
+            _looks_like_material_relation_command(content.strip())
+            or _has_pending_task_relation(platform_app, sender_userid=sender_userid)
+        )
+    ):
+        relation = _resolve_task_relation(
+            platform_app,
+            sender_userid=sender_userid,
+            content=content.strip(),
+            has_new_material=True,
+            persist=True,
+        )
+        if relation is not None and relation.action is RelationAction.ASK:
+            await _reply_stream_safely(ws_client, frame, stream_id, relation.question, True)
+            return
+        if relation is not None and relation.relation in {
+            TaskRelation.ADD_MATERIAL,
+            TaskRelation.DERIVE,
+            TaskRelation.ANSWER_CLARIFICATION,
+        }:
+            decision = intake_store.apply_task_relation(
+                channel="wecom",
+                sender_userid=sender_userid,
+                instruction=relation.effective_text or content.strip(),
+                skill_id=relation.suggested_skill_id,
+                task_relation=(
+                    TaskRelation.ADD_MATERIAL.value
+                    if relation.relation is TaskRelation.ANSWER_CLARIFICATION
+                    else relation.relation.value
+                ),
+                target_task_id=relation.target_task_id,
+                parent_task_id=relation.parent_task_id,
+                material_role=relation.material_role.value,
+            )
+            if decision.action == "run":
+                if task_service is not None and decision.skill_id in QUEUEABLE_WRITING_SKILLS:
+                    await _queue_structured_decision(
+                        decision=decision,
+                        frame=frame,
+                        ws_client=ws_client,
+                        task_service=task_service,
+                        intake_store=intake_store,
+                        req_id_factory=req_id_factory,
+                        sender_userid=sender_userid,
+                        sender_name=sender_name,
+                        ops_event_logger=ops_event_logger,
+                    )
+                else:
+                    await _run_structured_decision(
+                        decision=decision,
+                        frame=frame,
+                        ws_client=ws_client,
+                        platform_app=platform_app,
+                        req_id_factory=req_id_factory,
+                        sender_userid=sender_userid,
+                        sender_name=sender_name,
+                        ops_event_logger=ops_event_logger,
+                        intake_store=intake_store,
+                        attachment_delivery=attachment_delivery,
+                    )
+                return
 
     direct_revision = (
         intake_store is not None
@@ -227,6 +300,7 @@ async def handle_text_with_platform(
             _queued_acceptance_message(
                 skill_id=str(queued_route.skill_id),
                 created=submission.created,
+                revision=bool(queued_route.inputs.get("revision")),
             ),
             True,
         )
@@ -328,16 +402,6 @@ async def handle_file_with_platform(
     sender_name = _resolve_sender_name(platform_app, sender_userid)
     stream_id = req_id_factory("writing-file")
     payload = extract_file_payload(frame)
-
-    if task_service is not None and task_service.has_active_task(sender_userid):
-        await _reply_stream_safely(
-            ws_client,
-            frame,
-            stream_id,
-            "你上一项直报或简报初稿还在处理中，请收到初稿后再发送新的文件。",
-            True,
-        )
-        return
 
     if payload is None:
         await _reply_stream_safely(
@@ -461,6 +525,7 @@ async def _run_structured_decision(
             f"写作组装任务开始: user={sender_name}|userid={sender_userid} skill={decision.skill_id or 'none'}",
             flush=True,
         )
+        request_kwargs = _relation_request_kwargs(decision)
         result = await asyncio.to_thread(
             platform_app.handle_structured_request,
             channel="wecom",
@@ -470,6 +535,7 @@ async def _run_structured_decision(
             material_text=decision.material_text,
             urls=list(decision.urls),
             files=list(decision.files),
+            **request_kwargs,
         )
         print(
             f"写作组装任务完成: user={sender_name}|userid={sender_userid} skill={result.skill_id or 'none'} clarification={result.needs_clarification}",
@@ -576,6 +642,7 @@ async def _queue_structured_decision(
             material_text=decision.material_text,
             urls=decision.urls,
             files=decision.files,
+            **_relation_request_kwargs(decision),
         )
     except Exception as exc:
         print(f"写作组装任务入队失败:{type(exc).__name__}: {exc}", flush=True)
@@ -597,8 +664,7 @@ async def _queue_structured_decision(
             True,
         )
         return
-    if not submission.created:
-        intake_store.clear(channel="wecom", sender_userid=sender_userid)
+    intake_store.clear(channel="wecom", sender_userid=sender_userid)
     await _reply_stream_safely(
         ws_client,
         frame,
@@ -606,6 +672,11 @@ async def _queue_structured_decision(
         _queued_acceptance_message(
             skill_id=decision.skill_id or "",
             created=submission.created,
+            revision=decision.task_relation in {
+                TaskRelation.CONTINUE.value,
+                TaskRelation.ADD_MATERIAL.value,
+                TaskRelation.ANSWER_CLARIFICATION.value,
+            },
         ),
         True,
     )
@@ -802,7 +873,6 @@ def _queueable_text_route(platform_app, *, sender_userid: str, content: str):
     if (
         route.needs_clarification
         or route.skill_id not in QUEUEABLE_WRITING_SKILLS
-        or route.inputs.get("revision")
     ):
         return None
     return route
@@ -834,11 +904,131 @@ def _prepare_direct_revision(
     )
 
 
-def _queued_acceptance_message(*, skill_id: str, created: bool) -> str:
+def _resolve_task_relation(
+    platform_app,
+    *,
+    sender_userid: str,
+    content: str,
+    has_new_material: bool,
+    persist: bool,
+):
+    resolver = getattr(platform_app, "resolve_task_relation", None)
+    if not callable(resolver):
+        return None
+    try:
+        return resolver(
+            channel="wecom",
+            sender_userid=sender_userid,
+            text=content,
+            route_skill_id=None,
+            has_new_material=has_new_material,
+            persist=persist,
+        )
+    except Exception:
+        return None
+
+
+def _relation_request_kwargs(decision: IntakeDecision) -> dict[str, str]:
+    values = {
+        "task_relation": decision.task_relation,
+        "target_task_id": decision.target_task_id,
+        "parent_task_id": decision.parent_task_id,
+        "material_role": decision.material_role,
+    }
+    defaults = {"task_relation": TaskRelation.NEW_TASK.value, "material_role": "new_task"}
+    return {
+        key: value
+        for key, value in values.items()
+        if value and value != defaults.get(key)
+    }
+
+
+def _has_pending_task_relation(platform_app, *, sender_userid: str) -> bool:
+    service = getattr(platform_app, "task_relation_service", None)
+    repository = getattr(service, "repository", None)
+    reader = getattr(repository, "pending_decision", None)
+    if not callable(reader):
+        return False
+    try:
+        return reader(channel="wecom", user_id=sender_userid) is not None
+    except Exception:
+        return False
+
+
+def _handle_task_control(
+    *,
+    platform_app,
+    task_service: WritingTaskService | None,
+    sender_userid: str,
+    content: str,
+) -> str:
+    is_list = any(marker in content for marker in ("任务列表", "有哪些任务", "我有几个任务", "我有几篇稿", "看看任务"))
+    is_switch = any(marker in content for marker in ("切换到", "切到", "转到", "继续处理")) or (
+        "回到" in content
+        and "版" not in content
+        and any(marker in content for marker in ("任务", "稿", "简报", "直报"))
+    )
+    is_cancel = any(marker in content for marker in ("取消", "不要做了", "不用做了", "停止这个任务", "结束这个任务"))
+    if not (is_list or is_switch or is_cancel):
+        return ""
+    relation = _resolve_task_relation(
+        platform_app,
+        sender_userid=sender_userid,
+        content=content,
+        has_new_material=False,
+        persist=is_switch or is_cancel,
+    )
+    if relation is None:
+        return ""
+    if relation.action is RelationAction.ASK:
+        return relation.question
+    service = getattr(platform_app, "task_relation_service", None)
+    if service is None or not relation.target_task_id:
+        return ""
+    try:
+        card = service.repository.get_task(
+            relation.target_task_id,
+            channel="wecom",
+            user_id=sender_userid,
+        )
+    except (KeyError, PermissionError):
+        return ""
+    if relation.relation is TaskRelation.SWITCH:
+        return f"已切换到《{card.title}》。你可以继续提出修改要求，或补充新材料。"
+    if relation.relation is not TaskRelation.CANCEL:
+        return ""
+    if card.status is TaskCardStatus.RUNNING:
+        return f"《{card.title}》已经开始处理，当前不能强行中断；完成后你可以继续修改。"
+    if card.status is TaskCardStatus.QUEUED and task_service is not None:
+        cancel = getattr(task_service, "cancel_platform_job", None)
+        status = (
+            cancel(sender_userid=sender_userid, platform_job_id=card.current_job_id)
+            if callable(cancel)
+            else "not_found"
+        )
+        if status == "running":
+            return f"《{card.title}》已经开始处理，当前不能强行中断；完成后你可以继续修改。"
+        if status not in {"cancelled", "not_found"}:
+            return f"《{card.title}》当前状态不允许取消。"
+    service.repository.set_status(card.task_id, TaskCardStatus.CANCELLED)
+    return f"已取消《{card.title}》，这项任务不会再作为后续改稿目标。"
+
+
+def _looks_like_material_relation_command(content: str) -> bool:
+    material_markers = ("补到", "加到", "加入", "补充到", "替换", "作为参考", "参考材料")
+    derive_markers = ("沿用", "参考上一", "基于上一", "按上一", "用原来的结构")
+    return any(marker in content for marker in material_markers) or (
+        any(marker in content for marker in derive_markers)
+        and any(marker in content for marker in ("另写一份", "另写一篇", "重新写一份", "重新写一篇"))
+    )
+
+
+def _queued_acceptance_message(*, skill_id: str, created: bool, revision: bool = False) -> str:
     label = _ack_label_for_skill(skill_id)
+    result_label = "修改稿" if revision else "初稿"
     if created:
-        return f"已进入{label}队列，完成后会自动发送初稿。"
-    return f"这项{label}任务已经在处理中，无需重复提交。完成后会自动发送初稿。"
+        return f"已进入{label}队列，完成后会自动发送{result_label}。"
+    return f"这项{label}任务已经在处理中，无需重复提交。完成后会自动发送{result_label}。"
 
 
 def _ack_message_for_text(*, platform_app, sender_userid: str, content: str) -> str:
@@ -989,7 +1179,7 @@ async def run_bot(config) -> None:
         workspace: WritingTaskWorkspace,
         result: PlatformResult,
     ) -> None:
-        if result.needs_clarification:
+        if result.needs_clarification and not workspace.prepared.logical_task_id:
             route_inputs = workspace.prepared.route.inputs
             intake_store.restore_clarification(
                 channel=workspace.prepared.channel,
@@ -1012,11 +1202,6 @@ async def run_bot(config) -> None:
                 ),
                 message=result.message,
             )
-        else:
-            intake_store.clear(
-                channel=workspace.prepared.channel,
-                sender_userid=workspace.prepared.sender_userid,
-            )
         if ops_event_logger and _is_link_read_failure_result(result):
             _record_ops_event(
                 ops_event_logger,
@@ -1029,10 +1214,7 @@ async def run_bot(config) -> None:
             )
 
     async def finalize_failed_writing(workspace: WritingTaskWorkspace) -> None:
-        intake_store.clear(
-            channel=workspace.prepared.channel,
-            sender_userid=workspace.prepared.sender_userid,
-        )
+        platform_app.mark_prepared_task_status(workspace.prepared, TaskCardStatus.FAILED)
 
     async def send_queued_writing_attachment(
         recipient: str,
@@ -1106,6 +1288,13 @@ async def run_bot(config) -> None:
         result_finalizer=finalize_queued_writing,
         failure_finalizer=finalize_failed_writing,
         failure_notifier=notify_queued_writing_failure,
+        task_state_observer=lambda prepared, status, execution_task_id: (
+            platform_app.mark_prepared_task_status(
+                prepared,
+                TaskCardStatus(status),
+                execution_task_id=execution_task_id,
+            )
+        ),
     )
     task_executor = PersistentTaskExecutor(
         repository=task_repository,
@@ -1269,6 +1458,7 @@ def main(argv: list[str] | None = None) -> None:
                 config.ops_heartbeat_dir,
                 config.user_registry_path,
                 config.task_queue_db_path,
+                config.task_relation_db_path,
             ),
             project_root=ROOT,
         )
@@ -1297,6 +1487,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"素材入口: {config.portal_base_url}")
         print(f"多消息任务暂存: {config.intake_ttl_seconds} 秒")
         print(f"写作持久队列: {config.task_queue_db_path}")
+        print(f"任务关系库: {config.task_relation_db_path}")
         print(f"写作 worker: {config.task_worker_count} 个")
         print(f"权限配置: {config.access_policy_path or '未配置，本地开发默认允许已启用 skill'}")
         return

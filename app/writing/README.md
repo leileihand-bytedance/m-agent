@@ -28,9 +28,10 @@
 - 深银协动态不要求用户提供素材，但必须明确月份和上半月/下半月；未明确时入口保留原任务并追问，用户答复后继续由同一 Skill 执行，确认前不搜索。入口路由后由底座使用当前 DeepSeek 模型配置调用原生 Web Search。Skill 先检索原权威白名单，专题全文不足 3 篇时再检索已核验的行业/广东主流媒体；网页正文还要经过日期与域名硬门槛、DeepSeek 结构化报送价值判断，综合稿只允许做原文摘编并在 Word 中标注。成品直接复制用户确认案例的净化母版并替换对应位置，正文按原文自然段写入，可点击链接随稿交付；生产运行不读取桌面案例。`SEARCH_API_*` 只用于显式覆盖独立搜索供应商，不能把 DeepSeek 模型地址拼接到 MiniMax 搜索端点。
 - 内参周报不要求用户提供素材。用户发送“生成本周内参周报”后，入口直接提交独立 `internal_weekly` Skill；周一 15:00 收盘前会先生成上周五板块内容，并在资本市场固定位置用红色粗体标注“今日资本市场内容待收盘后更新”，15:00 后生成上周加当日完整版本。用户也可发送“生成一下今天的资本市场综述”，收盘后只生成可替换的当日行情更新块。第一阶段只回传带原文链接和核验信息的 Markdown 内容核对稿，并在任务目录保存 JSON 溯源清单，不生成 Word。其板块规则和信源表属于 Skill 自身，不调用审核模块；同一大会或论坛的互补正式成果合并为一条，监管动态以实际监管机构为主体；同业动向按境内民营/数字银行、国际及香港数字银行、银行科技子公司分组检索，机构官网、投资者关系和法定披露优先，达到统一评分才入选、最多 5 条且排除营销宣传；市场观察在固定资本市场综述后按七类主题独立检索影响增长、通胀、利率、汇率、流动性、风险偏好或银行资产负债环境的国内外大事，按统一评分达标才入选、最多 5 条且不凑数；前沿观点依据可逐字核验的研报原文生成中文压缩摘要并在结尾标明出处，资本市场综述缺少任一固定数据组时不让模型补齐。
 - 企业微信新直报、单素材简报、多素材简报和深银协动态先返回对应写作类型的已受理提示，再由后台 worker 生成并主动发送结果。主动文字使用企业微信 `aibot_send_msg` 支持的 Markdown 类型，附件使用媒体消息。后台始终保留任务编号，但正常受理和重复提交提示不向用户展示。任务入队前已经创建正式写作 job、复制文件快照；处理、会话收尾和发送分别记录检查点，Bot 重启后不会因为 intake 临时文件丢失而无法恢复。文本和附件逐项保存“已确认送达、明确未送达、送达未知”及判断依据；已经确认的部分不会重复发送，未知状态暂停自动重发并交由本机管理员恢复。
-- 写作队列使用独立 `runtime/task-execution/writing.sqlite3`，默认 1 个 worker、同一用户同一时刻只跑 1 项任务。审核队列与写作队列分离，两个 worker 不会互相领取任务。综合调研和内参周报当前仍为实时执行，不应仅因共用写作入口而标记为已迁入队列。
-- 同一企业微信文字或文件消息按稳定消息 ID 去重；用户有初稿在途时，入口会提示等待，不接收下一批材料或改稿，避免不同批次互相覆盖。收到初稿后，上一稿改稿仍走现有实时会话链路。
-- 已有可修改稿件时，“这一段只保留一个案例”“把这部分合并到开头”等明确局部编辑会在多消息暂存前识别。暂存区没有新材料时，误建的空润色会话会被清理并继续改上一稿；已经收集新材料或正在等待材料澄清时不旁路，避免新旧任务串稿。
+- 写作队列使用独立 `runtime/task-execution/writing.sqlite3`，默认 1 个 worker、同一用户同一时刻只跑 1 项任务；不同用户按 `userid` 隔离并由全局 worker 上限调度。审核队列与写作队列分离，两个 worker 不会互相领取任务。综合调研和内参周报当前仍为实时执行，不应仅因共用写作入口而标记为已迁入队列。
+- 任务卡片、版本、材料台账、父子关系和待确认状态保存在 `runtime/task-relations/task-relations.sqlite3`。同一用户可以同时保留和排队多篇直报、简报或润色任务；可用标题关键词、任务序号或“切换到……”定位，不再把所有后续消息绑定到一个最近稿件。
+- 同一企业微信文字或文件消息按稳定消息 ID 去重，重复消息检查在创建正式 job 和任务卡片前完成。普通续改以及补充、替换、参考新材料均可进入持久队列；目标稿本身仍在生成时，系统保留原要求和材料并提示等待，完成后用户回复“继续”即可恢复。
+- “这一段只保留一个案例”“把新数据补到数字金融那篇第二段”“沿用上一版结构另写一份”等自然表达先经过公共任务关系层。目标不唯一时只追问一个区分问题；用户回复稿件名称或纠正“另写一份”后沿用已上传材料，不要求重新发送。
 - 初稿返回待澄清时，入口会恢复原材料上下文。用户确认“继续使用已读取素材写”后，直报和简报会忽略读取失败项并使用成功读取的素材继续。
 - 开发者可在本机素材页一次性上传多个 Word/PDF/PPTX、粘贴链接、补充要求或文字素材。
 - 服务端会拒绝非 `.docx` / `.pdf` / `.pptx` 文件，避免“上传成功但实际无法解析”。HTML 文件上传暂缓，网页仍通过链接读取。
@@ -74,6 +75,7 @@ M_AGENT_DATA_DIR
 M_AGENT_DOCUMENT_MAX_MB
 M_AGENT_INTAKE_DIR
 M_AGENT_WRITING_TASK_QUEUE_DB
+M_AGENT_TASK_RELATION_DB
 M_AGENT_WRITING_TASK_WORKERS
 M_AGENT_WRITING_TASK_POLL_SECONDS
 M_AGENT_WRITING_TASK_RECOVERY_SECONDS
@@ -109,7 +111,7 @@ M_AGENT_PORTAL_BASE_URL=http://192.168.1.23:8790
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py -v
 uv run --locked pytest tests/test_platform_runtime_environment.py -v
 uv run --locked python -m app.writing.bot --check-config
 ```

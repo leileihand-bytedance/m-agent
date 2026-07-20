@@ -70,6 +70,7 @@ AttachmentSender = Callable[[str, Path, Path], Awaitable[DeliveryOutcome | bool]
 ResultFinalizer = Callable[[WritingTaskWorkspace, PlatformResult], Awaitable[None]]
 FailureFinalizer = Callable[[WritingTaskWorkspace], Awaitable[None]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
+TaskStateObserver = Callable[[PreparedPlatformJob, str, str], None]
 
 
 class WritingTaskService:
@@ -88,6 +89,7 @@ class WritingTaskService:
         failure_notifier: FailureNotifier,
         attachment_sender: AttachmentSender | None = None,
         failure_finalizer: FailureFinalizer | None = None,
+        task_state_observer: TaskStateObserver | None = None,
     ) -> None:
         self._repository = repository
         self._workspace_root = Path(workspace_root).resolve(strict=False)
@@ -99,6 +101,7 @@ class WritingTaskService:
         self._result_finalizer = result_finalizer
         self._failure_notifier = failure_notifier
         self._failure_finalizer = failure_finalizer
+        self._task_state_observer = task_state_observer
 
     def submit_text(
         self,
@@ -112,6 +115,14 @@ class WritingTaskService:
         ack_message: str = "",
     ) -> WritingTaskSubmission:
         self._validate_submission(skill_id=skill_id, message_id=message_id)
+        existing = self._existing_submission(
+            channel=channel,
+            sender_userid=sender_userid,
+            message_id=message_id,
+            skill_id=skill_id,
+        )
+        if existing is not None:
+            return WritingTaskSubmission(task=existing, created=False)
         prepared = self._text_preparer(
             channel=channel,
             sender_userid=sender_userid,
@@ -137,8 +148,20 @@ class WritingTaskService:
         material_text: str,
         urls: tuple[str, ...],
         files: tuple[UploadedFile, ...],
+        task_relation: str = "",
+        target_task_id: str = "",
+        parent_task_id: str = "",
+        material_role: str = "",
     ) -> WritingTaskSubmission:
         self._validate_submission(skill_id=skill_id, message_id=message_id)
+        existing = self._existing_submission(
+            channel=channel,
+            sender_userid=sender_userid,
+            message_id=message_id,
+            skill_id=skill_id,
+        )
+        if existing is not None:
+            return WritingTaskSubmission(task=existing, created=False)
         prepared = self._structured_preparer(
             channel=channel,
             sender_userid=sender_userid,
@@ -148,6 +171,10 @@ class WritingTaskService:
             material_text=material_text,
             urls=list(urls),
             files=list(files),
+            task_relation=task_relation,
+            target_task_id=target_task_id,
+            parent_task_id=parent_task_id,
+            material_role=material_role,
         )
         return self._submit_prepared(
             prepared=prepared,
@@ -161,6 +188,35 @@ class WritingTaskService:
             task_types=set(WRITING_TASK_TYPES),
         )
 
+    def _existing_submission(
+        self,
+        *,
+        channel: str,
+        sender_userid: str,
+        message_id: str,
+        skill_id: str,
+    ) -> TaskRecord | None:
+        return self._repository.find_by_idempotency_key(
+            idempotency_key=build_idempotency_key(channel, sender_userid, message_id),
+            channel=channel,
+            user_id=sender_userid,
+            task_type=WRITING_TASK_TYPE_BY_SKILL[skill_id],
+            cost_class=WRITING_COST_CLASS,
+        )
+
+    def cancel_platform_job(self, *, sender_userid: str, platform_job_id: str) -> str:
+        task = self._repository.find_task_by_payload_value(
+            user_id=sender_userid,
+            key="platform_job_id",
+            value=platform_job_id,
+            task_types=set(WRITING_TASK_TYPES),
+        )
+        if task is None:
+            return "not_found"
+        if task.status in {"queued", "needs_input"}:
+            return self._repository.cancel(task.task_id).status
+        return task.status
+
     async def handle(self, task: TaskRecord) -> TaskHandlerResult:
         try:
             workspace = self._workspace_from_task(task)
@@ -168,6 +224,8 @@ class WritingTaskService:
         except (OSError, ValueError) as exc:
             await self._notify_failure(task.user_id, "invalid_task_payload", task.task_id)
             raise SafeTaskError("invalid_task_payload", retryable=False) from exc
+
+        self._observe_task_state(workspace.prepared, "running", task.task_id)
 
         if checkpoint["processing_status"] != "completed":
             try:
@@ -478,6 +536,7 @@ class WritingTaskService:
             self._merge_submission_meta(task_dir=task_dir, task=task, message_id=message_id)
         except (OSError, ValueError):
             pass
+        self._observe_task_state(prepared, "queued", task.task_id)
         return WritingTaskSubmission(task=task, created=True)
 
     def _workspace_from_task(self, task: TaskRecord) -> WritingTaskWorkspace:
@@ -514,7 +573,11 @@ class WritingTaskService:
         if prepared.route.skill_id != expected_skill_id:
             self._remove_owned_workspace(task_dir)
             raise ValueError("写作路由与提交 skill 不一致")
-        if prepared.route.inputs.get("revision"):
+        if prepared.route.inputs.get("revision") and prepared.task_relation not in {
+            "continue",
+            "add_material",
+            "answer_clarification",
+        }:
             self._remove_owned_workspace(task_dir)
             raise ValueError("上一稿改稿不能进入新稿队列")
 
@@ -535,13 +598,16 @@ class WritingTaskService:
             relative_files.append(str(file_path.relative_to(prepared.job.job_dir)))
         inputs["files"] = relative_files
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "channel": prepared.channel,
             "sender_userid": prepared.sender_userid,
             "sender_name": prepared.sender_name,
             "user_text": prepared.user_text,
             "ack_message": prepared.ack_message,
             "job_id": prepared.job.job_id,
+            "logical_task_id": prepared.logical_task_id,
+            "task_relation": prepared.task_relation,
+            "parent_task_id": prepared.parent_task_id,
             "route": {
                 "skill_id": prepared.route.skill_id,
                 "confidence": prepared.route.confidence,
@@ -555,7 +621,7 @@ class WritingTaskService:
     @staticmethod
     def _read_request(*, task_dir: Path, request_path: Path) -> PreparedPlatformJob:
         payload = _read_json(request_path, label="写作任务请求")
-        if payload.get("schema_version") != 1:
+        if payload.get("schema_version") not in {1, 2}:
             raise ValueError("写作任务请求版本不受支持")
         route_payload = payload.get("route")
         if not isinstance(route_payload, dict):
@@ -605,7 +671,23 @@ class WritingTaskService:
             job=job,
             user_text=str(payload.get("user_text", "")),
             ack_message=str(payload.get("ack_message", "")),
+            logical_task_id=str(payload.get("logical_task_id", "")),
+            task_relation=str(payload.get("task_relation", "new_task") or "new_task"),
+            parent_task_id=str(payload.get("parent_task_id", "")),
         )
+
+    def _observe_task_state(
+        self,
+        prepared: PreparedPlatformJob,
+        status: str,
+        execution_task_id: str,
+    ) -> None:
+        if self._task_state_observer is None:
+            return
+        try:
+            self._task_state_observer(prepared, status, execution_task_id)
+        except Exception:
+            return
 
     def _processed_checkpoint(
         self,

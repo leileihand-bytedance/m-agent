@@ -50,6 +50,7 @@ def _service(
 
     def prepare_text(**kwargs) -> PreparedPlatformJob:
         skill_id = "direct_report" if "直报" in kwargs["text"] else "writer1"
+        is_revision = "继续改稿" in kwargs["text"]
         job = job_store.create_job(
             channel=kwargs["channel"],
             sender_userid=kwargs["sender_userid"],
@@ -66,11 +67,18 @@ def _service(
                 confidence=1.0,
                 needs_clarification=False,
                 message="",
-                inputs={"text": kwargs["text"], "urls": [], "files": []},
+                inputs={
+                    "text": kwargs["text"],
+                    "urls": [],
+                    "files": [],
+                    "revision": is_revision,
+                },
             ),
             job=job,
             user_text=kwargs["text"],
             ack_message=kwargs.get("ack_message", ""),
+            logical_task_id="logical-task-001" if is_revision else "",
+            task_relation="continue" if is_revision else "new_task",
         )
 
     def prepare_structured(**kwargs) -> PreparedPlatformJob:
@@ -334,6 +342,33 @@ def test_text_submission_is_persistent_idempotent_and_keeps_content_out_of_sqlit
     request = json.loads((task_dir / "request.json").read_text(encoding="utf-8"))
     assert request["route"]["skill_id"] == "direct_report"
     assert request["user_text"] == "写直报：https://example.com/source"
+
+
+def test_previous_draft_revision_can_enter_persistent_queue(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+
+    async def processor(_workspace):
+        return _result()
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+    )
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="revision-message-001",
+        skill_id="writer1",
+        text="继续改稿：把第二段压缩一点",
+    )
+
+    assert submission.created is True
+    request_path = Path(str(submission.task.payload["task_dir"])) / "request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    assert request["task_relation"] == "continue"
+    assert request["route"]["inputs"]["revision"] is True
 
 
 def test_structured_submission_copies_input_files_into_owned_workspace(tmp_path: Path):

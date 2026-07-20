@@ -105,7 +105,7 @@ uv run --locked python scripts/project_docs.py check
 验证底座区：
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
 ```
 
 修改公共任务组装内核时，至少额外运行：
@@ -115,6 +115,14 @@ uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_
 ```
 
 重点验证入口和用户隔离、状态原子写入、重启恢复、TTL 清理、目录外文件引用拦截、数量/总大小限制、公共动作/材料/提交模型，以及写作和审核原有业务状态机行为不变。
+
+修改任务关系、多任务卡片或连续改稿时，至少额外运行：
+
+```bash
+uv run --locked pytest tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_pydantic_runtime.py tests/test_writing_platform_bot.py tests/test_writing_task_execution.py tests/test_rewrite_bot.py -v
+```
+
+重点验证七类关系、补充/替换/参考/新任务四类材料角色、任务标题和序号定位、低置信度追问、追问后不重传材料、目标稿运行中等待、派生稿不覆盖父稿、重复消息不产生孤立任务卡片、进程重启恢复，以及 `channel + userid` 多用户隔离。脱敏自然语言样本保存在 `tests/fixtures/task_relation_cases.json`；新增线上误判时先加入该评测集，再修改规则、阈值或模型提示。
 
 修改持久化后台任务或附件交付时，至少额外运行：
 
@@ -147,7 +155,7 @@ uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_
 直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
 
 ```bash
-uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
 重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖七类单项任务分派、处理与发送检查点、已完成任务不重复审核、单段/多段队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、Word 单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、可见/隐藏/嵌套/未闭合 slide 页码映射、普通 HTML 段落兜底、消息与报告定位、短文数据一致性、正文不进 SQLite 和不生成标记文件。PPT 专项按上文命令覆盖独立规则、双边证据、无建议格式、名称单边猜测与相同脚注拦截、同名异写保留、反向双边去重、模型输出超限识别、按对象拆半合并、单对象停止条件和多段交付。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。

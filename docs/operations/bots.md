@@ -83,7 +83,10 @@ M-Agent-Files/runtime/ops/events/       # 脱敏运维事件
 M-Agent-Files/runtime/logs/             # 系统和用户日志
 M-Agent-Files/runtime/logs/review-capabilities/<capability_id>/  # 审核子能力日志
 M-Agent-Files/runtime/task-execution/   # 持久任务队列和恢复状态
+M-Agent-Files/runtime/task-relations/   # 多任务卡片、版本、材料台账和待确认关系
 ```
+
+`runtime/task-relations/task-relations.sqlite3` 由写作和润色入口共享，数据按入口和 `userid` 隔离。可通过 `M_AGENT_TASK_RELATION_DB` 显式覆盖；正常部署使用 `M_AGENT_DATA_DIR` 下的默认路径，不需要单独配置。关系判断指标不保存消息正文，数据库不得复制进 Git。
 
 日志按天并按大小分片。审核 Bot 总日志和按用户日志继续保留；具体审核任务还按通用文字、通用 Word、HTML、内参、半月报、公文格式、PPTX 和多文件八类子能力分别写日志，记录稳定的能力 ID 和任务 ID。日志可以记录消息、意图、Skill、任务、耗时和错误分类，但不能记录密钥、其他用户材料或不必要的全文。控制台默认不展示用户权限和任务正文。
 

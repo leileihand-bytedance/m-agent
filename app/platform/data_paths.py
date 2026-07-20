@@ -22,6 +22,7 @@ class DataPaths:
     conversations: Path
     intake: Path
     task_queue_db: Path
+    task_relation_db: Path
     ops_events: Path
     ops_state: Path
     heartbeats: Path
@@ -52,6 +53,7 @@ class DataPaths:
             conversations=root / "runtime" / "conversations",
             intake=root / "runtime" / "intake",
             task_queue_db=root / "runtime" / "task-execution" / "tasks.sqlite3",
+            task_relation_db=root / "runtime" / "task-relations" / "task-relations.sqlite3",
             ops_events=root / "runtime" / "ops" / "events",
             ops_state=root / "runtime" / "ops" / "state.json",
             heartbeats=root / "runtime" / "ops" / "heartbeats",
@@ -72,6 +74,7 @@ class DataPaths:
             self.conversations,
             self.intake,
             self.task_queue_db,
+            self.task_relation_db,
             self.ops_events,
             self.ops_state,
             self.heartbeats,
@@ -92,6 +95,7 @@ class DataPaths:
             self.conversations,
             self.intake,
             self.task_queue_db.parent,
+            self.task_relation_db.parent,
             self.ops_events,
             self.ops_state.parent,
             self.heartbeats,
@@ -110,6 +114,7 @@ class DataPaths:
                 "knowledge：政策库、微众银行信息库和政策 Wiki。\n"
                 "runtime：日志、会话、用户名表和运维状态。\n"
                 "runtime/task-execution：后台任务队列和恢复状态。\n"
+                "runtime/task-relations：跨 Skill 任务卡片、版本关系和待确认状态。\n"
                 "legacy：迁移保留的历史运行数据。\n\n"
                 "请不要把本目录复制进代码仓库或提交到 Git。\n",
                 encoding="utf-8",

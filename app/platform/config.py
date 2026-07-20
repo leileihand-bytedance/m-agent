@@ -28,6 +28,7 @@ class PlatformConfig:
     document_max_bytes: int = 50 * 1024 * 1024
     document_ocr_enabled: bool = True
     task_queue_db_path: Path | None = None
+    task_relation_db_path: Path | None = None
     skill_allowlist: tuple[str, ...] | None = None
     search_api_key: str = ""
     search_api_base_url: str = ""
@@ -119,6 +120,12 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
         data_paths.task_queue_db,
         project_root=ROOT,
     )
+    task_relation_db_path = configured_path(
+        values,
+        "M_AGENT_TASK_RELATION_DB",
+        data_paths.task_relation_db,
+        project_root=ROOT,
+    )
 
     model_max_tokens = int(values.get("M_AGENT_MODEL_MAX_TOKENS", "4096") or "4096")
 
@@ -164,6 +171,7 @@ def load_config(env_path: Path = DEFAULT_ENV_PATH) -> PlatformConfig:
             default=True,
         ),
         task_queue_db_path=task_queue_db_path,
+        task_relation_db_path=task_relation_db_path,
         search_api_key=search_api_key,
         search_api_base_url=search_api_base_url,
         runtime_mode=runtime.mode,
