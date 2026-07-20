@@ -25,8 +25,6 @@ from app.platform.data_paths import DataPaths, configured_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ADMIN_STATIC_ROOT = Path(__file__).resolve().parent / "static"
-VIS_NETWORK_ASSET = ADMIN_STATIC_ROOT / "vendor" / "vis-network.min.js"
 _ENV_VALUES = parse_env_file(DEFAULT_ENV_PATH)
 _DATA_PATHS = DataPaths.from_values(_ENV_VALUES, project_root=PROJECT_ROOT)
 DEFAULT_PATHS = AdminPaths(
@@ -164,25 +162,6 @@ def render_dashboard(
       gap: 18px;
       padding: 4px 0 16px;
     }}
-    .architecture-plane-key {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }}
-    .architecture-plane-key span {{
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: #475467;
-      font-size: 12px;
-      font-weight: 700;
-      white-space: nowrap;
-    }}
-    .architecture-plane-key span::before {{
-      content: "";
-      width: 11px;
-      height: 11px;
-      border-radius: 2px;
-      background: #dbeafe;
-      border: 1px solid #2563eb;
-    }}
-    .architecture-plane-key .governance::before {{ background: #f2f4f7; border-color: #667085; }}
     .architecture-subsection {{
       min-width: 0;
       margin-bottom: 20px;
@@ -229,36 +208,182 @@ def render_dashboard(
     }}
     .capability-filter:last-child {{ border-right: 0; }}
     .capability-filter.is-active {{ background: #17202a; color: #fff; }}
-    .architecture-graph-layout {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 284px;
-      min-height: 720px;
-      background: #fff;
+    .architecture-graph-layout {{ min-width: 0; background: #fff; }}
+    .architecture-diagram-scroll {{
+      min-width: 0;
+      overflow-x: auto;
+      background: #f8fafc;
+      scrollbar-gutter: stable;
     }}
-    .architecture-network-wrap {{ position: relative; min-width: 0; background: #f9fafb; }}
-    #architecture-network {{ width: 100%; height: 720px; }}
-    .architecture-graph-fallback {{
+    .architecture-diagram {{
+      position: relative;
+      isolation: isolate;
+      width: 100%;
+      min-width: 1120px;
+      padding: 18px;
+      background: #f8fafc;
+    }}
+    .architecture-flow-svg {{
       position: absolute;
       inset: 0;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      color: var(--muted);
-      text-align: center;
-      background: #f9fafb;
+      z-index: 2;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
     }}
-    .architecture-graph-fallback[hidden] {{ display: none; }}
+    .architecture-edge {{
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }}
+    .architecture-edge--runtime {{ stroke: #64748b; }}
+    .architecture-edge--writing {{ stroke: #0f766e; }}
+    .architecture-edge--review {{ stroke: #2563eb; }}
+    .architecture-edge--flow {{
+      stroke-width: 2.5;
+      stroke-dasharray: 9 13;
+      animation: architecture-information-flow 1.8s linear infinite;
+    }}
+    .architecture-edge--flow-runtime {{ stroke: #64748b; }}
+    .architecture-edge--flow-writing {{ stroke: #0f766e; }}
+    .architecture-edge--flow-review {{ stroke: #2563eb; }}
+    .architecture-diagram.is-motion-paused .architecture-edge--flow {{
+      animation-play-state: paused;
+    }}
+    @keyframes architecture-information-flow {{
+      to {{ stroke-dashoffset: -44; }}
+    }}
+    .architecture-plane {{
+      position: relative;
+      z-index: 1;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.9);
+    }}
+    .architecture-plane + .architecture-plane {{ margin-top: 14px; }}
+    .architecture-plane--runtime {{ padding: 42px 16px 16px; border-color: #a8c0ef; }}
+    .architecture-plane-title {{
+      position: absolute;
+      top: 12px;
+      left: 16px;
+      margin: 0;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 750;
+    }}
+    .architecture-main-flow {{
+      display: grid;
+      grid-template-columns: 126px 208px minmax(420px, 1fr) 146px;
+      gap: 28px;
+      align-items: center;
+    }}
+    .architecture-zone {{
+      position: relative;
+      z-index: 3;
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid #d0d5dd;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.94);
+    }}
+    .architecture-zone--platform {{ background: #f6f9ff; border-color: #b8caf0; }}
+    .architecture-zone-title {{
+      display: block;
+      margin: 0 0 10px;
+      color: #475467;
+      font-size: 11px;
+      font-weight: 750;
+    }}
+    .architecture-platform-stack {{ display: grid; gap: 8px; }}
+    .architecture-capability-domains {{ display: grid; gap: 10px; }}
+    .architecture-capability-domains--stacked {{ grid-template-columns: 1fr; }}
+    .architecture-domain-card {{
+      position: relative;
+      z-index: 3;
+      min-width: 0;
+      min-height: 96px;
+      padding: 12px;
+      border: 1px solid;
+      border-radius: 7px;
+    }}
+    .architecture-domain-card--writing {{ background: #ecfdf3; border-color: #66a983; }}
+    .architecture-domain-card--review {{ background: #eff6ff; border-color: #7da0e6; }}
+    .architecture-domain-summary {{
+      margin: 10px 2px 0;
+      color: #344054;
+      font-size: 11px;
+      line-height: 1.6;
+    }}
+    .architecture-support-row {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }}
+    .architecture-support-summary {{
+      position: relative;
+      z-index: 3;
+      min-width: 0;
+      padding: 12px 14px;
+      border: 1px solid #d0d5dd;
+      border-radius: 7px;
+      background: #fff;
+    }}
+    .architecture-support-summary--shared {{ background: #fffdf2; border-color: #ded3a2; }}
+    .architecture-support-summary--operations {{ background: #f8fafc; border-color: #cbd5e1; }}
+    .architecture-support-summary p {{ margin: 7px 0 0; color: #475467; font-size: 11px; line-height: 1.55; }}
+    .architecture-support-summary .architecture-node {{ display: inline-block; width: auto; min-height: 36px; }}
+    .architecture-node {{
+      position: relative;
+      z-index: 4;
+      display: block;
+      width: 100%;
+      min-width: 0;
+      min-height: 48px;
+      padding: 9px 10px;
+      border: 1px solid #98a2b3;
+      border-radius: 6px;
+      background: #fff;
+      color: #17202a;
+      text-align: left;
+      letter-spacing: 0;
+      cursor: pointer;
+      transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+    }}
+    .architecture-node:hover {{ border-color: #475467; transform: translateY(-1px); }}
+    .architecture-node:focus-visible {{ outline: 2px solid #2563eb; outline-offset: 2px; }}
+    .architecture-node.is-active {{ border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14); }}
+    .architecture-node[data-architecture-group="entry"] {{ background: #fff7ed; border-color: #b45309; }}
+    .architecture-node[data-architecture-group="platform"] {{ background: #eff6ff; border-color: #5b82d6; }}
+    .architecture-domain-card--writing .architecture-node {{ background: #dff7e9; border-color: #0f766e; }}
+    .architecture-domain-card--review .architecture-node {{ background: #dceafe; border-color: #2563eb; }}
+    .architecture-node[data-architecture-group="services"] {{ background: #fefce8; border-color: #ad8c2a; }}
+    .architecture-node[data-architecture-group="knowledge"] {{ background: #fdf2f8; border-color: #be4b7d; }}
+    .architecture-node[data-architecture-group="governance"] {{ background: #f2f4f7; border-color: #7f8b9e; }}
+    .architecture-node--main {{ min-height: 74px; text-align: center; }}
+    .architecture-node--domain {{ min-height: 48px; }}
+    .architecture-node--child {{ min-height: 38px; padding: 7px 8px; }}
+    .architecture-node-name {{ display: block; font-size: 12px; font-weight: 750; line-height: 1.35; }}
+    .architecture-node--child .architecture-node-name {{ font-size: 11px; }}
+    .architecture-node-note {{ display: block; margin-top: 4px; color: #667085; font-size: 10px; line-height: 1.35; }}
     .architecture-detail {{
-      padding: 18px;
-      border-left: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 170px minmax(240px, 1fr) minmax(240px, 1fr);
+      gap: 18px;
+      padding: 14px 16px;
+      border-top: 1px solid var(--line);
       background: #fff;
     }}
     .architecture-detail-kicker {{ color: var(--muted); font-size: 11px; font-weight: 700; }}
     .architecture-detail h3 {{ margin: 6px 0 0; font-size: 17px; }}
     .architecture-detail p {{ margin: 10px 0 0; color: #344054; font-size: 13px; }}
-    .architecture-detail-row {{ margin-top: 14px; }}
+    .architecture-detail-row {{ margin-top: 0; }}
     .architecture-detail-label {{ display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }}
     .architecture-detail-value {{ color: #344054; font-size: 12px; word-break: break-word; }}
+    .architecture-detail-value + .architecture-detail-label {{ margin-top: 8px; }}
     .architecture-graph-meta {{
       display: flex;
       align-items: center;
@@ -283,6 +408,20 @@ def render_dashboard(
     .architecture-layer-key .architecture-group-services {{ background: #fefce8; border-color: #a16207; }}
     .architecture-layer-key .architecture-group-knowledge {{ background: #fdf2f8; border-color: #be185d; }}
     .architecture-layer-key .architecture-group-governance {{ background: #f2f4f7; border-color: #667085; }}
+    .architecture-layer-key .architecture-flow-key--main {{ background: #f8fafc; border-color: #64748b; }}
+    .architecture-layer-key .architecture-flow-key--writing {{ background: #ecfdf3; border-color: #0f766e; }}
+    .architecture-layer-key .architecture-flow-key--review {{ background: #eff6ff; border-color: #2563eb; }}
+    .architecture-motion-toggle {{
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      font-size: 14px;
+      font-weight: 750;
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+      .architecture-edge--flow {{ animation: none; stroke-dasharray: none; }}
+      .architecture-node {{ transition: none; }}
+    }}
     .architecture-flow {{ position: relative; }}
     .architecture-layer {{
       position: relative;
@@ -486,12 +625,8 @@ def render_dashboard(
       header {{ padding: 16px; }}
       main {{ width: calc(100% - 20px); }}
       .architecture-overview-head, .architecture-toolbar, .architecture-subsection-head {{ display: block; }}
-      .architecture-plane-key {{ justify-content: flex-start; margin-top: 10px; }}
       .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
-      .architecture-graph-layout {{ grid-template-columns: 1fr; min-height: 0; }}
-      .architecture-network-wrap {{ overflow-x: auto; }}
-      #architecture-network {{ width: 900px; height: 720px; }}
-      .architecture-detail {{ border-left: 0; border-top: 1px solid var(--line); }}
+      .architecture-detail {{ grid-template-columns: 1fr; gap: 10px; }}
       .architecture-graph-meta {{ align-items: flex-start; flex-direction: column; }}
       .architecture-layer {{ grid-template-columns: 1fr; gap: 12px; }}
       .architecture-layer::before {{ left: 12px; }}
@@ -539,46 +674,131 @@ def render_dashboard(
     <div class="sensitive-access">{sensitive_toggle}</div>
     {sensitive_sections}
   </main>
-  <script src="/static/vendor/vis-network.min.js"></script>
   <script>
     (() => {{
       const filters = Array.from(document.querySelectorAll("[data-component-filter]"));
       const listNodes = Array.from(document.querySelectorAll("[data-component-status]"));
       const groups = Array.from(document.querySelectorAll("[data-component-group]"));
-      const fitButton = document.getElementById("architecture-fit");
-      const graphElement = document.getElementById("architecture-network");
-      const graphFallback = document.getElementById("architecture-graph-fallback");
+      const diagram = document.getElementById("architecture-diagram");
+      const flowSvg = document.getElementById("architecture-flow-svg");
       const graphDataElement = document.getElementById("architecture-graph-data");
-      let network = null;
+      const motionToggle = document.getElementById("architecture-motion-toggle");
+      const architectureNodeElements = Array.from(document.querySelectorAll("[data-architecture-node]"));
       let graphRecords = [];
+      let graphEdges = [];
+      const svgNamespace = "http://www.w3.org/2000/svg";
+      const primaryPairStyles = new Map([
+        ["business_entry>platform_access", "runtime"],
+        ["platform_access>platform_orchestration", "runtime"],
+        ["platform_orchestration>agent_runtime", "runtime"],
+        ["agent_runtime>writing_domain", "writing"],
+        ["agent_runtime>review_domain", "review"],
+        ["writing_domain>result_delivery", "writing"],
+        ["review_domain>result_delivery", "review"],
+      ]);
 
-      const palette = {{
-        entry: {{ background: "#fff7ed", border: "#b45309", highlight: {{ background: "#ffedd5", border: "#92400e" }} }},
-        platform: {{ background: "#eff6ff", border: "#2563eb", highlight: {{ background: "#dbeafe", border: "#1d4ed8" }} }},
-        capabilities: {{ background: "#ecfdf3", border: "#0f8a56", highlight: {{ background: "#d1fadf", border: "#087443" }} }},
-        services: {{ background: "#fefce8", border: "#a16207", highlight: {{ background: "#fef9c3", border: "#854d0e" }} }},
-        knowledge: {{ background: "#fdf2f8", border: "#be185d", highlight: {{ background: "#fce7f3", border: "#9d174d" }} }},
-        governance: {{ background: "#f2f4f7", border: "#667085", highlight: {{ background: "#e4e7ec", border: "#475467" }} }},
+      const roundedOrthogonalPath = (start, end, orientation, laneOffset = 0) => {{
+        const radius = 9;
+        if (orientation === "horizontal") {{
+          if (Math.abs(start.y - end.y) < 2) return `M ${{start.x}} ${{start.y}} H ${{end.x}}`;
+          const horizontalDirection = end.x >= start.x ? 1 : -1;
+          const verticalDirection = end.y >= start.y ? 1 : -1;
+          const middleX = (start.x + end.x) / 2 + laneOffset;
+          const usableRadius = Math.min(radius, Math.abs(end.y - start.y) / 2, Math.abs(middleX - start.x) / 2);
+          return [
+            `M ${{start.x}} ${{start.y}}`,
+            `H ${{middleX - horizontalDirection * usableRadius}}`,
+            `Q ${{middleX}} ${{start.y}} ${{middleX}} ${{start.y + verticalDirection * usableRadius}}`,
+            `V ${{end.y - verticalDirection * usableRadius}}`,
+            `Q ${{middleX}} ${{end.y}} ${{middleX + horizontalDirection * usableRadius}} ${{end.y}}`,
+            `H ${{end.x}}`,
+          ].join(" ");
+        }}
+        if (Math.abs(start.x - end.x) < 2) return `M ${{start.x}} ${{start.y}} V ${{end.y}}`;
+        const verticalDirection = end.y >= start.y ? 1 : -1;
+        const horizontalDirection = end.x >= start.x ? 1 : -1;
+        const middleY = (start.y + end.y) / 2 + laneOffset;
+        const usableRadius = Math.min(radius, Math.abs(end.x - start.x) / 2, Math.abs(middleY - start.y) / 2);
+        return [
+          `M ${{start.x}} ${{start.y}}`,
+          `V ${{middleY - verticalDirection * usableRadius}}`,
+          `Q ${{start.x}} ${{middleY}} ${{start.x + horizontalDirection * usableRadius}} ${{middleY}}`,
+          `H ${{end.x - horizontalDirection * usableRadius}}`,
+          `Q ${{end.x}} ${{middleY}} ${{end.x}} ${{middleY + verticalDirection * usableRadius}}`,
+          `V ${{end.y}}`,
+        ].join(" ");
       }};
 
-      const toGraphNode = (record) => ({{
-        id: record.id,
-        label: record.name,
-        group: record.group,
-        x: record.x,
-        y: record.y,
-      }});
+      const nodeBounds = (nodeId) => {{
+        const element = document.querySelector(`[data-architecture-node="${{nodeId}}"]`);
+        if (!element || !diagram) return null;
+        const elementRect = element.getBoundingClientRect();
+        const diagramRect = diagram.getBoundingClientRect();
+        return {{
+          left: elementRect.left - diagramRect.left,
+          right: elementRect.right - diagramRect.left,
+          top: elementRect.top - diagramRect.top,
+          bottom: elementRect.bottom - diagramRect.top,
+          centerX: elementRect.left - diagramRect.left + elementRect.width / 2,
+          centerY: elementRect.top - diagramRect.top + elementRect.height / 2,
+        }};
+      }};
 
-      const toGraphEdge = (record, index) => ({{
-        id: record.source_id + "-" + record.target_id + "-" + index,
-        from: record.source_id,
-        to: record.target_id,
-        label: record.label,
-        dashes: record.relation_type === "governance",
-        color: record.relation_type === "governance"
-          ? {{ color: "#667085", highlight: "#344054" }}
-          : {{ color: "#98a2b3", highlight: "#2563eb" }},
-      }});
+      const relationPath = (relation, index) => {{
+        const source = nodeBounds(relation.source_id);
+        const target = nodeBounds(relation.target_id);
+        if (!source || !target) return "";
+        const horizontal = Math.abs(target.centerX - source.centerX) >= Math.abs(target.centerY - source.centerY);
+        const laneOffset = ((index % 3) - 1) * 5;
+        if (horizontal) {{
+          const targetOnRight = target.centerX >= source.centerX;
+          return roundedOrthogonalPath(
+            {{ x: targetOnRight ? source.right : source.left, y: source.centerY }},
+            {{ x: targetOnRight ? target.left : target.right, y: target.centerY }},
+            "horizontal",
+            laneOffset,
+          );
+        }}
+        const targetBelow = target.centerY >= source.centerY;
+        return roundedOrthogonalPath(
+          {{ x: source.centerX, y: targetBelow ? source.bottom : source.top }},
+          {{ x: target.centerX, y: targetBelow ? target.top : target.bottom }},
+          "vertical",
+          laneOffset,
+        );
+      }};
+
+      const appendEdge = (relation, style, index) => {{
+        if (!flowSvg) return;
+        const pathData = relationPath(relation, index);
+        if (!pathData) return;
+        const path = document.createElementNS(svgNamespace, "path");
+        path.setAttribute("d", pathData);
+        path.setAttribute("class", `architecture-edge architecture-edge--${{style}}`);
+        path.setAttribute("marker-end", `url(#architecture-arrow-${{style}})`);
+        const title = document.createElementNS(svgNamespace, "title");
+        title.textContent = relation.label;
+        path.appendChild(title);
+        flowSvg.appendChild(path);
+        const movingPath = document.createElementNS(svgNamespace, "path");
+        movingPath.setAttribute("d", pathData);
+        movingPath.setAttribute(
+          "class",
+          `architecture-edge architecture-edge--flow architecture-edge--flow-${{style}}`,
+        );
+        flowSvg.appendChild(movingPath);
+      }};
+
+      const drawArchitectureEdges = () => {{
+        if (!diagram || !flowSvg) return;
+        flowSvg.querySelectorAll(".architecture-edge").forEach((edge) => edge.remove());
+        flowSvg.setAttribute("viewBox", `0 0 ${{diagram.clientWidth}} ${{diagram.clientHeight}}`);
+        graphEdges.forEach((relation, index) => {{
+          const pair = relation.source_id + ">" + relation.target_id;
+          const style = primaryPairStyles.get(pair);
+          if (style) appendEdge(relation, style, index);
+        }});
+      }};
 
       const showNodeDetail = (nodeId) => {{
         const record = graphRecords.find((item) => item.id === nodeId);
@@ -588,74 +808,34 @@ def render_dashboard(
         document.getElementById("architecture-detail-description").textContent = record.description;
         document.getElementById("architecture-detail-group").textContent = record.group_name;
         document.getElementById("architecture-detail-evidence").textContent = record.evidence;
-      }};
-
-      const fitGraph = () => {{
-        if (!network) return;
-        network.fit({{ animation: {{ duration: 320, easingFunction: "easeInOutQuad" }} }});
-      }};
-
-      const initializeGraph = () => {{
-        if (!window.vis || !window.vis.Network || !window.vis.DataSet || !graphDataElement) {{
-          if (graphFallback) graphFallback.hidden = false;
-          return;
+        for (const element of architectureNodeElements) {{
+          element.classList.toggle("is-active", element.dataset.architectureNode === nodeId);
         }}
-        try {{
-          const graphData = JSON.parse(graphDataElement.textContent || "{{}}");
-          graphRecords = Array.isArray(graphData.nodes) ? graphData.nodes : [];
-          const graphEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
-          const graphNodeData = new window.vis.DataSet(graphRecords.map(toGraphNode));
-          const graphEdgeData = new window.vis.DataSet(graphEdges.map(toGraphEdge));
-          network = new window.vis.Network(
-            graphElement,
-            {{ nodes: graphNodeData, edges: graphEdgeData }},
-            {{
-              autoResize: true,
-              groups: Object.fromEntries(
-                Object.entries(palette).map(([group, color]) => [group, {{ color }}])
-              ),
-              nodes: {{
-                shape: "box",
-                borderWidth: 1.5,
-                borderWidthSelected: 2.5,
-                margin: {{ top: 10, right: 12, bottom: 10, left: 12 }},
-                widthConstraint: {{ minimum: 118, maximum: 168 }},
-                font: {{ color: "#17202a", size: 12, face: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" }},
-              }},
-              edges: {{
-                arrows: {{ to: {{ enabled: true, scaleFactor: 0.55 }} }},
-                color: {{ color: "#98a2b3", highlight: "#2563eb", hover: "#667085" }},
-                width: 1,
-                selectionWidth: 1.5,
-                font: {{ size: 9, color: "#667085", background: "rgba(249,250,251,0.9)", strokeWidth: 0, align: "horizontal" }},
-                smooth: {{ enabled: true, type: "cubicBezier", forceDirection: "vertical", roundness: 0.35 }},
-              }},
-              physics: false,
-              interaction: {{ hover: true, keyboard: true, multiselect: false, tooltipDelay: 200 }},
-            }}
-          );
-          network.on("beforeDrawing", (context) => {{
-            context.save();
-            context.setTransform(1, 0, 0, 1, 0, 0);
-            context.fillStyle = "#f9fafb";
-            context.fillRect(0, 0, context.canvas.width, context.canvas.height);
-            context.restore();
-          }});
-          network.on("click", (params) => {{
-            if (params.nodes.length) showNodeDetail(params.nodes[0]);
-          }});
-          if (graphRecords.length) {{
-            network.selectNodes([graphRecords[0].id]);
-            showNodeDetail(graphRecords[0].id);
-          }}
-          window.setTimeout(fitGraph, 60);
-        }} catch (error) {{
-          network = null;
-          if (graphFallback) graphFallback.hidden = false;
+      }};
+      const initializeArchitecture = () => {{
+        if (!graphDataElement) return;
+        const graphData = JSON.parse(graphDataElement.textContent || "{{}}");
+        graphRecords = Array.isArray(graphData.nodes) ? graphData.nodes : [];
+        graphEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
+        for (const element of architectureNodeElements) {{
+          element.addEventListener("click", () => showNodeDetail(element.dataset.architectureNode));
+        }}
+        if (graphRecords.length) showNodeDetail("business_entry");
+        window.requestAnimationFrame(drawArchitectureEdges);
+        if (window.ResizeObserver && diagram) {{
+          new ResizeObserver(() => window.requestAnimationFrame(drawArchitectureEdges)).observe(diagram);
+        }} else {{
+          window.addEventListener("resize", drawArchitectureEdges);
         }}
       }};
 
-      fitButton.addEventListener("click", fitGraph);
+      motionToggle.addEventListener("click", () => {{
+        const paused = diagram.classList.toggle("is-motion-paused");
+        motionToggle.textContent = paused ? "▶" : "Ⅱ";
+        motionToggle.setAttribute("aria-pressed", paused ? "true" : "false");
+        motionToggle.setAttribute("aria-label", paused ? "继续信息流动效" : "暂停信息流动效");
+        motionToggle.setAttribute("title", paused ? "继续信息流动效" : "暂停信息流动效");
+      }});
       for (const filter of filters) {{
         filter.addEventListener("click", () => {{
           const selectedStatus = filter.dataset.componentFilter;
@@ -668,7 +848,7 @@ def render_dashboard(
           }}
         }});
       }}
-      initializeGraph();
+      initializeArchitecture();
     }})();
   </script>
 </body>
@@ -681,9 +861,6 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
 
         def do_GET(self) -> None:
             request = urlsplit(self.path)
-            if request.path == "/static/vendor/vis-network.min.js":
-                self._send_javascript(VIS_NETWORK_ASSET)
-                return
             if request.path not in {"/", "/index.html"}:
                 self._send_text("Not found", HTTPStatus.NOT_FOUND)
                 return
@@ -741,18 +918,6 @@ def create_handler(paths: AdminPaths = DEFAULT_PATHS) -> type[BaseHTTPRequestHan
             self.end_headers()
             self.wfile.write(data)
 
-        def _send_javascript(self, asset_path: Path) -> None:
-            if not asset_path.is_file():
-                self._send_text("Not found", HTTPStatus.NOT_FOUND)
-                return
-            data = asset_path.read_bytes()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/javascript; charset=utf-8")
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
         def _send_text(self, text: str, status: HTTPStatus) -> None:
             data = text.encode("utf-8")
             self.send_response(status)
@@ -799,47 +964,39 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
     groups = "\n".join(
         _render_component_group(group) for group in overview.component_groups
     )
-    architecture_groups = dict(
-        (node.group, node.group_name) for node in overview.architecture_nodes
+    group_key = (
+        '<span class="architecture-flow-key--main">通用主流程</span>'
+        '<span class="architecture-flow-key--writing">写作路线</span>'
+        '<span class="architecture-flow-key--review">审核路线</span>'
     )
-    group_key = "".join(
-        f'<span class="architecture-group-{escape(group)}">{escape(name)}</span>'
-        for group, name in architecture_groups.items()
-    )
+    diagram = _render_architecture_diagram(overview)
     graph_data = _architecture_graph_json(overview)
     return f"""<section id="architecture" class="architecture-section">
   <div class="architecture-overview-head">
     <div>
       <h2>项目总览</h2>
-      <p class="hint">上半部分说明业务如何运行、治理如何支撑；下半部分逐项展示核心能力和模块状态。</p>
-    </div>
-    <div class="architecture-plane-key" aria-label="架构平面图例">
-      <span>业务运行面</span>
-      <span class="governance">管理与治理面</span>
+      <p class="hint">上半部分展示核心信息流和能力边界；下半部分逐项展示功能与模块状态。</p>
     </div>
   </div>
   <div class="architecture-subsection">
     <div class="architecture-subsection-head">
       <div>
         <h3>业务运行架构</h3>
-        <p class="hint">核心写作与审核能力展开一层；实线表示业务调用，虚线表示治理和监控关系。</p>
+        <p class="hint">仅展示入口、底座、写作、审核和结果交付的主干信息流；未单列能力在图内用文字说明。</p>
       </div>
-      <button type="button" id="architecture-fit" title="将全部节点缩放到可见区域">适应画布</button>
+      <button type="button" id="architecture-motion-toggle" class="architecture-motion-toggle" aria-label="暂停信息流动效" title="暂停信息流动效" aria-pressed="false">Ⅱ</button>
     </div>
     <div class="architecture-graph-layout">
-      <div class="architecture-network-wrap">
-        <div id="architecture-network" role="img" aria-label="M-Agent 业务运行与管理治理架构图"></div>
-        <div id="architecture-graph-fallback" class="architecture-graph-fallback" hidden>架构图组件未能加载，下方功能与模块状态仍可正常查看。</div>
-      </div>
+      <div class="architecture-diagram-scroll">{diagram}</div>
       <aside class="architecture-detail" aria-live="polite">
-        <div class="architecture-detail-kicker" id="architecture-detail-plane">节点详情</div>
-        <h3 id="architecture-detail-name">点击节点查看详情</h3>
-        <p id="architecture-detail-description">节点颜色表示职责分区，箭头表示实际调用、数据供给或治理关系。</p>
+        <div>
+          <div class="architecture-detail-kicker" id="architecture-detail-plane">节点详情</div>
+          <h3 id="architecture-detail-name">点击节点查看详情</h3>
+        </div>
+        <p id="architecture-detail-description">圆角直角线表示请求和结果的传递方向，写作与审核使用不同颜色。</p>
         <div class="architecture-detail-row">
           <span class="architecture-detail-label">架构分区</span>
           <div class="architecture-detail-value" id="architecture-detail-group">-</div>
-        </div>
-        <div class="architecture-detail-row">
           <span class="architecture-detail-label">事实依据</span>
           <div class="architecture-detail-value" id="architecture-detail-evidence">-</div>
         </div>
@@ -847,7 +1004,7 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
     </div>
     <div class="architecture-graph-meta">
       <div class="architecture-layer-key">{group_key}</div>
-      <span>鼠标滚轮或双指缩放，拖动画布查看；建设状态请看下方清单。</span>
+      <span>点击节点查看职责和依据；窄屏可在图内横向浏览，建设状态请看下方清单。</span>
     </div>
   </div>
   <div class="architecture-subsection">
@@ -864,6 +1021,78 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
   </div>
   <script id="architecture-graph-data" type="application/json">{graph_data}</script>
 </section>"""
+
+
+def _render_architecture_diagram(overview: ProjectOverview) -> str:
+    nodes = {node.id: node for node in overview.architecture_nodes}
+
+    def node_button(node_id: str, modifier: str = "", note: str = "") -> str:
+        node = nodes[node_id]
+        classes = "architecture-node"
+        if modifier:
+            classes += f" architecture-node--{modifier}"
+        note_html = (
+            f'<span class="architecture-node-note">{escape(note)}</span>' if note else ""
+        )
+        return (
+            f'<button type="button" class="{classes}" '
+            f'data-architecture-node="{escape(node.id)}" '
+            f'data-architecture-group="{escape(node.group)}" '
+            f'aria-label="查看{escape(node.name)}详情">'
+            f'<span class="architecture-node-name">{escape(node.name)}</span>'
+            f"{note_html}</button>"
+        )
+
+    return f"""<div id="architecture-diagram" class="architecture-diagram" aria-label="M-Agent 业务运行与管理治理架构图">
+  <svg id="architecture-flow-svg" class="architecture-flow-svg" aria-hidden="true">
+    <defs>
+      <marker id="architecture-arrow-runtime" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 8 4 L 0 8 Z" fill="#64748b"></path>
+      </marker>
+      <marker id="architecture-arrow-writing" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 8 4 L 0 8 Z" fill="#0f766e"></path>
+      </marker>
+      <marker id="architecture-arrow-review" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 8 4 L 0 8 Z" fill="#2563eb"></path>
+      </marker>
+    </defs>
+  </svg>
+  <div class="architecture-plane architecture-plane--runtime">
+    <p class="architecture-plane-title">业务运行面</p>
+    <div class="architecture-main-flow">
+      {node_button("business_entry", "main", "企业微信 / 本地入口")}
+      <div class="architecture-zone architecture-zone--platform">
+        <span class="architecture-zone-title">智能体底座</span>
+        <div class="architecture-platform-stack">
+          {node_button("platform_access", "child")}
+          {node_button("platform_orchestration", "child")}
+          {node_button("agent_runtime", "child")}
+        </div>
+      </div>
+      <div class="architecture-capability-domains architecture-capability-domains--stacked">
+        <div class="architecture-domain-card architecture-domain-card--writing">
+          {node_button("writing_domain", "domain")}
+          <p class="architecture-domain-summary">已包含：直报、单素材简报、多素材简报、续写改稿和专题内容；可继续按 Skill 扩展。</p>
+        </div>
+        <div class="architecture-domain-card architecture-domain-card--review">
+          {node_button("review_domain", "domain")}
+          <p class="architecture-domain-summary">已包含：通用审核、专项审核、格式审核和多文件联合审核；保持独立入口。</p>
+        </div>
+      </div>
+      {node_button("result_delivery", "main", "文字 / 附件 / 状态")}
+    </div>
+    <div class="architecture-support-row">
+      <div class="architecture-support-summary architecture-support-summary--shared">
+        <strong class="architecture-zone-title">共享工具与知识</strong>
+        <p>为写作和审核共同提供文档解析、网页读取、联网搜索、政策知识库和微众银行信息库。</p>
+      </div>
+      <div class="architecture-support-summary architecture-support-summary--operations">
+        {node_button("ops_observability", "child")}
+        <p>底座同时承担权限与安全、意图路由、会话与任务、持久队列、日志告警和管理台。</p>
+      </div>
+    </div>
+  </div>
+</div>"""
 
 
 def _architecture_graph_json(overview: ProjectOverview) -> str:
