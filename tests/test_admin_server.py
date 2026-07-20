@@ -263,7 +263,7 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
-def test_render_dashboard_includes_simplified_animated_architecture_diagram(tmp_path):
+def test_render_dashboard_includes_controlled_detailed_architecture_diagram(tmp_path):
     skills_dir = tmp_path / "skills"
     _write_skill(skills_dir, "direct_report", enabled=True)
 
@@ -280,23 +280,37 @@ def test_render_dashboard_includes_simplified_animated_architecture_diagram(tmp_
     assert 'id="architecture-flow-svg"' in html
     assert 'id="architecture-graph-data"' in html
     assert "architecture-plane-key" not in html
-    assert "业务运行架构" in html
+    assert "受控 Agent 运行架构" in html
     assert 'data-component-status="stable"' in html
     assert 'data-component-filter="all"' in html
     assert 'data-architecture-view="graph"' not in html
-    assert 'data-architecture-node="direct_report"' not in html
-    assert 'data-architecture-node="general_review"' not in html
+    assert 'data-architecture-node="direct_report"' in html
+    assert 'data-architecture-node="general_review"' in html
     assert 'data-architecture-node="writing_domain"' in html
     assert 'data-architecture-node="review_domain"' in html
     assert 'data-architecture-node="result_delivery"' in html
     assert 'class="architecture-domain-card architecture-domain-card--writing"' in html
     assert 'class="architecture-domain-card architecture-domain-card--review"' in html
-    assert 'class="architecture-capability-domains architecture-capability-domains--stacked"' in html
-    assert "直报、单素材简报、多素材简报、续写改稿和专题内容" in html
-    assert "通用审核、专项审核、格式审核和多文件联合审核" in html
-    assert "文档解析、网页读取、联网搜索、政策知识库和微众银行信息库" in html
-    assert "权限与安全、意图路由、会话与任务、持久队列、日志告警和管理台" in html
+    assert 'class="architecture-agent-core"' in html
+    assert 'class="architecture-control-gates"' in html
+    assert 'class="architecture-foundation"' in html
+    assert 'class="architecture-governance-grid"' in html
+    assert "身份隔离" in html
+    assert "工具白名单" in html
+    assert "结构化输出" in html
+    assert "幂等与恢复" in html
+    assert "交付确认" in html
+    assert "成稿、改稿与专题内容生产" in html
+    assert "通用、专项、格式与跨文件审核" in html
+    assert "意图路由 · 多任务关系 · 材料组装 · 持久队列" in html
+    assert "Pydantic AI · Skill 合约 · ToolGateway · 结构化输出" in html
+    assert "统一文档服务" in html
+    assert "政策知识库" in html
+    assert "运维与可观测性" in html
     assert "roundedOrthogonalPath" in html
+    assert "straightPathIsClear" in html
+    assert "segmentIntersectsBox" in html
+    assert "if (straightPathIsClear(relation, start, end))" in html
     assert "architecture-edge--flow" in html
     assert "@keyframes architecture-information-flow" in html
     assert "prefers-reduced-motion: reduce" in html
@@ -311,7 +325,7 @@ def test_render_dashboard_includes_simplified_animated_architecture_diagram(tmp_
     assert '"relation_type":"governance"' in html
 
 
-def test_architecture_diagram_only_renders_main_information_flow_nodes(tmp_path):
+def test_architecture_diagram_renders_all_registered_nodes_with_limited_flow_lines(tmp_path):
     project_root = Path(__file__).resolve().parent.parent
     html = render_dashboard(
         AdminPaths(
@@ -326,7 +340,7 @@ def test_architecture_diagram_only_renders_main_information_flow_nodes(tmp_path)
         html,
     )
 
-    assert len(rendered_node_ids) == 8
+    assert len(rendered_node_ids) == 24
     assert len(rendered_node_ids) == len(set(rendered_node_ids))
     assert {
         "business_entry",
@@ -336,6 +350,24 @@ def test_architecture_diagram_only_renders_main_information_flow_nodes(tmp_path)
         "writing_domain",
         "review_domain",
         "result_delivery",
+        "direct_report",
+        "brief_writing",
+        "rewrite",
+        "thematic_content",
+        "general_review",
+        "special_review",
+        "format_review",
+        "multi_file_review",
+        "document_service",
+        "web_retrieval",
+        "policy_knowledge",
+        "bank_knowledge",
+        "admin_console",
         "ops_observability",
+        "data_governance",
+        "engineering_governance",
+        "knowledge_governance",
     } == set(rendered_node_ids)
+    assert '["writing_domain>direct_report", "writing"]' not in html
+    assert '["review_domain>general_review", "review"]' not in html
     assert not (project_root / "app/admin/static/vendor/vis-network.min.js").exists()

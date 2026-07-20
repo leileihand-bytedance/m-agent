@@ -268,78 +268,159 @@ def render_dashboard(
       background: rgba(255, 255, 255, 0.9);
     }}
     .architecture-plane + .architecture-plane {{ margin-top: 14px; }}
-    .architecture-plane--runtime {{ padding: 42px 16px 16px; border-color: #a8c0ef; }}
+    .architecture-plane--runtime {{ padding: 14px 16px 16px; border-color: #a8c0ef; }}
+    .architecture-plane--governance {{ padding: 14px 16px 16px; background: #f5f7fa; }}
+    .architecture-plane-heading {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 14px;
+    }}
     .architecture-plane-title {{
-      position: absolute;
-      top: 12px;
-      left: 16px;
       margin: 0;
       color: #344054;
       font-size: 12px;
       font-weight: 750;
     }}
+    .architecture-plane-caption {{ margin: 3px 0 0; color: #667085; font-size: 10px; }}
+    .architecture-plane-badges {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }}
+    .architecture-plane-badges span {{
+      padding: 3px 7px;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      background: #fff;
+      color: #475467;
+      font-size: 10px;
+      font-weight: 700;
+    }}
     .architecture-main-flow {{
       display: grid;
-      grid-template-columns: 126px 208px minmax(420px, 1fr) 146px;
-      gap: 28px;
-      align-items: center;
+      grid-template-columns: 116px 282px minmax(430px, 1fr) 138px;
+      gap: 24px;
+      align-items: stretch;
     }}
-    .architecture-zone {{
+    .architecture-flow-column {{
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
+    }}
+    .architecture-phase {{
+      display: block;
+      color: #667085;
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }}
+    .architecture-agent-core {{
       position: relative;
       z-index: 3;
+      align-self: center;
       min-width: 0;
       padding: 12px;
-      border: 1px solid #d0d5dd;
+      border: 1px solid #9eb4df;
       border-radius: 7px;
-      background: rgba(255, 255, 255, 0.94);
+      background: #f3f6fc;
     }}
-    .architecture-zone--platform {{ background: #f6f9ff; border-color: #b8caf0; }}
-    .architecture-zone-title {{
-      display: block;
-      margin: 0 0 10px;
-      color: #475467;
-      font-size: 11px;
-      font-weight: 750;
+    .architecture-agent-core-head {{
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: 8px;
+      margin-bottom: 10px;
     }}
-    .architecture-platform-stack {{ display: grid; gap: 8px; }}
-    .architecture-capability-domains {{ display: grid; gap: 10px; }}
-    .architecture-capability-domains--stacked {{ grid-template-columns: 1fr; }}
+    .architecture-agent-core-head strong {{ font-size: 12px; }}
+    .architecture-agent-core-head span {{ color: #31589b; font-size: 10px; font-weight: 800; }}
+    .architecture-agent-core-head small {{ grid-column: 2; color: #667085; font-size: 9px; }}
+    .architecture-platform-stack {{ display: grid; gap: 9px; }}
+    .architecture-platform-stage {{ position: relative; }}
+    .architecture-platform-stage:not(:last-child)::after {{
+      content: "";
+      position: absolute;
+      z-index: 2;
+      left: 50%;
+      bottom: -9px;
+      width: 1px;
+      height: 9px;
+      background: #91a4c8;
+    }}
+    .architecture-capability-domains {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }}
     .architecture-domain-card {{
       position: relative;
       z-index: 3;
       min-width: 0;
-      min-height: 96px;
-      padding: 12px;
+      padding: 10px;
       border: 1px solid;
       border-radius: 7px;
     }}
     .architecture-domain-card--writing {{ background: #ecfdf3; border-color: #66a983; }}
     .architecture-domain-card--review {{ background: #eff6ff; border-color: #7da0e6; }}
-    .architecture-domain-summary {{
-      margin: 10px 2px 0;
-      color: #344054;
-      font-size: 11px;
-      line-height: 1.6;
+    .architecture-domain-index {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 7px;
+      color: #667085;
+      font-size: 9px;
+      font-weight: 800;
     }}
-    .architecture-support-row {{
+    .architecture-domain-capabilities {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 16px;
+      gap: 6px;
+      margin-top: 8px;
     }}
-    .architecture-support-summary {{
-      position: relative;
-      z-index: 3;
+    .architecture-control-gates {{
+      display: grid;
+      grid-template-columns: 134px repeat(5, minmax(0, 1fr));
+      margin-top: 14px;
+      border-radius: 6px;
+      background: #17202a;
+      color: #fff;
+      overflow: hidden;
+    }}
+    .architecture-control-gates-title {{
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 10px 12px;
+      color: #e2e8f0;
+      font-size: 10px;
+      font-weight: 800;
+    }}
+    .architecture-control-gates-title small {{ margin-top: 3px; color: #98a2b3; font-size: 9px; font-weight: 500; }}
+    .architecture-control-gate {{ padding: 10px 11px; border-left: 1px solid #344054; }}
+    .architecture-control-gate strong {{ display: block; font-size: 10px; }}
+    .architecture-control-gate span {{ display: block; margin-top: 3px; color: #b9c2d0; font-size: 9px; line-height: 1.4; }}
+    .architecture-foundation {{
+      display: grid;
+      grid-template-columns: 150px repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid #d9dee7;
+    }}
+    .architecture-foundation-intro {{ display: flex; flex-direction: column; justify-content: center; }}
+    .architecture-foundation-intro strong {{ font-size: 11px; }}
+    .architecture-foundation-intro span {{ margin-top: 4px; color: #667085; font-size: 9px; line-height: 1.45; }}
+    .architecture-foundation-group {{
       min-width: 0;
-      padding: 12px 14px;
-      border: 1px solid #d0d5dd;
+      padding: 10px;
+      border: 1px solid #d9dee7;
       border-radius: 7px;
       background: #fff;
     }}
-    .architecture-support-summary--shared {{ background: #fffdf2; border-color: #ded3a2; }}
-    .architecture-support-summary--operations {{ background: #f8fafc; border-color: #cbd5e1; }}
-    .architecture-support-summary p {{ margin: 7px 0 0; color: #475467; font-size: 11px; line-height: 1.55; }}
-    .architecture-support-summary .architecture-node {{ display: inline-block; width: auto; min-height: 36px; }}
+    .architecture-foundation-group--tools {{ background: #fffdf2; border-color: #ded3a2; }}
+    .architecture-foundation-group--knowledge {{ background: #fdf7fb; border-color: #dfb7ca; }}
+    .architecture-foundation-label {{ display: block; margin-bottom: 7px; color: #475467; font-size: 9px; font-weight: 800; }}
+    .architecture-foundation-nodes {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }}
+    .architecture-governance-grid {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }}
     .architecture-node {{
       position: relative;
       z-index: 4;
@@ -368,10 +449,15 @@ def render_dashboard(
     .architecture-node[data-architecture-group="knowledge"] {{ background: #fdf2f8; border-color: #be4b7d; }}
     .architecture-node[data-architecture-group="governance"] {{ background: #f2f4f7; border-color: #7f8b9e; }}
     .architecture-node--main {{ min-height: 74px; text-align: center; }}
-    .architecture-node--domain {{ min-height: 48px; }}
+    .architecture-node--stage {{ min-height: 58px; padding: 8px 9px; }}
+    .architecture-node--domain {{ min-height: 52px; }}
     .architecture-node--child {{ min-height: 38px; padding: 7px 8px; }}
+    .architecture-node--micro {{ min-height: 36px; padding: 6px 7px; }}
+    .architecture-node--governance {{ min-height: 62px; padding: 8px 9px; }}
     .architecture-node-name {{ display: block; font-size: 12px; font-weight: 750; line-height: 1.35; }}
-    .architecture-node--child .architecture-node-name {{ font-size: 11px; }}
+    .architecture-node--child .architecture-node-name,
+    .architecture-node--micro .architecture-node-name,
+    .architecture-node--governance .architecture-node-name {{ font-size: 10px; }}
     .architecture-node-note {{ display: block; margin-top: 4px; color: #667085; font-size: 10px; line-height: 1.35; }}
     .architecture-detail {{
       display: grid;
@@ -747,6 +833,48 @@ def render_dashboard(
         }};
       }};
 
+      const segmentIntersectsBox = (start, end, box) => {{
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const p = [-dx, dx, -dy, dy];
+        const q = [
+          start.x - box.left,
+          box.right - start.x,
+          start.y - box.top,
+          box.bottom - start.y,
+        ];
+        let lower = 0;
+        let upper = 1;
+        for (let index = 0; index < p.length; index += 1) {{
+          if (Math.abs(p[index]) < 0.001) {{
+            if (q[index] < 0) return false;
+            continue;
+          }}
+          const ratio = q[index] / p[index];
+          if (p[index] < 0) lower = Math.max(lower, ratio);
+          else upper = Math.min(upper, ratio);
+          if (lower > upper) return false;
+        }}
+        return true;
+      }};
+
+      const straightPathIsClear = (relation, start, end) => {{
+        for (const element of architectureNodeElements) {{
+          const nodeId = element.dataset.architectureNode;
+          if (nodeId === relation.source_id || nodeId === relation.target_id) continue;
+          const bounds = nodeBounds(nodeId);
+          if (!bounds) continue;
+          const clearance = 5;
+          if (segmentIntersectsBox(start, end, {{
+            left: bounds.left - clearance,
+            right: bounds.right + clearance,
+            top: bounds.top - clearance,
+            bottom: bounds.bottom + clearance,
+          }})) return false;
+        }}
+        return true;
+      }};
+
       const relationPath = (relation, index) => {{
         const source = nodeBounds(relation.source_id);
         const target = nodeBounds(relation.target_id);
@@ -755,20 +883,16 @@ def render_dashboard(
         const laneOffset = ((index % 3) - 1) * 5;
         if (horizontal) {{
           const targetOnRight = target.centerX >= source.centerX;
-          return roundedOrthogonalPath(
-            {{ x: targetOnRight ? source.right : source.left, y: source.centerY }},
-            {{ x: targetOnRight ? target.left : target.right, y: target.centerY }},
-            "horizontal",
-            laneOffset,
-          );
+          const start = {{ x: targetOnRight ? source.right : source.left, y: source.centerY }};
+          const end = {{ x: targetOnRight ? target.left : target.right, y: target.centerY }};
+          if (straightPathIsClear(relation, start, end)) return `M ${{start.x}} ${{start.y}} L ${{end.x}} ${{end.y}}`;
+          return roundedOrthogonalPath(start, end, "horizontal", laneOffset);
         }}
         const targetBelow = target.centerY >= source.centerY;
-        return roundedOrthogonalPath(
-          {{ x: source.centerX, y: targetBelow ? source.bottom : source.top }},
-          {{ x: target.centerX, y: targetBelow ? target.top : target.bottom }},
-          "vertical",
-          laneOffset,
-        );
+        const start = {{ x: source.centerX, y: targetBelow ? source.bottom : source.top }};
+        const end = {{ x: target.centerX, y: targetBelow ? target.top : target.bottom }};
+        if (straightPathIsClear(relation, start, end)) return `M ${{start.x}} ${{start.y}} L ${{end.x}} ${{end.y}}`;
+        return roundedOrthogonalPath(start, end, "vertical", laneOffset);
       }};
 
       const appendEdge = (relation, style, index) => {{
@@ -978,14 +1102,14 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
   <div class="architecture-overview-head">
     <div>
       <h2>项目总览</h2>
-      <p class="hint">上半部分展示核心信息流和能力边界；下半部分逐项展示功能与模块状态。</p>
+      <p class="hint">上半部分展示受控 Agent 的完整运行结构、约束和治理；下半部分逐项展示功能与模块状态。</p>
     </div>
   </div>
   <div class="architecture-subsection">
     <div class="architecture-subsection-head">
       <div>
-        <h3>业务运行架构</h3>
-        <p class="hint">仅展示入口、底座、写作、审核和结果交付的主干信息流；未单列能力在图内用文字说明。</p>
+        <h3>受控 Agent 运行架构</h3>
+        <p class="hint">展示一次任务如何经过接入、理解、编排、授权执行、业务处理、质量约束和确认交付。</p>
       </div>
       <button type="button" id="architecture-motion-toggle" class="architecture-motion-toggle" aria-label="暂停信息流动效" title="暂停信息流动效" aria-pressed="false">Ⅱ</button>
     </div>
@@ -996,7 +1120,7 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
           <div class="architecture-detail-kicker" id="architecture-detail-plane">节点详情</div>
           <h3 id="architecture-detail-name">点击节点查看详情</h3>
         </div>
-        <p id="architecture-detail-description">圆角直角线表示请求和结果的传递方向，写作与审核使用不同颜色。</p>
+        <p id="architecture-detail-description">主链表示请求和结果的传递方向，写作与审核使用不同颜色。</p>
         <div class="architecture-detail-row">
           <span class="architecture-detail-label">架构分区</span>
           <div class="architecture-detail-value" id="architecture-detail-group">-</div>
@@ -1007,7 +1131,7 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
     </div>
     <div class="architecture-graph-meta">
       <div class="architecture-layer-key">{group_key}</div>
-      <span>点击节点查看职责和依据；窄屏可在图内横向浏览，建设状态请看下方清单。</span>
+      <span>动态线只表示主干信息流；工具、知识和治理通过固定分区表达。</span>
     </div>
   </div>
   <div class="architecture-subsection">
@@ -1063,38 +1187,107 @@ def _render_architecture_diagram(overview: ProjectOverview) -> str:
     </defs>
   </svg>
   <div class="architecture-plane architecture-plane--runtime">
-    <p class="architecture-plane-title">业务运行面</p>
+    <div class="architecture-plane-heading">
+      <div>
+        <p class="architecture-plane-title">业务运行面</p>
+        <p class="architecture-plane-caption">从请求进入到结果交付，每一步都有明确职责、状态和安全边界。</p>
+      </div>
+      <div class="architecture-plane-badges" aria-label="架构特征">
+        <span>受控能力范围</span><span>任务级隔离</span><span>可恢复执行</span><span>可追溯交付</span>
+      </div>
+    </div>
     <div class="architecture-main-flow">
-      {node_button("business_entry", "main", "企业微信 / 本地入口")}
-      <div class="architecture-zone architecture-zone--platform">
-        <span class="architecture-zone-title">智能体底座</span>
+      <div class="architecture-flow-column architecture-flow-column--entry">
+        <span class="architecture-phase">01 · 请求入口</span>
+        {node_button("business_entry", "main", "企业微信 / 本地入口")}
+      </div>
+      <div class="architecture-agent-core">
+        <div class="architecture-agent-core-head">
+          <span>02-04</span>
+          <strong>受控 Agent 内核</strong>
+          <small>理解需求、确定任务关系、授权并可靠执行</small>
+        </div>
         <div class="architecture-platform-stack">
-          {node_button("platform_access", "child")}
-          {node_button("platform_orchestration", "child")}
-          {node_button("agent_runtime", "child")}
+          <div class="architecture-platform-stage">
+            {node_button("platform_access", "stage", "消息标准化 · 身份映射 · 权限校验")}
+          </div>
+          <div class="architecture-platform-stage">
+            {node_button("platform_orchestration", "stage", "意图路由 · 多任务关系 · 材料组装 · 持久队列")}
+          </div>
+          <div class="architecture-platform-stage">
+            {node_button("agent_runtime", "stage", "Pydantic AI · Skill 合约 · ToolGateway · 结构化输出")}
+          </div>
         </div>
       </div>
-      <div class="architecture-capability-domains architecture-capability-domains--stacked">
+      <div class="architecture-capability-domains">
         <div class="architecture-domain-card architecture-domain-card--writing">
-          {node_button("writing_domain", "domain")}
-          <p class="architecture-domain-summary">已包含：直报、单素材简报、多素材简报、续写改稿和专题内容；可继续按 Skill 扩展。</p>
+          <div class="architecture-domain-index"><span>05A · 写作域</span><span>Skill 驱动</span></div>
+          {node_button("writing_domain", "domain", "成稿、改稿与专题内容生产")}
+          <div class="architecture-domain-capabilities">
+            {node_button("direct_report", "micro")}
+            {node_button("brief_writing", "micro")}
+            {node_button("rewrite", "micro")}
+            {node_button("thematic_content", "micro")}
+          </div>
         </div>
         <div class="architecture-domain-card architecture-domain-card--review">
-          {node_button("review_domain", "domain")}
-          <p class="architecture-domain-summary">已包含：通用审核、专项审核、格式审核和多文件联合审核；保持独立入口。</p>
+          <div class="architecture-domain-index"><span>05B · 审核域</span><span>规则与证据</span></div>
+          {node_button("review_domain", "domain", "通用、专项、格式与跨文件审核")}
+          <div class="architecture-domain-capabilities">
+            {node_button("general_review", "micro")}
+            {node_button("special_review", "micro")}
+            {node_button("format_review", "micro")}
+            {node_button("multi_file_review", "micro")}
+          </div>
         </div>
       </div>
-      {node_button("result_delivery", "main", "文字 / 附件 / 状态")}
+      <div class="architecture-flow-column architecture-flow-column--delivery">
+        <span class="architecture-phase">06 · 结果交付</span>
+        {node_button("result_delivery", "main", "文字 / 附件 / 三态回执")}
+      </div>
     </div>
-    <div class="architecture-support-row">
-      <div class="architecture-support-summary architecture-support-summary--shared">
-        <strong class="architecture-zone-title">共享工具与知识</strong>
-        <p>为写作和审核共同提供文档解析、网页读取、联网搜索、政策知识库和微众银行信息库。</p>
+    <div class="architecture-control-gates" aria-label="贯穿任务全程的五道运行约束">
+      <div class="architecture-control-gates-title">全程运行约束<small>不是只靠 Prompt</small></div>
+      <div class="architecture-control-gate"><strong>01 · 身份隔离</strong><span>用户、会话、任务和文件按入口隔离</span></div>
+      <div class="architecture-control-gate"><strong>02 · 工具白名单</strong><span>Skill 只能调用配置中声明的受限工具</span></div>
+      <div class="architecture-control-gate"><strong>03 · 结构化输出</strong><span>Pydantic 合约、规则校验与原文证据</span></div>
+      <div class="architecture-control-gate"><strong>04 · 幂等与恢复</strong><span>队列、租约、fencing token 和检查点</span></div>
+      <div class="architecture-control-gate"><strong>05 · 交付确认</strong><span>已送达、未送达、送达未知与运维告警</span></div>
+    </div>
+    <div class="architecture-foundation">
+      <div class="architecture-foundation-intro">
+        <strong>共享执行底座</strong>
+        <span>工具和知识不直接暴露给用户，只通过授权工作流调用。</span>
       </div>
-      <div class="architecture-support-summary architecture-support-summary--operations">
-        {node_button("ops_observability", "child")}
-        <p>底座同时承担权限与安全、意图路由、会话与任务、持久队列、日志告警和管理台。</p>
+      <div class="architecture-foundation-group architecture-foundation-group--tools">
+        <span class="architecture-foundation-label">受限工具层</span>
+        <div class="architecture-foundation-nodes">
+          {node_button("document_service", "child")}
+          {node_button("web_retrieval", "child")}
+        </div>
       </div>
+      <div class="architecture-foundation-group architecture-foundation-group--knowledge">
+        <span class="architecture-foundation-label">可信知识层</span>
+        <div class="architecture-foundation-nodes">
+          {node_button("policy_knowledge", "child")}
+          {node_button("bank_knowledge", "child")}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="architecture-plane architecture-plane--governance">
+    <div class="architecture-plane-heading">
+      <div>
+        <p class="architecture-plane-title">管理与治理面</p>
+        <p class="architecture-plane-caption">不参与业务内容生成，负责观察、约束、维护和持续交付。</p>
+      </div>
+    </div>
+    <div class="architecture-governance-grid">
+      {node_button("admin_console", "governance")}
+      {node_button("ops_observability", "governance")}
+      {node_button("data_governance", "governance")}
+      {node_button("engineering_governance", "governance")}
+      {node_button("knowledge_governance", "governance")}
     </div>
   </div>
 </div>"""
