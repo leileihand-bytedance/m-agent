@@ -61,6 +61,18 @@ http://127.0.0.1:8790/compose/direct_report?preview=1
 skills/direct_report/
 ```
 
+## 运行
+
+生产写作 Bot 使用 macOS 常驻服务，首次安装和日常管理在 `main` 执行：
+
+```bash
+uv run --locked python scripts/bot_services.py install writing
+uv run --locked python scripts/bot_services.py status writing
+uv run --locked python scripts/bot_services.py restart writing
+```
+
+写作代码、写作 Skill 或写作模型配置更新后需要重启 `writing`；公共底座或依赖更新后重启 `all`。直接执行 `uv run --locked python -m app.writing.bot` 只用于前台排障，必须先执行 `scripts/bot_services.py stop writing`，避免重复连接同一企业微信 Bot。
+
 ## 注意
 
 不要改动原审核 Bot。

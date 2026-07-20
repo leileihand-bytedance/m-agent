@@ -44,11 +44,16 @@ uv run --locked python -c "import sys; print(sys.executable); print(sys.version)
 # 检查公共底座配置
 uv run --locked python -m app.platform.cli --check-config
 
-# 写作 Bot
+# 写作、审核 Bot 常驻服务（macOS，首次使用 install）
+uv run --locked python scripts/bot_services.py install all
+uv run --locked python scripts/bot_services.py status all
+uv run --locked python scripts/bot_services.py restart all
+
+# 写作 Bot 配置检查和前台排障
 uv run --locked python -m app.writing.bot --check-config
 uv run --locked python -m app.writing.bot
 
-# 审核 Bot
+# 审核 Bot 配置检查和前台排障
 uv run --locked python -m app.review.main --check-config
 uv run --locked python -m app.review.main
 

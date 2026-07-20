@@ -58,6 +58,16 @@ app/review/
 
 ## 运行
 
+生产审核 Bot 使用 macOS 常驻服务，首次安装和日常管理在 `main` 执行：
+
+```bash
+uv run --locked python scripts/bot_services.py install review
+uv run --locked python scripts/bot_services.py status review
+uv run --locked python scripts/bot_services.py restart review
+```
+
+审核代码、规则或审核模型配置更新后需要重启 `review`；公共底座或依赖更新后重启 `all`。直接前台运行只用于排障，必须先执行 `scripts/bot_services.py stop review`，避免重复连接同一企业微信 Bot。
+
 ```bash
 uv run --locked python -m app.review.main --check-config
 uv run --locked python -m app.review.main

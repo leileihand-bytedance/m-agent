@@ -71,6 +71,17 @@ post-commit hook 只在存在未推送提交时告警，不再写开发日志；
 uv run --locked pytest tests/test_platform_runtime_environment.py tests/test_platform_data_paths.py tests/test_writing_platform_bot.py tests/test_review_bot.py tests/test_rewrite_bot.py tests/test_ops_config.py -v
 ```
 
+### 生产 Bot 常驻服务交付
+
+写作和审核生产 Bot 由 macOS LaunchAgent 托管。修改 `scripts/bot_services.py` 或常驻服务文档时，至少运行：
+
+```bash
+uv run --locked pytest tests/test_bot_services.py tests/test_platform_runtime_environment.py tests/test_project_documentation.py -v
+uv run --locked python scripts/project_docs.py check
+```
+
+常驻服务只能在任务分支完成离线测试，不能指向任务工作区或连接生产 Bot。代码通过 `finish-task` 合并并推送到 `main` 后，才在 `main` 执行生产重启和验收：只影响写作时重启 `writing`，只影响审核时重启 `review`；公共底座、公共配置或依赖变化时先执行 `uv sync --locked`，再重启 `all`。重启后必须同时确认 `scripts/bot_services.py status` 显示运行中、对应心跳恢复更新；写作 Bot 还要确认本地素材入口端口恢复监听。服务安装、启停和日志位置以 `docs/operations/bots.md` 为准。
+
 ## 测试分层
 
 运行数据目录或迁移逻辑变更时，至少运行：
