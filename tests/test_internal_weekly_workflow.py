@@ -18,6 +18,7 @@ from skills.internal_weekly.workflow import (
     _collect_pages,
     _collect_regulatory_pages,
     _collect_source_feed_pages,
+    _compact_chinese_summary,
     _evidence_in_body,
     _frontier_queries,
     _market_query_groups,
@@ -25,6 +26,7 @@ from skills.internal_weekly.workflow import (
     _normalize_reported_market_period,
     _ordinary_items,
     _ordinary_query_groups,
+    _party_major_event_keys,
     _resolve_market_evidence_excerpt,
     is_market_update_request,
     run,
@@ -225,10 +227,15 @@ class FakeTools:
             return FrontierSelection(
                 source_url="https://www.bis.org/publ/work999.htm",
                 title="利率传导与银行净息差",
+                chinese_title="利率传导对银行净息差的影响",
                 institution="国际清算银行",
                 authors=["研究员甲"],
                 publish_date="2026-07-09",
                 selected_passages=["第二段分析银行净息差变化。", "第三段提示风险边界。"],
+                chinese_summary=(
+                    "报告分析利率变化向银行资产负债表的传导，指出净息差会受到资产与"
+                    "负债重定价节奏差异的影响，并提示银行关注期限错配和利率风险。"
+                ),
                 source_location="网页摘要",
                 reason="与银行资产负债管理相关",
             )
@@ -286,9 +293,14 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     ]
     market_section = next(section for section in result.sections if section.name == "市场观察")
     assert market_section.items[0].title == "资本市场综述"
+    assert len(market_section.items) >= 2
+    assert any(item.title == "银行理财市场结构继续分化" for item in market_section.items[1:])
     frontier = next(section for section in result.sections if section.name == "前沿观点")
-    assert frontier.items[0].content_mode == "report_extract"
-    assert "第二段分析银行净息差变化。" in frontier.items[0].body
+    assert frontier.items[0].content_mode == "report_summary"
+    assert frontier.items[0].title == "利率传导对银行净息差的影响"
+    assert "报告分析利率变化向银行资产负债表的传导" in frontier.items[0].body
+    assert "（来源：国际清算银行《利率传导与银行净息差》）" in frontier.items[0].body
+    assert "第二段分析银行净息差变化。" not in frontier.items[0].body
     assert "这是模型" not in frontier.items[0].body
     assert result.draft_version
     assert result.output_file.endswith(".md")
@@ -306,6 +318,14 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert all(record["url"] for record in manifest["source_records"])
     assert all(record["content_sha256"] for record in manifest["source_records"])
     assert any("中国政府网" in query for query in fake.search_calls)
+    market_queries = dict(
+        _ordinary_query_groups(
+            datetime(2026, 7, 6).date(),
+            datetime(2026, 7, 12).date(),
+        )
+    )["市场观察"]
+    for query in market_queries:
+        assert fake.search_limits[fake.search_calls.index(query)] == 10
     assert any("中国人民银行" in query for query in fake.search_calls)
     assert any("BIS" in query for query in fake.search_calls)
     assert all("site:" not in query for query in fake.search_calls)
@@ -501,6 +521,11 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert any(query.startswith("国家金融监督管理总局") for query in regulatory_queries)
     assert any(query.startswith("中国证监会") for query in regulatory_queries)
     assert any(query.startswith("国家外汇管理局") for query in regulatory_queries)
+    market_queries = groups["市场观察"]
+    assert len(market_queries) >= 3
+    market_query_text = "\n".join(market_queries)
+    for topic in ("资金面", "人民币汇率", "银行理财", "黄金"):
+        assert topic in market_query_text
     peer_queries = "\n".join(groups["同业动向"])
     assert "Monzo" in peer_queries
     assert "ZA Bank" in peer_queries
@@ -639,6 +664,142 @@ def test_party_items_dedupe_same_event_and_prefer_formal_central_source():
 
     assert {item.title for item in items} == {speech.title, decision.title}
     assert len(records) == 2
+    assert warnings == []
+
+
+def test_party_items_merge_major_event_updates_and_drop_low_value_commentary():
+    specs = [
+        (
+            "speech",
+            "习近平出席2026世界人工智能大会开幕式并发表主旨讲话",
+            "习近平在2026世界人工智能大会发表主旨讲话，提出完善全球治理。",
+            "提出完善全球治理",
+            "习近平提出推动人工智能创新发展并完善全球治理。",
+            10,
+        ),
+        (
+            "plan",
+            "《人工智能合作发展行动计划》发布",
+            "有关部门在2026世界人工智能大会发布行动计划，提出数据和算力合作。",
+            "提出数据和算力合作",
+            "大会发布人工智能合作发展行动计划，部署数据、算力和人才合作。",
+            9,
+        ),
+        (
+            "organization",
+            "成立世界人工智能合作组织协定签署仪式在上海举行",
+            "2026世界人工智能大会期间，多国签署成立世界人工智能合作组织协定。",
+            "多国签署成立世界人工智能合作组织协定",
+            "多国签署协定，推动成立世界人工智能合作组织。",
+            8,
+        ),
+        (
+            "commentary",
+            "让人工智能成为造福全人类的国际公共产品——中国贡献智慧力量",
+            "文章回顾2026世界人工智能大会成果并作综合评论。",
+            "作综合评论",
+            "综合评论回顾大会成果。",
+            9.5,
+        ),
+    ]
+    pages = [
+        WebCandidate(
+            url=f"https://www.gov.cn/yaowen/liebiao/202607/{slug}.htm",
+            canonical_url=f"https://www.gov.cn/yaowen/liebiao/202607/{slug}.htm",
+            title=title,
+            site="gov.cn",
+            publisher="中国政府网",
+            publish_date="2026-07-17",
+            body=body,
+        )
+        for slug, title, body, _, _, _ in specs
+    ]
+    assessments = [
+        ContentCandidateAssessment(
+            source_url=page.canonical_url,
+            include=True,
+            section="党政要闻",
+            title=page.title,
+            summary=summary,
+            evidence_excerpt=evidence,
+            score=score,
+            reason="中央层面人工智能重大活动",
+        )
+        for page, (_, _, _, evidence, summary, score) in zip(pages, specs, strict=True)
+    ]
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": lambda payload: ContentAssessmentBatch(items=assessments)},
+    )
+
+    items, records, warnings = _ordinary_items(
+        pages,
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert len(items) == 1
+    assert items[0].title == specs[0][1]
+    assert len(items[0].source_ids) == 3
+    assert "行动计划" in items[0].body
+    assert "合作组织" in items[0].body
+    assert "综合评论" not in items[0].body
+    assert len(records) == 3
+    assert warnings == []
+
+
+def test_party_major_event_key_supports_lujiazui_forum():
+    speech_keys = _party_major_event_keys(
+        "有关负责人出席2026陆家嘴论坛并发表演讲",
+        "2026陆家嘴论坛聚焦全球经济和金融治理。",
+    )
+    outcome_keys = _party_major_event_keys(
+        "多项金融开放举措发布",
+        "有关机构在陆家嘴论坛发布多项金融开放举措。",
+    )
+
+    assert "陆家嘴论坛" in speech_keys & outcome_keys
+
+
+def test_regulatory_item_uses_regulator_as_subject_for_state_council_briefing():
+    page = WebCandidate(
+        url="https://www.pbc.gov.cn/goutongjiaoliu/news.htm",
+        canonical_url="https://www.pbc.gov.cn/goutongjiaoliu/news.htm",
+        title="国新办举行新闻发布会 介绍上半年货币政策执行情况",
+        site="pbc.gov.cn",
+        publisher="中国人民银行",
+        publish_date="2026-07-15",
+        body="国新办举行新闻发布会，中国人民银行副行长介绍上半年货币政策执行情况。",
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="监管动态",
+        title=page.title,
+        summary="7月15日，国新办举行新闻发布会，央行副行长介绍货币政策执行情况。",
+        evidence_excerpt="中国人民银行副行长介绍上半年货币政策执行情况",
+        score=9,
+        reason="人民银行政策发布",
+    )
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: ContentAssessmentBatch(items=[assessment])
+        },
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="监管动态",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert items[0].title == "中国人民银行介绍上半年货币政策执行情况"
+    assert items[0].body.startswith("7月15日，中国人民银行副行长")
+    assert "国新办" not in items[0].body
+    assert records[0].publisher == "中国人民银行"
     assert warnings == []
 
 
@@ -930,7 +1091,7 @@ def test_collect_source_feed_pages_builds_nfra_article_from_official_api_record(
             "url": content_url,
             "canonical_url": content_url,
             "site": "nfra.gov.cn",
-            "publisher": "国家金融监督管理总局",
+            "publisher": "nfra.gov.cn",
             "title": "金融监管总局部署银行业重点工作",
             "publish_date": "2026-07-10",
             "date_extracted_from": "json:publishDate",
@@ -942,6 +1103,7 @@ def test_collect_source_feed_pages_builds_nfra_article_from_official_api_record(
         tools={"web_reader": web_reader},
     )
     feed_spec = {
+        "publisher": "国家金融监督管理总局",
         "feed_url": feed_url,
         "feed_adapter": "nfra_docinfo",
         "item_id": "915",
@@ -965,6 +1127,7 @@ def test_collect_source_feed_pages_builds_nfra_article_from_official_api_record(
 
     assert read_urls == [feed_url, content_url]
     assert [page.canonical_url for page in pages] == [article_url]
+    assert pages[0].publisher == "国家金融监督管理总局"
     assert pages[0].body.startswith("金融监管总局召开专题会议")
     assert warnings == []
 
@@ -1263,6 +1426,13 @@ def test_collect_pages_supports_larger_result_limit_for_sparse_authority_search(
     assert limits == [10]
 
 
+def test_frontier_chinese_summary_is_compacted_at_sentence_boundary():
+    compacted = _compact_chinese_summary("第一句说明研究结论。" * 40)
+
+    assert len(compacted) <= 260
+    assert compacted.endswith("。")
+
+
 def test_ordinary_assessment_continues_after_one_candidate_batch_fails():
     pages = [
         WebCandidate(
@@ -1376,7 +1546,7 @@ def test_workflow_frontier_falls_back_to_recent_30_days(tmp_path):
     )
 
     frontier = next(section for section in result.sections if section.name == "前沿观点")
-    assert frontier.items[0].title == "利率传导与银行净息差"
+    assert frontier.items[0].title == "利率传导对银行净息差的影响"
     assert result.ready_for_approval is True
     assert any("近30日补充" in query for query in fake.search_calls)
     assert "前沿观点使用近30日兜底报告，发布日期不在本期统计周" in result.warnings

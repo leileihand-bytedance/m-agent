@@ -12,12 +12,14 @@ section_sources:
     - {name: 人民网, domain: people.com.cn, tier: primary}
   监管动态:
     - name: 中国人民银行新闻发布
+      publisher: 中国人民银行
       domain: pbc.gov.cn
       tier: primary
       source_group: pbc
       entry_url: "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
       feed_url: "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html"
     - name: 国家金融监督管理总局监管动态
+      publisher: 国家金融监督管理总局
       domain: nfra.gov.cn
       tier: primary
       source_group: nfra
@@ -28,6 +30,7 @@ section_sources:
       article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
       content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
     - name: 国家金融监督管理总局政策解读
+      publisher: 国家金融监督管理总局
       domain: nfra.gov.cn
       tier: primary
       source_group: nfra
@@ -38,6 +41,7 @@ section_sources:
       article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
       content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
     - name: 国家金融监督管理总局领导活动及讲话
+      publisher: 国家金融监督管理总局
       domain: nfra.gov.cn
       tier: primary
       source_group: nfra
@@ -48,6 +52,7 @@ section_sources:
       article_url_template: "https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId={docId}&itemId={itemId}&generaltype={generaltype}"
       content_url_template: "https://www.nfra.gov.cn/cn/static/data/DocInfo/SelectByDocId/data_docId={docId}.json"
     - name: 中国证监会要闻
+      publisher: 中国证监会
       domain: csrc.gov.cn
       tier: primary
       source_group: csrc

@@ -30,7 +30,7 @@ def render_review_markdown(result: InternalWeeklyResult) -> str:
                 lines.append(f"- 原文链接：[{source.title}]({source.url})")
                 lines.append(f"- 来源机构：{source.publisher or source.title}")
                 lines.append(f"- 发布日期：{source.publish_date or '以原页面为准'}")
-                if item.content_mode == "report_extract":
+                if item.content_mode in {"report_extract", "report_summary"}:
                     lines.append(f"- 报告位置：{source.source_location}")
                 if source.evidence_excerpts:
                     lines.append(f"- 核验原句：{source.evidence_excerpts[0]}")

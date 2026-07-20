@@ -65,10 +65,12 @@ class MarketEvidenceBundle(BaseModel):
 class FrontierSelection(BaseModel):
     source_url: str
     title: str
+    chinese_title: str = ""
     institution: str
     authors: list[str] = Field(default_factory=list)
     publish_date: str
     selected_passages: list[str] = Field(default_factory=list)
+    chinese_summary: str = ""
     source_location: str
     reason: str
 
@@ -91,7 +93,13 @@ class WeeklyItem(BaseModel):
     section: SectionName
     title: str
     body: str
-    content_mode: Literal["summary", "market_fixed", "market_update", "report_extract"]
+    content_mode: Literal[
+        "summary",
+        "market_fixed",
+        "market_update",
+        "report_extract",
+        "report_summary",
+    ]
     source_ids: list[str] = Field(default_factory=list)
     fixed_position: int | None = None
 

@@ -55,6 +55,8 @@ MAX_ITEMS_PER_ORDINARY_SECTION = 6
 MAX_PAGES_PER_ASSESSMENT_BATCH = 5
 MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
 MAX_ORDINARY_BODY_CHARS = 12000
+MAX_PARTY_EVENT_SOURCES = 3
+MAX_PARTY_EVENT_BODY_CHARS = 600
 WEB_READER_ATTEMPTS = 2
 MARKET_CLOSE_TIME = time(15, 0)
 PARTY_FEED_PRIORITY_MARKERS = (
@@ -109,6 +111,12 @@ PARTY_FEED_CENTRAL_MARKERS = (
     "全国政协",
 )
 PARTY_FEED_SECONDARY_MARKERS = ("评论员", "述评", "学习快评", "解读")
+PARTY_EVENT_LOW_VALUE_MARKERS = (
+    "贡献智慧力量",
+    "综合评论",
+    "回顾大会",
+)
+PARTY_MAJOR_EVENT_SUFFIXES = ("大会", "论坛", "峰会", "年会", "博览会")
 PARTY_EVENT_TITLE_NOISE = (
     "人民日报评论员",
     "学习贯彻",
@@ -149,6 +157,32 @@ _ENGLISH_MONTH_NAMES = (
     "November",
     "December",
 )
+_REGULATOR_DOMAIN_SUBJECTS = (
+    ("pbc.gov.cn", "中国人民银行"),
+    ("nfra.gov.cn", "国家金融监督管理总局"),
+    ("csrc.gov.cn", "中国证监会"),
+    ("safe.gov.cn", "国家外汇管理局"),
+)
+_REGULATOR_TEXT_SUBJECTS = (
+    ("国家金融监督管理总局", "国家金融监督管理总局"),
+    ("金融监管总局", "国家金融监督管理总局"),
+    ("中国人民银行", "中国人民银行"),
+    ("人民银行", "中国人民银行"),
+    ("央行", "中国人民银行"),
+    ("中国证监会", "中国证监会"),
+    ("证监会", "中国证监会"),
+    ("国家外汇管理局", "国家外汇管理局"),
+    ("外汇局", "国家外汇管理局"),
+)
+_RESEARCH_INSTITUTION_NAMES = {
+    "bis.org": "国际清算银行",
+    "imf.org": "国际货币基金组织",
+    "worldbank.org": "世界银行",
+    "fsb.org": "金融稳定理事会",
+    "federalreserve.gov": "美国联邦储备委员会",
+    "ecb.europa.eu": "欧洲中央银行",
+    "bankofengland.co.uk": "英格兰银行",
+}
 
 
 def _evidence_in_body(excerpt: str, body: str) -> bool:
@@ -367,6 +401,8 @@ def _party_assessment_rank(assessment: ContentCandidateAssessment) -> float:
         preference += 2
     if any(marker in title for marker in PARTY_FEED_SECONDARY_MARKERS + ("侧记", "纪实", "反响")):
         preference -= 3
+    if any(marker in f"{title}\n{assessment.summary}" for marker in PARTY_EVENT_LOW_VALUE_MARKERS):
+        preference -= 4
     return assessment.score + preference
 
 
@@ -391,6 +427,93 @@ def _party_titles_describe_same_event(left: str, right: str) -> bool:
     if not union:
         return False
     return len(left_pairs & right_pairs) / len(union) >= 0.30
+
+
+def _party_major_event_keys(title: str, body: str) -> set[str]:
+    """提取有稳定专名的重大活动，用于把大会、论坛等多篇稿件合成一条。"""
+    keys: set[str] = set()
+    text = f"{title}\n{body[:800]}"
+    suffix_pattern = "|".join(map(re.escape, PARTY_MAJOR_EVENT_SUFFIXES))
+    for clause in re.split(r"[，。；：:！？!?、\n（）()]", text):
+        clause = clause.strip()
+        for match in re.finditer(suffix_pattern, clause):
+            phrase = clause[max(0, match.start() - 28) : match.end()].strip()
+            for marker in (
+                "出席",
+                "参加",
+                "在",
+                "于",
+                "召开",
+                "举办",
+                "举行",
+                "开幕",
+                "期间",
+                "回顾",
+            ):
+                position = phrase.rfind(marker)
+                if position >= 0:
+                    phrase = phrase[position + len(marker) :]
+            phrase = re.sub(r"^(?:20\d{2}年?)", "", phrase)
+            phrase = re.sub(r"^第[一二三四五六七八九十百千万0-9]+届", "", phrase)
+            phrase = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", phrase)
+            if 4 <= len(phrase) <= 20 and any(
+                phrase.endswith(suffix) for suffix in PARTY_MAJOR_EVENT_SUFFIXES
+            ):
+                keys.add(phrase)
+    return keys
+
+
+def _merge_party_event_summary(existing: str, supplement: str) -> str | None:
+    supplement = supplement.strip()
+    if not supplement:
+        return None
+    normalized_existing = re.sub(r"\s+", "", existing)
+    normalized_supplement = re.sub(r"\s+", "", supplement)
+    if normalized_supplement in normalized_existing:
+        return None
+    combined = f"{existing.rstrip()}\n\n{supplement}"
+    if len(combined) > MAX_PARTY_EVENT_BODY_CHARS:
+        return None
+    return combined
+
+
+def _regulatory_subject(page: WebCandidate, assessment: ContentCandidateAssessment) -> str:
+    page_host = hostname(page.canonical_url or page.url)
+    for domain, subject in _REGULATOR_DOMAIN_SUBJECTS:
+        if page_host == domain or page_host.endswith(f".{domain}"):
+            return subject
+    text = f"{assessment.title}\n{assessment.summary}\n{page.title}\n{page.body[:1200]}"
+    for marker, subject in _REGULATOR_TEXT_SUBJECTS:
+        if marker in text:
+            return subject
+    return (page.publisher or page.site).strip()
+
+
+def _normalize_regulatory_title(title: str, subject: str) -> str:
+    normalized = title.strip()
+    if not subject or not normalized.startswith("国新办"):
+        return normalized
+    topic = re.sub(
+        r"^国新办(?:举行|召开)?(?:新闻发布会)?[：:\s，,]*",
+        "",
+        normalized,
+    ).strip()
+    return f"{subject}{topic}" if topic else subject
+
+
+def _normalize_regulatory_summary(summary: str, subject: str) -> str:
+    normalized = summary.strip()
+    if not subject or "国新办" not in normalized:
+        return normalized
+    normalized = re.sub(
+        r"国新办(?:举行|召开)?(?:新闻发布会)?[，,\s]*(?:中国人民银行|人民银行|央行|"
+        r"国家金融监督管理总局|金融监管总局|中国证监会|证监会|"
+        r"国家外汇管理局|外汇局)?",
+        subject,
+        normalized,
+        count=1,
+    )
+    return normalized
 
 
 def _collect_source_feed_pages(
@@ -452,7 +575,12 @@ def _collect_source_feed_pages(
             score = _party_feed_link_score(title) if source_section == "党政要闻" else 1
             if score <= 0:
                 continue
-            link_candidates.append((score, link))
+            normalized_link = dict(link)
+            normalized_link["_feed_url"] = feed_url
+            normalized_link["_publisher"] = str(
+                feed_spec.get("publisher") or feed_spec.get("name") or ""
+            ).strip()
+            link_candidates.append((score, normalized_link))
 
     pages: list[WebCandidate] = []
     seen: set[str] = set()
@@ -489,9 +617,12 @@ def _collect_source_feed_pages(
         normalized_page["publish_date"] = str(
             link.get("publish_date") or normalized_page.get("publish_date") or ""
         ).strip()
+        source_feed_url = str(link.get("_feed_url") or "").strip()
         normalized_page["date_extracted_from"] = (
-            f"official-feed:{hostname(feed_url) or 'unknown'}"
+            f"official-feed:{hostname(source_feed_url) or 'unknown'}"
         )
+        if link.get("_publisher"):
+            normalized_page["publisher"] = str(link["_publisher"]).strip()
         if fetch_url != url:
             normalized_page["url"] = url
             normalized_page["canonical_url"] = url
@@ -704,8 +835,14 @@ def _ordinary_query_groups(
         (
             "市场观察",
             (
-                "中国证券报 证券时报 第一财经 宏观经济 金融市场 利率 汇率 "
-                f"债券 理财 资管 银行业影响 {date_range}",
+                "中国证券报 证券时报 上海证券报 资金面 利率 债券收益率 "
+                f"信用利差 银行间市场 银行业影响 {date_range}",
+                "新华财经 第一财经 人民币汇率 外汇市场 跨境资金 利率走势 "
+                f"银行经营影响 {date_range}",
+                "中国证券报 证券时报 银行理财 资管 公募基金 同业存单 "
+                f"市场结构 配置变化 {date_range}",
+                "新华财经 第一财经 黄金 原油 大宗商品 全球市场 "
+                f"风险偏好 银行业影响 {date_range}",
             ),
         ),
     ]
@@ -880,8 +1017,16 @@ def _ordinary_items(
         "中央层面的高质量发展、科技创新、人工智能、数字经济、数据要素、"
         "新质生产力、扩大内需、促进消费、支持小微企业和民营经济、营商环境、"
         "就业等内容，只要对银行经营管理、客户经营、风险判断或数字化发展有明确"
-        "参考价值，都可以入选。"
+        "参考价值，都可以入选。同一大会、论坛等重大活动可以返回最多3篇互补的"
+        "正式成果稿，代码会合并为一条；重复评论、侧记和泛泛回顾不要入选。"
         if expected_section == "党政要闻"
+        else ""
+    )
+    market_scope_instruction = (
+        "市场观察除固定资本市场综述外，应从资金面与利率债券、人民币汇率与跨境"
+        "资金、银行理财与资管、黄金及全球市场中优选2至4条对银行经营有参考价值的"
+        "统计期动态；不得把单一机构宣传写成市场趋势。"
+        if expected_section == "市场观察"
         else ""
     )
     for batch_index, offset in enumerate(
@@ -906,6 +1051,7 @@ def _ordinary_items(
                             "周报服务于微众银行内部管理团队和部门，优先选择与银行经营管理、"
                             "宏观经济金融、风险管理、数字化经营直接相关的信息。"
                             f"{party_scope_instruction}"
+                            f"{market_scope_instruction}"
                             "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
                             "每一条候选都必须返回判断；不入选也要返回 include=false，不能漏答或返回空列表。"
                             "只形成事实摘要，并返回可在原文逐字核对的证据句。"
@@ -934,6 +1080,7 @@ def _ordinary_items(
     records: list[SourceRecord] = []
     seen_urls: set[str] = set()
     selected_party_event_titles: list[str] = []
+    party_event_item_indexes: dict[str, int] = {}
     for assessment, page_map in sorted(
         assessed,
         key=lambda pair: (
@@ -957,12 +1104,26 @@ def _ordinary_items(
         if not _evidence_in_body(evidence, page.body):
             warnings.append(f"《{assessment.title}》缺少可逐字核验的证据句，已排除")
             continue
+        party_event_keys = (
+            _party_major_event_keys(assessment.title, page.body)
+            if expected_section == "党政要闻"
+            else set()
+        )
+        matching_party_event_indexes = {
+            party_event_item_indexes[key]
+            for key in party_event_keys
+            if key in party_event_item_indexes
+        }
         section = classify_section(assessment.title, page.body)
-        if section != expected_section:
+        if section != expected_section and not (
+            expected_section == "党政要闻" and matching_party_event_indexes
+        ):
             warnings.append(
                 f"《{assessment.title}》无法通过{expected_section}确定性分类校验，已排除"
             )
             continue
+        if section != expected_section:
+            section = expected_section
         if not is_allowed_party_building_content(
             assessment.title, page.body, expected_section
         ):
@@ -973,26 +1134,79 @@ def _ordinary_items(
         ):
             warnings.append(f"《{assessment.title}》属于微众银行自身动态，不作为同业收录")
             continue
-        if expected_section == "党政要闻" and any(
-            _party_titles_describe_same_event(assessment.title, selected_title)
-            for selected_title in selected_party_event_titles
-        ):
-            continue
+        if expected_section == "党政要闻":
+            if matching_party_event_indexes:
+                item_index = min(matching_party_event_indexes)
+                existing_item = items[item_index]
+                if any(
+                    marker in f"{assessment.title}\n{assessment.summary}"
+                    for marker in (
+                        *PARTY_EVENT_LOW_VALUE_MARKERS,
+                        *PARTY_FEED_SECONDARY_MARKERS,
+                        "侧记",
+                        "纪实",
+                        "反响",
+                    )
+                ):
+                    continue
+                if len(existing_item.source_ids) >= MAX_PARTY_EVENT_SOURCES:
+                    continue
+                merged_body = _merge_party_event_summary(
+                    existing_item.body,
+                    assessment.summary,
+                )
+                if merged_body is None:
+                    continue
+                source_record = _record_from_page(
+                    page,
+                    retrieved_at=retrieved_at,
+                    source_type="news",
+                    evidence=[evidence],
+                )
+                items[item_index] = existing_item.model_copy(
+                    update={
+                        "body": merged_body,
+                        "source_ids": [*existing_item.source_ids, source_record.source_id],
+                    }
+                )
+                records.append(source_record)
+                seen_urls.add(page.canonical_url)
+                for key in party_event_keys:
+                    party_event_item_indexes[key] = item_index
+                continue
+            if any(
+                _party_titles_describe_same_event(assessment.title, selected_title)
+                for selected_title in selected_party_event_titles
+            ):
+                continue
+            if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
+                continue
+        item_title = assessment.title.strip() or page.title
+        item_body = assessment.summary.strip()
+        regulatory_subject = ""
+        if expected_section == "监管动态":
+            regulatory_subject = _regulatory_subject(page, assessment)
+            item_title = _normalize_regulatory_title(item_title, regulatory_subject)
+            item_body = _normalize_regulatory_summary(item_body, regulatory_subject)
         source_record = _record_from_page(
             page,
             retrieved_at=retrieved_at,
             source_type="news",
             evidence=[evidence],
         )
+        if regulatory_subject:
+            source_record = source_record.model_copy(
+                update={"publisher": regulatory_subject}
+            )
         item_id = "item-" + hashlib.sha256(
-            f"{section}|{assessment.title}|{page.canonical_url}".encode("utf-8")
+            f"{section}|{item_title}|{page.canonical_url}".encode("utf-8")
         ).hexdigest()[:12]
         items.append(
             WeeklyItem(
                 item_id=item_id,
                 section=section,
-                title=assessment.title.strip() or page.title,
-                body=assessment.summary.strip(),
+                title=item_title,
+                body=item_body,
                 content_mode="summary",
                 source_ids=[source_record.source_id],
             )
@@ -1001,7 +1215,13 @@ def _ordinary_items(
         seen_urls.add(page.canonical_url)
         if expected_section == "党政要闻":
             selected_party_event_titles.append(assessment.title)
-        if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
+            item_index = len(items) - 1
+            for key in party_event_keys:
+                party_event_item_indexes[key] = item_index
+        if (
+            expected_section != "党政要闻"
+            and len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION
+        ):
             break
     return items, records, warnings
 
@@ -1123,6 +1343,42 @@ def _market_item(
     return item, records, warnings
 
 
+def _has_chinese_text(value: str, *, minimum_chars: int = 4) -> bool:
+    return len(re.findall(r"[\u4e00-\u9fff]", value)) >= minimum_chars
+
+
+def _compact_chinese_summary(value: str, *, max_chars: int = 260) -> str:
+    normalized = re.sub(r"\s+", "", value).strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    sentences = re.findall(r"[^。！？；]+[。！？；]?", normalized)
+    selected: list[str] = []
+    length = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if selected and length + len(sentence) > max_chars:
+            break
+        if not selected and len(sentence) > max_chars:
+            shortened = sentence[:max_chars].rstrip("，,；;：:")
+            return f"{shortened}……"
+        selected.append(sentence)
+        length += len(sentence)
+    return "".join(selected) or f"{normalized[:max_chars]}……"
+
+
+def _localized_research_institution(institution: str, url: str) -> str:
+    normalized = institution.strip()
+    if _has_chinese_text(normalized, minimum_chars=2):
+        return normalized
+    page_host = hostname(url)
+    for domain, chinese_name in _RESEARCH_INSTITUTION_NAMES.items():
+        if page_host == domain or page_host.endswith(f".{domain}"):
+            return chinese_name
+    raise ValueError("前沿观点来源机构缺少可核验的中文名称")
+
+
 def _frontier_item(
     pages: list[WebCandidate],
     tools: ToolGateway,
@@ -1140,7 +1396,11 @@ def _frontier_item(
             "skill_id": "internal_weekly",
             "output_type": FrontierSelection,
             "prompt_path": "prompts/frontier.md",
-            "instruction": "选择一份研究报告，并只返回页面中逐字存在的连续原文段落；禁止改写。",
+            "instruction": (
+                "选择一份研究报告；selected_passages只返回页面中逐字存在的连续原文段落，"
+                "同时依据这些原文生成中文标题和120至220字的中文压缩摘要，不能增加原文"
+                "没有的事实或判断。"
+            ),
             "materials": _materials(pages),
         },
     )
@@ -1165,6 +1425,18 @@ def _frontier_item(
     if not period_start <= selected_date <= period_end:
         raise ValueError("前沿观点发布日期超出允许的报告窗口")
     passages = validate_frontier_selection(selection, page.body)
+    chinese_title = selection.chinese_title.strip()
+    if not chinese_title and _has_chinese_text(selection.title):
+        chinese_title = selection.title.strip()
+    if not _has_chinese_text(chinese_title):
+        raise ValueError("前沿观点缺少中文标题")
+    if not _has_chinese_text(selection.chinese_summary, minimum_chars=20):
+        raise ValueError("前沿观点缺少可核对的中文摘要")
+    chinese_summary = _compact_chinese_summary(selection.chinese_summary)
+    institution = _localized_research_institution(
+        selection.institution,
+        selection.source_url,
+    )
     warnings = []
     if len(passages) != len(selection.selected_passages):
         warnings.append("前沿观点已剔除网页截断导致的非完整段落")
@@ -1177,16 +1449,16 @@ def _frontier_item(
     ).model_copy(
         update={
             "title": selection.title,
-            "publisher": selection.institution,
+            "publisher": institution,
             "publish_date": selection.publish_date,
         }
     )
     item = WeeklyItem(
         item_id="frontier-" + hashlib.sha256(selection.source_url.encode("utf-8")).hexdigest()[:12],
         section="前沿观点",
-        title=selection.title,
-        body="\n\n".join(passages),
-        content_mode="report_extract",
+        title=chinese_title,
+        body=f"{chinese_summary}\n\n（来源：{institution}《{selection.title}》）",
+        content_mode="report_summary",
         source_ids=[record.source_id],
     )
     return item, [record], warnings
@@ -1371,7 +1643,9 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
                 period_start=period_start,
                 period_end=period_end,
                 source_section=section_name,
-                max_results_per_query=(10 if section_name == "党政要闻" else 5),
+                max_results_per_query=(
+                    10 if section_name in {"党政要闻", "市场观察"} else 5
+                ),
             )
         if section_name == "党政要闻":
             feed_pages, feed_warnings = _collect_source_feed_pages(
