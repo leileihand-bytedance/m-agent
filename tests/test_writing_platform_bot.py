@@ -634,7 +634,7 @@ async def test_handle_text_with_platform_uses_brief_ack_for_writer1():
 
 
 @pytest.mark.anyio
-async def test_handle_text_with_platform_uses_multi_brief_ack_for_writer2():
+async def test_handle_text_with_platform_uses_unified_brief_ack_for_writer2():
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(skill_id="writer2")
 
@@ -646,7 +646,7 @@ async def test_handle_text_with_platform_uses_multi_brief_ack_for_writer2():
     )
 
     assert platform_app.calls == [("wecom", "user-001", "写简报：https://example.com/a https://example.com/b")]
-    assert ws_client.stream_replies[0][2] == "收到，正在按多素材简报写作流程处理，请稍后……"
+    assert ws_client.stream_replies[0][2] == "收到，正在按简报写作流程处理，请稍后……"
 
 
 @pytest.mark.anyio
@@ -1247,7 +1247,7 @@ async def test_handle_text_with_platform_uses_writer2_for_collected_multi_materi
     structured_call = platform_app.structured_calls[0]
     assert structured_call["skill_id"] == "writer2"
     assert structured_call["urls"] == ["https://example.com/a", "https://example.com/b"]
-    assert ws_client.stream_replies[-2][2] == "收到，正在按多素材简报写作流程处理，请稍后……"
+    assert ws_client.stream_replies[-2][2] == "收到，正在按简报写作流程处理，请稍后……"
 
 
 @pytest.mark.anyio

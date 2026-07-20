@@ -255,7 +255,8 @@ def test_pydantic_writer_loads_skill_rules_from_payload_skill_id():
     )
 
     assert result["title"] == "简报标题"
-    assert "简报写作助手 (Writer1)" in calls["instructions"]
+    assert "# 简报写作助手" in calls["instructions"]
+    assert "素材关系与写作模式" in calls["instructions"]
     assert "直报写作 Skill" not in calls["instructions"]
     assert "素材正文" in fake_agent.last_prompt
 

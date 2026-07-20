@@ -1072,7 +1072,7 @@ def _ack_label_for_skill(skill_id: str | None) -> str:
     labels = {
         "direct_report": "直报写作",
         "writer1": "简报写作",
-        "writer2": "多素材简报写作",
+        "writer2": "简报写作",
         "review": "审核",
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",

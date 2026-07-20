@@ -356,6 +356,8 @@ uv run --locked pytest tests/test_brief_quality.py tests/test_brief_quality_regr
 
 真实案例人工评测按 `docs/capabilities/brief-quality-regression.md` 执行。真实材料未获得明确数据传输授权时，只做本地阅读和离线规则测试，不调用外部模型。
 
+简报统一实现还必须验证：`writer1` 能根据材料关系自动进入单素材、多素材整合或建议拆分；`writer2` 兼容入口调用 `writer1` 的规则和提示词；两个 ID 的历史任务仍可续改和从持久队列恢复；用户提示不再区分单素材版和多素材版。
+
 ### 修改直报质量规则或回归样本
 
 至少跑：
@@ -403,7 +405,7 @@ uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_i
 
 重点确认：
 
-- 直报、单素材简报、多素材简报共用底座会话能力。
+- 直报和简报共用底座会话能力；简报的 `writer1`、`writer2` 兼容 ID 必须落入同一规则和 workflow。
 - 用户换说法仍能改当前稿。
 - 中间一次追问或失败不会覆盖当前稿。
 - 用户发新链接、新文件或明确要求新写时，不会误入改稿。

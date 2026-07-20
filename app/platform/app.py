@@ -1330,7 +1330,7 @@ def _initial_task_title(*, text: str, skill_id: str) -> str:
     labels = {
         "direct_report": "直报写作任务",
         "writer1": "简报写作任务",
-        "writer2": "多素材简报任务",
+        "writer2": "简报写作任务",
         "rewrite": "材料润色任务",
         "research_synthesis": "综合调研整合任务",
         "shenyinxie_news": "深银协动态任务",

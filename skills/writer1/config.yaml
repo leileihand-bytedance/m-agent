@@ -1,6 +1,6 @@
 id: writer1
-name: 简报写作（单素材）
-description: 面向政府、监管部门的单素材简报写作 skill。
+name: 简报写作
+description: 面向政府、监管部门，自动处理单素材和多素材整合的简报写作 skill。
 enabled: true
 triggers:
   - 简报

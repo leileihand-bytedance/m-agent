@@ -705,7 +705,7 @@ def _skill_label(skill_id: str) -> str:
     labels = {
         "direct_report": "直报写作",
         "writer1": "简报写作",
-        "writer2": "多素材简报写作",
+        "writer2": "简报写作",
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",
         "shenyinxie_news": "深银协动态",

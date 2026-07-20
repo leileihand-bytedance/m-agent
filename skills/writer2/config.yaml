@@ -1,6 +1,6 @@
 id: writer2
-name: 简报写作（多素材）
-description: 面向政府、监管部门的多素材整合简报写作 skill。
+name: 简报写作
+description: 兼容历史多素材任务 ID，并转发到统一简报工作流。
 enabled: true
 triggers:
   - 多素材简报

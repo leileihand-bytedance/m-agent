@@ -14,16 +14,6 @@ def test_writer1_prompt_uses_our_bank_naming_rule():
     assert '以下简称"我行"' not in prompt + skill
 
 
-def test_writer2_prompt_uses_our_bank_naming_rule():
-    prompt = (ROOT / "skills/writer2/prompts/draft.md").read_text(encoding="utf-8")
-    skill = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
-
-    assert "深圳前海微众银行（以下简称“我行”）" in prompt
-    assert "后文统一使用“我行”" in prompt
-    assert "深圳前海微众银行（以下简称“我行”）" in skill
-    assert '以下简称"我行"' not in prompt + skill
-
-
 def test_direct_report_prompt_allows_comprehensive_progress_exception():
     prompt = (ROOT / "skills/direct_report/prompts/draft.md").read_text(encoding="utf-8")
     skill = (ROOT / "skills/direct_report/SKILL.md").read_text(encoding="utf-8")
@@ -50,15 +40,11 @@ def test_direct_report_and_brief_title_connector_rules_are_explicit():
     direct_skill = (ROOT / "skills/direct_report/SKILL.md").read_text(encoding="utf-8")
     writer1_prompt = (ROOT / "skills/writer1/prompts/draft.md").read_text(encoding="utf-8")
     writer1_skill = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
-    writer2_prompt = (ROOT / "skills/writer2/prompts/draft.md").read_text(encoding="utf-8")
-    writer2_skill = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
 
     assert "逗号或冒号" in direct_prompt
     assert "禁止使用空格" in direct_skill
     assert "逗号或冒号" in writer1_prompt
     assert "禁止使用空格" in writer1_skill
-    assert "逗号或冒号" in writer2_prompt
-    assert "禁止使用空格" in writer2_skill
 
 
 def test_writer1_prompt_mentions_planning_revision_feedback_and_anti_news_style():
@@ -78,21 +64,26 @@ def test_writer1_prompt_mentions_planning_revision_feedback_and_anti_news_style(
     assert "适合内部流转和领导阅读" not in prompt + skill + critic
 
 
-def test_writer2_prompt_mentions_unified_theme_weak_relation_and_revision_feedback():
-    prompt = (ROOT / "skills/writer2/prompts/draft.md").read_text(encoding="utf-8")
-    skill = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
-    critic = (ROOT / "skills/writer2/prompts/critic.md").read_text(encoding="utf-8")
+def test_canonical_brief_prompt_covers_multi_source_writing():
+    prompt = (ROOT / "skills/writer1/prompts/draft.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
+    critic = (ROOT / "skills/writer1/prompts/critic.md").read_text(encoding="utf-8")
 
-    assert "写作规划" in prompt
-    assert "revision_feedback" in prompt
     assert "统一主题" in prompt + skill
     assert "不要强行整合" in prompt + skill or "弱关联" in prompt + skill
-    assert "地方政府和监管部门" in prompt + skill + critic
-    assert "1000字左右" in prompt + skill
-    assert "平台合作型" in prompt + skill
-    assert "外部认可型" in prompt + skill
-    assert "内部流转简报" not in prompt + skill + critic
-    assert "适合内部流转和领导阅读" not in prompt + skill + critic
+    assert "逐份拼接" in prompt + critic
+    assert "多素材" in prompt + skill + critic
+
+
+def test_writer2_keeps_only_a_compatibility_adapter():
+    writer2 = ROOT / "skills/writer2"
+    skill = (writer2 / "SKILL.md").read_text(encoding="utf-8")
+    workflow = (writer2 / "workflow.py").read_text(encoding="utf-8")
+
+    assert not list((writer2 / "prompts").glob("*.md"))
+    assert "兼容" in skill
+    assert "skills.writer1.workflow" in workflow
+    assert len(workflow.splitlines()) <= 15
 
 
 def test_brief_skills_do_not_keep_stale_or_exaggerated_guidance():

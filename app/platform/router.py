@@ -31,7 +31,7 @@ def route_message(message: str, registry: SkillRegistry) -> RoutedRequest:
             skill_id="writer2",
             confidence=0.9,
             needs_clarification=False,
-            message="已识别为简报写作（多素材）。",
+            message="已识别为简报写作。",
             inputs={"text": normalized, "urls": urls},
         )
 

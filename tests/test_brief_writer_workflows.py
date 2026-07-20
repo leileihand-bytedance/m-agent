@@ -47,6 +47,7 @@ def test_writer1_workflow_uses_policy_materials_and_skill_specific_writer():
     assert result.sources == ["https://example.com/news", "https://www.nfra.gov.cn/policy"]
     assert calls[0][0] == "policy_materials"
     assert seen_payloads[0]["skill_id"] == "writer1"
+    assert "写作类型：单素材简报" in seen_payloads[0]["planning_note"]
     assert seen_payloads[0]["materials"][1]["source"] == "policy_knowledge"
 
 
@@ -222,7 +223,7 @@ def test_writer2_workflow_revises_previous_draft_without_requiring_multiple_sour
     assert result.needs_clarification is False
     assert result.title == "修改后多素材简报标题"
     assert result.sources == ["https://example.com/a", "https://example.com/b"]
-    assert seen_payloads[0]["skill_id"] == "writer2"
+    assert seen_payloads[0]["skill_id"] == "writer1"
     assert seen_payloads[0]["revision_request"] == "补一段面向监管的意义"
 
 
@@ -413,7 +414,7 @@ def test_writer1_workflow_asks_for_material_when_input_is_too_short():
     assert "素材" in result.message
 
 
-def test_writer2_workflow_uses_writer2_skill_id():
+def test_writer2_compatibility_workflow_uses_canonical_brief_rules():
     seen_payloads = []
     gateway = ToolGateway(
         allowed_tools=("web_reader", "policy_materials", "llm_writer"),
@@ -435,8 +436,75 @@ def test_writer2_workflow_uses_writer2_skill_id():
 
     assert result.needs_clarification is False
     assert result.sources == ["https://example.com/a", "https://example.com/b"]
-    assert seen_payloads[0]["skill_id"] == "writer2"
+    assert seen_payloads[0]["skill_id"] == "writer1"
+    assert "写作类型：多素材简报" in seen_payloads[0]["planning_note"]
     assert len(seen_payloads[0]["materials"]) == 2
+
+
+def test_writer1_unified_workflow_automatically_uses_multi_source_mode():
+    seen_payloads = []
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "policy_materials", "llm_writer"),
+        tools={
+            "web_reader": lambda url: {
+                "title": f"小微服务素材 {url}",
+                "text": "微众银行持续完善小微企业数字化融资服务机制，提升普惠金融服务效率。",
+                "url": url,
+            },
+            "policy_materials": lambda user_instruction, materials, limit=3: [],
+            "llm_writer": lambda payload: seen_payloads.append(payload)
+            or {"title": "微众银行持续提升小微企业服务质效", "body": "简报正文"},
+        },
+    )
+
+    result = run_writer1(
+        inputs={
+            "text": "请整合两个链接写简报",
+            "urls": ["https://example.com/a", "https://example.com/b"],
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert seen_payloads[0]["skill_id"] == "writer1"
+    assert "写作类型：多素材简报" in seen_payloads[0]["planning_note"]
+    assert len(seen_payloads[0]["materials"]) == 2
+
+
+def test_writer1_unified_workflow_asks_to_split_weakly_related_sources():
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "policy_materials", "llm_writer"),
+        tools={
+            "web_reader": lambda url: (
+                {
+                    "title": "微众银行服务外贸企业",
+                    "text": "微众银行通过跨境金融服务支持外贸企业稳订单拓市场。",
+                    "url": url,
+                }
+                if url.endswith("/a")
+                else {
+                    "title": "微众银行举办员工羽毛球比赛",
+                    "text": "微众银行组织员工开展羽毛球比赛，丰富员工业余生活。",
+                    "url": url,
+                }
+            ),
+            "policy_materials": lambda user_instruction, materials, limit=3: [],
+            "llm_writer": lambda payload: (_ for _ in ()).throw(
+                AssertionError("weakly related materials should not draft")
+            ),
+        },
+    )
+
+    result = run_writer1(
+        inputs={
+            "text": "请整合两个链接写简报",
+            "urls": ["https://example.com/a", "https://example.com/b"],
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is True
+    assert "不适合整合成一篇简报" in result.message
 
 
 def test_writer2_workflow_splits_inline_materials():

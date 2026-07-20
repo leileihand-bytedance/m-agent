@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from skills.brief_revision import (
@@ -7,6 +8,7 @@ from skills.brief_revision import (
     validate_revision_result,
 )
 from skills.brief_quality import (
+    assess_multi_source_relation,
     brief_critic_check,
     build_brief_plan,
     format_brief_violations,
@@ -44,13 +46,23 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
             )
 
     source_materials = list(materials)
+    multi_source = _uses_multi_source_mode(inputs, source_materials)
+    if multi_source:
+        relation = assess_multi_source_relation(source_materials)
+        if relation["relation"] == "weak":
+            return BriefResult(
+                title="",
+                body="",
+                needs_clarification=True,
+                message=relation["message"],
+            )
     if not source_materials_have_quantitative_data(source_materials):
         materials.extend(_bank_materials(inputs=inputs, materials=list(source_materials), tools=tools))
     materials.extend(_policy_research_materials(inputs=inputs, materials=list(source_materials), tools=tools))
     planning_note = build_brief_plan(
         str(inputs.get("text", "") or ""),
         materials,
-        multi_source=False,
+        multi_source=multi_source,
         tools=tools,
         skill_id="writer1",
     )
@@ -104,7 +116,7 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
         build_brief_plan(
             str(payload.get("instruction", "") or ""),
             payload["materials"],
-            multi_source=False,
+            multi_source=_uses_multi_source_mode(inputs, payload["materials"]),
             tools=tools,
             skill_id="writer1",
         )
@@ -126,6 +138,21 @@ def _apply_material_role(materials: list[dict[str, object]], inputs: dict[str, o
     role = str(inputs.get("material_role", "supplement") or "supplement")
     for item in materials:
         item["material_role"] = role
+
+
+def _uses_multi_source_mode(
+    inputs: dict[str, object],
+    materials: list[object],
+) -> bool:
+    if str(inputs.get("_brief_mode", "") or "").strip() == "multi":
+        return True
+    source_materials = [
+        item
+        for item in materials
+        if isinstance(item, dict)
+        and item.get("source") not in {"read_error", "policy_knowledge", "bank_knowledge", "previous_draft"}
+    ]
+    return len(source_materials) >= 2
 
 
 def _generate_and_validate(
@@ -236,29 +263,62 @@ def _source_materials(inputs: dict[str, object], tools: ToolGateway) -> list[dic
 
     material_text = str(inputs.get("material_text", "")).strip()
     if material_text:
-        materials.append(
-            {
-                "title": "用户补充文字素材",
-                "text": material_text,
-                "url": "",
-                "source": "user_text",
-            }
-        )
+        materials.extend(_user_text_materials(material_text, default_title="用户补充文字素材"))
 
     if materials:
         return materials
 
     text = str(inputs.get("text", "")).strip()
     if len(text) >= 30:
+        return _user_text_materials(text, default_title="用户直接提供素材")
+    return []
+
+
+def _user_text_materials(text: str, *, default_title: str) -> list[dict[str, object]]:
+    parts = _split_inline_materials(text)
+    if len(parts) < 2:
         return [
             {
-                "title": "用户直接提供素材",
+                "title": default_title,
                 "text": text,
                 "url": "",
                 "source": "user_text",
             }
         ]
-    return []
+    return [
+        {
+            "title": f"用户直接提供素材{index}",
+            "text": part,
+            "url": "",
+            "source": "user_text",
+        }
+        for index, part in enumerate(parts, 1)
+    ]
+
+
+def _split_inline_materials(text: str) -> list[str]:
+    markers = ("素材一", "素材二", "素材三", "素材四", "材料一", "材料二", "材料三", "材料四")
+    pattern = "|".join(markers)
+    pieces: list[str] = []
+    current = ""
+    for chunk in re.split(f"({pattern})[，,:：、\\s]*", text):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if chunk in markers:
+            if current.strip():
+                pieces.append(current.strip())
+            current = ""
+            continue
+        current = f"{current}\n{chunk}".strip() if current else chunk
+    if current.strip():
+        pieces.append(current.strip())
+    return [piece for piece in pieces if len(piece) >= 8 and not _looks_like_instruction_prefix(piece)]
+
+
+def _looks_like_instruction_prefix(text: str) -> bool:
+    compact = text.strip().rstrip("：:")
+    return compact in {"请写多素材简报", "写多素材简报", "请写整合简报", "写整合简报"}
 
 
 def _has_usable_materials(materials: list[dict[str, object]]) -> bool:
