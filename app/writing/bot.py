@@ -146,7 +146,8 @@ async def handle_text_with_platform(
             or _has_pending_task_relation(platform_app, sender_userid=sender_userid)
         )
     ):
-        relation = _resolve_task_relation(
+        relation = await asyncio.to_thread(
+            _resolve_task_relation,
             platform_app,
             sender_userid=sender_userid,
             content=content.strip(),
@@ -203,15 +204,15 @@ async def handle_text_with_platform(
                     )
                 return
 
-    direct_revision = (
-        intake_store is not None
-        and _prepare_direct_revision(
+    direct_revision = False
+    if intake_store is not None:
+        direct_revision = await asyncio.to_thread(
+            _prepare_direct_revision,
             platform_app,
             intake_store=intake_store,
             sender_userid=sender_userid,
             content=content.strip(),
         )
-    )
     if intake_store is not None and not direct_revision:
         decision = intake_store.handle_text(
             channel="wecom",
@@ -252,7 +253,8 @@ async def handle_text_with_platform(
 
 
     queued_route = (
-        _queueable_text_route(
+        await asyncio.to_thread(
+            _queueable_text_route,
             platform_app,
             sender_userid=sender_userid,
             content=content.strip(),
@@ -263,18 +265,21 @@ async def handle_text_with_platform(
     if task_service is not None and queued_route is not None:
         message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
         try:
-            submission = task_service.submit_text(
+            ack_message = await asyncio.to_thread(
+                _ack_message_for_text,
+                platform_app=platform_app,
+                sender_userid=sender_userid,
+                content=content.strip(),
+            )
+            submission = await asyncio.to_thread(
+                task_service.submit_text,
                 channel="wecom",
                 sender_userid=sender_userid,
                 sender_name=sender_name,
                 message_id=message_id,
                 skill_id=str(queued_route.skill_id),
                 text=content.strip(),
-                ack_message=_ack_message_for_text(
-                    platform_app=platform_app,
-                    sender_userid=sender_userid,
-                    content=content.strip(),
-                ),
+                ack_message=ack_message,
             )
         except Exception as exc:
             print(f"写作任务入队失败:{type(exc).__name__}: {exc}", flush=True)
@@ -309,7 +314,8 @@ async def handle_text_with_platform(
         )
         return
 
-    ack_message = _ack_message_for_text(
+    ack_message = await asyncio.to_thread(
+        _ack_message_for_text,
         platform_app=platform_app,
         sender_userid=sender_userid,
         content=content.strip(),
@@ -635,7 +641,8 @@ async def _queue_structured_decision(
 ) -> None:
     message_id = extract_message_id(frame) or f"fallback-{uuid4().hex}"
     try:
-        submission = task_service.submit_structured(
+        submission = await asyncio.to_thread(
+            task_service.submit_structured,
             channel="wecom",
             sender_userid=sender_userid,
             sender_name=sender_name,

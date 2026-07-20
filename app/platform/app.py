@@ -47,6 +47,10 @@ from app.platform.task_relations import (
 )
 from app.platform.user_registry import UserRegistry
 
+
+RELATION_MODEL_TIMEOUT_SECONDS = 15.0
+RELATION_MODEL_MAX_TOKENS = 1024
+
 SUPPORTED_UPLOAD_SUFFIXES = {".docx", ".pdf", ".pptx"}
 
 
@@ -104,6 +108,19 @@ class PlatformApp:
             model_max_attempts=config.model_max_attempts,
             model_retry_backoff_seconds=config.model_retry_backoff_seconds,
         )
+        relation_writer = PydanticAIWriter(
+            api_key=config.anthropic_api_key,
+            base_url=config.anthropic_base_url,
+            model_name=config.model_name,
+            skill_dir=config.skills_dir,
+            model_max_tokens=min(config.model_max_tokens, RELATION_MODEL_MAX_TOKENS),
+            model_timeout_seconds=min(
+                config.model_timeout_seconds,
+                RELATION_MODEL_TIMEOUT_SECONDS,
+            ),
+            model_max_attempts=1,
+            model_retry_backoff_seconds=0,
+        )
         tools = build_platform_tools(config, writer=writer)
         enabled_skill_ids = [skill.id for skill in registry.list_enabled()]
         if config.access_policy_path and config.access_policy_path.exists():
@@ -132,7 +149,9 @@ class PlatformApp:
                         / "task-relations.sqlite3"
                     )
                 ),
-                semantic_classifier=PydanticTaskRelationClassifier(writer.run_structured),
+                semantic_classifier=PydanticTaskRelationClassifier(
+                    relation_writer.run_structured
+                ),
             ),
             access_policy=access_policy,
             direct_report_critic_mode=config.direct_report_critic_mode,

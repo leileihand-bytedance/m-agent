@@ -144,6 +144,7 @@ class PydanticTaskRelationClassifier:
         tasks: Sequence[Mapping[str, object]],
         route_skill_id: str,
         has_new_material: bool,
+        selected_task_id: str = "",
     ) -> Mapping[str, object]:
         candidates = [
             {
@@ -153,6 +154,7 @@ class PydanticTaskRelationClassifier:
                 "status": str(item.get("status", ""))[:40],
                 "content_summary": str(item.get("content_summary", ""))[:240],
                 "pending_question": str(item.get("pending_question", ""))[:240],
+                "is_selected": str(item.get("task_id", "")) == selected_task_id,
             }
             for item in list(tasks)[:8]
         ]
@@ -169,7 +171,8 @@ class PydanticTaskRelationClassifier:
 3. 明确的新任务可以不带 target_task_id；其他 execute/select/cancel 必须带目标任务。
 4. 上传了材料不等于新任务，要结合用户表述判断 supplement、replace、reference 或 new_task。
 5. 不做权限判断，不执行工具，不读取文件，不根据候选之外的信息推断。
-6. confidence 必须反映证据强度，不要为了减少追问而虚高。"""
+6. `is_selected=true` 表示用户当前正在处理的稿件。“继续改、再改、接着改、这篇、这个直报/简报”等承接表达默认指向它；只有标题、任务序号、文种或主题明确指向其他候选时才覆盖。
+7. confidence 必须反映证据强度，不要为了减少追问而虚高。"""
         prompt = _json_dumps(
             {
                 "user_message": text[:2000],
@@ -898,6 +901,7 @@ class TaskRelationService:
             semantic = self._semantic_decision(
                 text=normalized,
                 cards=cards,
+                selected=selected,
                 route_skill_id=route_skill_id or "",
                 has_new_material=has_new_material,
             )
@@ -1115,6 +1119,7 @@ class TaskRelationService:
         *,
         text: str,
         cards: list[TaskCard],
+        selected: TaskCard | None,
         route_skill_id: str,
         has_new_material: bool,
     ) -> TaskRelationDecision | None:
@@ -1134,6 +1139,7 @@ class TaskRelationService:
                 ],
                 route_skill_id=route_skill_id,
                 has_new_material=has_new_material,
+                selected_task_id=selected.task_id if selected is not None else "",
             )
             decision = raw if isinstance(raw, TaskRelationDecision) else _decision_from_mapping(raw)
         except Exception:
@@ -1173,6 +1179,15 @@ _DEICTIC_MARKERS = (
     "上一份",
     "上一篇",
     "那个稿",
+    "再改",
+    "继续改",
+    "接着改",
+    "这个直报",
+    "这份直报",
+    "这篇直报",
+    "这个简报",
+    "这份简报",
+    "这篇简报",
 )
 _GENERIC_TITLE_MARKERS = (
     "深圳前海微众银行",

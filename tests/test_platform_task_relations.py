@@ -50,12 +50,14 @@ def test_semantic_classifier_builds_bounded_prompt_and_structured_decision():
         ],
         route_skill_id="",
         has_new_material=False,
+        selected_task_id="task-a",
     )
 
     assert decision["target_task_id"] == "task-a"
     assert decision["confidence"] == 0.93
     assert "只能从候选任务中选择" in seen["instructions"]
     assert "task-a" in seen["prompt"]
+    assert '"is_selected":true' in seen["prompt"]
     assert "这一部分只保留一个案例" in seen["prompt"]
 
 
@@ -289,6 +291,79 @@ def test_service_resolves_continue_supplement_derive_new_switch_and_cancel(tmp_p
     assert cancelled.relation is TaskRelation.CANCEL
     assert cancelled.action is RelationAction.CANCEL
     assert cancelled.target_task_id == "report-task"
+
+
+def test_followup_revision_prefers_the_current_draft_before_semantic_matching(
+    tmp_path: Path,
+) -> None:
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    _create_completed_task(
+        repository,
+        task_id="older-brief",
+        title="某银行获评行业奖项简报",
+        body="简报正文",
+    )
+    _create_completed_task(
+        repository,
+        task_id="current-report",
+        title="某银行推进智能运营直报",
+        body="直报正文",
+        skill_id="direct_report",
+    )
+    semantic_calls: list[str] = []
+
+    def misleading_semantic_classifier(**kwargs: object) -> dict[str, object]:
+        semantic_calls.append(str(kwargs.get("text", "")))
+        return {
+            "relation": "continue",
+            "target_task_id": "older-brief",
+            "material_role": "none",
+            "suggested_skill_id": "writer1",
+            "action": "execute",
+            "confidence": 0.95,
+            "reason": "错误地按奖项关键词选择旧稿",
+        }
+
+    decision = TaskRelationService(
+        repository,
+        semantic_classifier=misleading_semantic_classifier,
+    ).resolve_text(
+        channel="wecom",
+        user_id="user-001",
+        text="这是典型的动态类稿件，应该直入主题，从获奖引入，再改一下",
+        route_skill_id=None,
+    )
+
+    assert decision.relation is TaskRelation.CONTINUE
+    assert decision.target_task_id == "current-report"
+    assert semantic_calls == []
+
+
+def test_explicit_document_type_overrides_a_different_current_draft(tmp_path: Path) -> None:
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    _create_completed_task(
+        repository,
+        task_id="report-task",
+        title="某银行推进智能运营直报",
+        body="直报正文",
+        skill_id="direct_report",
+    )
+    _create_completed_task(
+        repository,
+        task_id="selected-brief",
+        title="某银行普惠金融简报",
+        body="简报正文",
+    )
+
+    decision = TaskRelationService(repository).resolve_text(
+        channel="wecom",
+        user_id="user-001",
+        text="继续改这个直报，开头直接引入获奖",
+        route_skill_id=None,
+    )
+
+    assert decision.relation is TaskRelation.CONTINUE
+    assert decision.target_task_id == "report-task"
 
 
 def test_ambiguous_revision_asks_once_and_recovers_after_restart(tmp_path: Path):
