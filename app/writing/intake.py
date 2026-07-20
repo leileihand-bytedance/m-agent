@@ -300,6 +300,17 @@ class WritingIntakeStore:
         self._sessions.pop(key, None)
         self._remove_persisted_session(key, preserve_files=False)
 
+    def prepare_direct_revision(self, *, channel: str, sender_userid: str) -> bool:
+        """允许上一稿改稿绕过空暂存，但不覆盖已经收集的新材料。"""
+
+        key = (channel, sender_userid)
+        session = self._get_active_session(key)
+        if session is not None and (session.materials or session.awaiting_clarification):
+            return False
+        if session is not None:
+            self.clear(channel=channel, sender_userid=sender_userid)
+        return True
+
     def mark_clarification(
         self,
         *,

@@ -574,6 +574,68 @@ async def test_revision_stays_on_existing_realtime_path_when_queue_is_enabled():
 
 
 @pytest.mark.anyio
+async def test_revision_clears_empty_intake_session_and_continues_previous_draft(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(
+        skill_id="writer1",
+        intent=ConversationIntent.REVISE_PREVIOUS,
+    )
+    intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+    waiting = intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="在上一轮的基础上继续改稿",
+    )
+
+    await handle_text_with_platform(
+        frame=_frame("深化业务融合这一段，只保留一个信贷审批案例"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+    )
+
+    assert waiting.action == "wait"
+    assert platform_app.calls == [
+        ("wecom", "user-001", "深化业务融合这一段，只保留一个信贷审批案例")
+    ]
+    assert ws_client.stream_replies[0][2] == "收到，我沿着上一稿继续改。"
+    assert not list((tmp_path / "intake").glob("*/session.json"))
+
+
+@pytest.mark.anyio
+async def test_revision_does_not_bypass_intake_with_collected_new_material(tmp_path):
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(
+        skill_id="writer1",
+        intent=ConversationIntent.REVISE_PREVIOUS,
+    )
+    intake_store = WritingIntakeStore(storage_dir=tmp_path / "intake")
+    intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="写简报",
+    )
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="新材料.docx", content=b"new-material"),
+    )
+
+    await handle_text_with_platform(
+        frame=_frame("开头再精简一点"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+    )
+
+    assert platform_app.calls == []
+    assert "已补充要求" in ws_client.stream_replies[-1][2]
+    assert list((tmp_path / "intake").glob("*/session.json"))
+
+
+@pytest.mark.anyio
 async def test_handle_text_with_platform_collects_research_synthesis_files_until_start():
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(skill_id="research_synthesis")

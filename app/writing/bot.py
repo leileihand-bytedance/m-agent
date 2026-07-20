@@ -127,7 +127,16 @@ async def handle_text_with_platform(
         )
         return
 
-    if intake_store is not None:
+    direct_revision = (
+        intake_store is not None
+        and _prepare_direct_revision(
+            platform_app,
+            intake_store=intake_store,
+            sender_userid=sender_userid,
+            content=content.strip(),
+        )
+    )
+    if intake_store is not None and not direct_revision:
         decision = intake_store.handle_text(
             channel="wecom",
             sender_userid=sender_userid,
@@ -797,6 +806,32 @@ def _queueable_text_route(platform_app, *, sender_userid: str, content: str):
     ):
         return None
     return route
+
+
+def _prepare_direct_revision(
+    platform_app,
+    *,
+    intake_store: WritingIntakeStore,
+    sender_userid: str,
+    content: str,
+) -> bool:
+    classifier = getattr(platform_app, "classify_text_intent", None)
+    if not callable(classifier):
+        return False
+    try:
+        intent = classifier(
+            channel="wecom",
+            sender_userid=sender_userid,
+            text=content,
+        )
+    except Exception:
+        return False
+    if intent != ConversationIntent.REVISE_PREVIOUS:
+        return False
+    return intake_store.prepare_direct_revision(
+        channel="wecom",
+        sender_userid=sender_userid,
+    )
 
 
 def _queued_acceptance_message(*, skill_id: str, created: bool) -> str:

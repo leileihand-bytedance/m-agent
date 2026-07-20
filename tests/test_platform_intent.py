@@ -30,6 +30,17 @@ def test_classifies_add_original_content_request_as_revision():
         assert intent == ConversationIntent.REVISE_PREVIOUS
 
 
+def test_classifies_local_section_reduction_as_revision():
+    intent = classify_conversation_intent(
+        text="深化业务融合这一段，可以考虑把AI垂直应用的案例只保留一个（信贷审批）",
+        has_active_conversation=True,
+        route_skill_id=None,
+        route_needs_clarification=True,
+    )
+
+    assert intent == ConversationIntent.REVISE_PREVIOUS
+
+
 def test_classifies_explicit_new_material_as_new_task():
     intent = classify_conversation_intent(
         text="根据这篇材料写简报：微众银行持续完善小微企业服务能力。",
