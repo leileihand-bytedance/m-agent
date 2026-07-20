@@ -135,7 +135,7 @@ class CapabilityAdminSummary:
 
 
 @dataclass(frozen=True)
-class ArchitectureLayerSummary:
+class ComponentGroupSummary:
     key: str
     order: str
     name: str
@@ -144,10 +144,25 @@ class ArchitectureLayerSummary:
 
 
 @dataclass(frozen=True)
+class ArchitectureNodeSummary:
+    id: str
+    name: str
+    description: str
+    plane: str
+    plane_name: str
+    group: str
+    group_name: str
+    evidence: str
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
 class ArchitectureRelationSummary:
     source_id: str
     target_id: str
     label: str
+    relation_type: str = "runtime"
 
 
 @dataclass(frozen=True)
@@ -201,9 +216,10 @@ class ProjectOverview:
     repository: RepositoryAdminSummary
     todos: tuple[TodoAdminSummary, ...]
     services: tuple[ServiceHealthSummary, ...]
-    architecture_layers: tuple[ArchitectureLayerSummary, ...]
+    architecture_nodes: tuple[ArchitectureNodeSummary, ...]
     architecture_relations: tuple[ArchitectureRelationSummary, ...]
-    capability_status_counts: dict[str, int]
+    component_groups: tuple[ComponentGroupSummary, ...]
+    component_status_counts: dict[str, int]
     modules: tuple[ModuleAdminSummary, ...]
     recent_changes: tuple[RecentChangeSummary, ...]
 
@@ -223,12 +239,24 @@ class _CapabilitySpec:
 
 
 @dataclass(frozen=True)
-class _ArchitectureLayerSpec:
+class _ComponentGroupSpec:
     key: str
     order: str
     name: str
     description: str
     capabilities: tuple[_CapabilitySpec, ...]
+
+
+@dataclass(frozen=True)
+class _ArchitectureNodeSpec:
+    id: str
+    name: str
+    description: str
+    plane: str
+    group: str
+    evidence_paths: tuple[str, ...]
+    x: int
+    y: int
 
 
 _TODO_HEADING_RE = re.compile(r"^###\s+(TODO-\d{3})[：:]\s*(.+?)\s*$", re.MULTILINE)
@@ -284,12 +312,12 @@ _EXECUTION_MODE_LABELS = {
     "persistent": "持久队列",
     "realtime": "实时执行",
 }
-_ARCHITECTURE_LAYER_SPECS = (
-    _ArchitectureLayerSpec(
+_COMPONENT_GROUP_SPECS = (
+    _ComponentGroupSpec(
         key="entry",
         order="01",
-        name="用户入口",
-        description="用户、管理员与系统交互的入口。",
+        name="业务入口",
+        description="业务用户提交写作、审核和润色需求的入口。",
         capabilities=(
             _CapabilitySpec(
                 "writing_bot",
@@ -321,21 +349,6 @@ _ARCHITECTURE_LAYER_SPECS = (
                 runtime_service="review_bot",
             ),
             _CapabilitySpec(
-                "ops_bot",
-                "运维 Bot",
-                "发送实时异常告警和工作日日报。",
-                "stable",
-                ("app/platform/ops/bot.py",),
-                runtime_service="ops_bot",
-            ),
-            _CapabilitySpec(
-                "admin_console",
-                "本机项目控制台",
-                "查看项目状态并管理 Skill 和用户权限。",
-                "stable",
-                ("app/admin/server.py",),
-            ),
-            _CapabilitySpec(
                 "unified_entry",
                 "统一企业微信入口",
                 "长期将更多业务能力收口到统一入口。",
@@ -346,11 +359,11 @@ _ARCHITECTURE_LAYER_SPECS = (
             ),
         ),
     ),
-    _ArchitectureLayerSpec(
+    _ComponentGroupSpec(
         key="platform",
         order="02",
-        name="通用底座",
-        description="所有业务能力共用的安全运行框架。",
+        name="智能体底座",
+        description="控制任务如何安全接收、路由、执行、恢复和保存状态。",
         capabilities=(
             _CapabilitySpec(
                 "gateway_identity",
@@ -403,31 +416,18 @@ _ARCHITECTURE_LAYER_SPECS = (
                 build_when_evidence_exists=True,
             ),
             _CapabilitySpec(
-                "document_service",
-                "统一文档服务",
-                "安全解析 DOCX、PDF、PPTX，按需 OCR 并生成逐页渲染资产。",
-                "building",
-                ("app/platform/documents/service.py", "app/platform/documents/enrichment.py"),
-                ("TODO-024",),
-                "work",
-                build_when_evidence_exists=True,
-            ),
-            _CapabilitySpec(
-                "attachment_delivery",
-                "公共附件回传",
-                "统一处理附件校验、串行上传、动态超时、重试、状态和运维告警。",
-                "planned",
-                ("app/platform/attachment_delivery.py",),
-                todo_ids=("TODO-017",),
-                todo_policy="work",
-                build_when_evidence_exists=True,
+                "task_files",
+                "任务状态与文件存储",
+                "为任务、会话和结果提供统一目录、状态索引和受限文件边界。",
+                "stable",
+                ("app/platform/data_paths.py", "app/platform/storage.py"),
             ),
         ),
     ),
-    _ArchitectureLayerSpec(
+    _ComponentGroupSpec(
         key="capabilities",
         order="03",
-        name="业务功能",
+        name="业务能力",
         description="面向用户交付结果的写作与审核能力。",
         capabilities=(
             _CapabilitySpec(
@@ -558,6 +558,14 @@ _ARCHITECTURE_LAYER_SPECS = (
                 todo_ids=("TODO-020",),
                 todo_policy="optimize",
             ),
+        ),
+    ),
+    _ComponentGroupSpec(
+        key="domain_components",
+        order="04",
+        name="领域公共组件",
+        description="业务域内部复用的审核与成稿处理组件，不作为用户可直接选择的能力。",
+        capabilities=(
             _CapabilitySpec(
                 "shared_review_core",
                 "审核共享核心",
@@ -576,12 +584,22 @@ _ARCHITECTURE_LAYER_SPECS = (
             ),
         ),
     ),
-    _ArchitectureLayerSpec(
+    _ComponentGroupSpec(
         key="resources",
-        order="04",
-        name="工具与知识库",
-        description="写作和审核共用的材料读取、搜索与背景信息。",
+        order="05",
+        name="共享工具服务",
+        description="业务能力通过受限授权调用的文档、网页和结果交付服务。",
         capabilities=(
+            _CapabilitySpec(
+                "document_service",
+                "统一文档服务",
+                "安全解析 DOCX、PDF、PPTX，按需 OCR 并生成逐页渲染资产。",
+                "building",
+                ("app/platform/documents/service.py", "app/platform/documents/enrichment.py"),
+                ("TODO-024",),
+                "work",
+                build_when_evidence_exists=True,
+            ),
             _CapabilitySpec(
                 "web_tools",
                 "网页读取与联网搜索",
@@ -592,22 +610,23 @@ _ARCHITECTURE_LAYER_SPECS = (
                 "optimize",
             ),
             _CapabilitySpec(
-                "docx_reader",
-                "DOCX 读取",
-                "提取正文、表格和基础结构并保留定位。",
-                "stable",
-                ("app/platform/documents/parsers/docx.py",),
-            ),
-            _CapabilitySpec(
-                "pdf_ppt_reader",
-                "PDF / PPTX 读取",
-                "已可提取文本和结构，继续补 OCR 与页面渲染。",
-                "building",
-                ("app/platform/documents/parsers/pdf.py", "app/platform/documents/parsers/pptx.py"),
-                ("TODO-024",),
-                "work",
+                "attachment_delivery",
+                "结果与附件交付",
+                "统一处理文字和附件回传、目录校验、串行上传、超时、重试和交付状态。",
+                "planned",
+                ("app/platform/attachment_delivery.py",),
+                todo_ids=("TODO-017",),
+                todo_policy="work",
                 build_when_evidence_exists=True,
             ),
+        ),
+    ),
+    _ComponentGroupSpec(
+        key="knowledge",
+        order="06",
+        name="知识资产",
+        description="经过筛选、可持续更新并由业务能力检索使用的内部知识。",
+        capabilities=(
             _CapabilitySpec(
                 "policy_knowledge",
                 "政策知识库",
@@ -626,27 +645,43 @@ _ARCHITECTURE_LAYER_SPECS = (
                 ("TODO-010",),
                 "optimize",
             ),
+            _CapabilitySpec(
+                "policy_admin",
+                "政策库可视化治理",
+                "查看、筛选、备份并勾选删除政策数据。",
+                "planned",
+                todo_ids=("TODO-007",),
+                todo_policy="work",
+            ),
         ),
     ),
-    _ArchitectureLayerSpec(
+    _ComponentGroupSpec(
         key="operations",
-        order="05",
-        name="运维与数据",
-        description="保证项目可追踪、可告警、可交付和可维护。",
+        order="07",
+        name="管理与治理",
+        description="面向管理员的运行监控、数据治理和研发交付保障。",
         capabilities=(
             _CapabilitySpec(
-                "task_files",
-                "任务与文件存储",
-                "用户材料和系统产物统一保存到 M-Agent-Files。",
+                "admin_console",
+                "本机项目控制台",
+                "查看项目状态并管理 Skill、权限和治理入口。",
                 "stable",
-                ("app/platform/data_paths.py", "app/platform/storage.py"),
+                ("app/admin/server.py",),
             ),
             _CapabilitySpec(
-                "logs_identity",
-                "日志与用户名映射",
-                "记录开发期对话、任务和可读用户名。",
+                "ops_bot",
+                "运维 Bot",
+                "发送实时异常告警和工作日日报。",
                 "stable",
-                ("app/platform/chat_log.py", "app/platform/user_registry.py"),
+                ("app/platform/ops/bot.py",),
+                runtime_service="ops_bot",
+            ),
+            _CapabilitySpec(
+                "logs_metrics",
+                "日志、指标与运行状态",
+                "记录不含业务正文的运行状态、指标，并按权限保留开发期对话日志。",
+                "stable",
+                ("app/platform/chat_log.py", "app/platform/task_status.py", "app/review/observability.py"),
             ),
             _CapabilitySpec(
                 "ops_monitoring",
@@ -671,101 +706,297 @@ _ARCHITECTURE_LAYER_SPECS = (
                 todo_ids=("TODO-022",),
                 todo_policy="work",
             ),
-            _CapabilitySpec(
-                "policy_admin",
-                "政策库可视化管理",
-                "查看、筛选、备份并勾选删除政策数据。",
-                "planned",
-                todo_ids=("TODO-007",),
-                todo_policy="work",
-            ),
         ),
     ),
 )
 
+_ARCHITECTURE_PLANE_LABELS = {
+    "runtime": "业务运行面",
+    "governance": "管理与治理面",
+}
+_ARCHITECTURE_GROUP_LABELS = {
+    "entry": "业务入口",
+    "platform": "智能体底座",
+    "capabilities": "业务能力",
+    "services": "共享工具服务",
+    "knowledge": "知识资产",
+    "governance": "管理与治理",
+}
+_ARCHITECTURE_NODE_SPECS = (
+    _ArchitectureNodeSpec(
+        "business_entry",
+        "业务入口",
+        "接收写作、审核和润色请求，并把结果返回对应企业微信会话。",
+        "runtime",
+        "entry",
+        ("app/writing/bot.py", "app/review/main.py", "app/rewrite_bot/bot.py"),
+        -620,
+        0,
+    ),
+    _ArchitectureNodeSpec(
+        "platform_access",
+        "接入与权限",
+        "标准化入口消息，识别用户身份并限制可用能力。",
+        "runtime",
+        "platform",
+        ("app/platform/gateway/wecom.py", "app/platform/identity.py"),
+        -420,
+        -160,
+    ),
+    _ArchitectureNodeSpec(
+        "platform_orchestration",
+        "任务编排与上下文",
+        "组装多条消息，完成路由、会话版本、任务排队和重启恢复。",
+        "runtime",
+        "platform",
+        ("app/platform/intake.py", "app/platform/router.py", "app/platform/conversation.py", "app/platform/task_execution.py"),
+        -420,
+        0,
+    ),
+    _ArchitectureNodeSpec(
+        "agent_runtime",
+        "Agent 运行与授权",
+        "调用 Pydantic AI 和模型，只向 Skill 暴露已授权工具。",
+        "runtime",
+        "platform",
+        ("app/platform/runtime.py", "app/platform/pydantic_runtime.py", "app/platform/tools.py"),
+        -420,
+        160,
+    ),
+    _ArchitectureNodeSpec(
+        "writing_domain",
+        "写作能力",
+        "承载直报、简报、综合调研、深银协动态、内参周报和材料润色。",
+        "runtime",
+        "capabilities",
+        ("skills", "app/writing"),
+        -220,
+        -100,
+    ),
+    _ArchitectureNodeSpec(
+        "review_domain",
+        "审核能力",
+        "承载八类审核及审核领域内部共享核心。",
+        "runtime",
+        "capabilities",
+        ("app/review",),
+        -220,
+        170,
+    ),
+    _ArchitectureNodeSpec(
+        "direct_report",
+        "直报写作",
+        "根据单条或多条素材形成问题鲜明、建议可执行的直报，并支持连续改稿。",
+        "runtime",
+        "capabilities",
+        ("skills/direct_report",),
+        0,
+        -250,
+    ),
+    _ArchitectureNodeSpec(
+        "brief_writing",
+        "简报写作",
+        "处理单素材和多素材简报，结合政策与微众银行信息形成规范稿件。",
+        "runtime",
+        "capabilities",
+        ("skills/writer1", "skills/writer2"),
+        0,
+        -160,
+    ),
+    _ArchitectureNodeSpec(
+        "rewrite",
+        "材料润色",
+        "围绕用户已有初稿和修改要求进行独立润色及后续改稿。",
+        "runtime",
+        "capabilities",
+        ("skills/rewrite", "app/rewrite_bot"),
+        0,
+        -70,
+    ),
+    _ArchitectureNodeSpec(
+        "thematic_content",
+        "专题内容生产",
+        "覆盖综合调研、深银协动态和内参周报等有专门规则的内容生产。",
+        "runtime",
+        "capabilities",
+        ("skills/research_synthesis", "skills/shenyinxie_news", "skills/internal_weekly"),
+        0,
+        20,
+    ),
+    _ArchitectureNodeSpec(
+        "general_review",
+        "通用内容审核",
+        "审核文字、Word、静态 HTML 和单份 PPTX 中的内容问题。",
+        "runtime",
+        "capabilities",
+        ("app/review/general_reviewer.py", "app/review/html_parser.py", "app/review/ppt"),
+        0,
+        120,
+    ),
+    _ArchitectureNodeSpec(
+        "special_review",
+        "专类材料审核",
+        "按内参、半月报等材料的专属结构和口径执行审核。",
+        "runtime",
+        "capabilities",
+        ("app/review/reviewer.py", "app/review/halfmonthly_reviewer.py"),
+        0,
+        210,
+    ),
+    _ArchitectureNodeSpec(
+        "format_review",
+        "公文格式审核",
+        "按明确指令检查字体、字号、标题层级和页面设置。",
+        "runtime",
+        "capabilities",
+        ("app/review/official_format_checker.py",),
+        0,
+        300,
+    ),
+    _ArchitectureNodeSpec(
+        "multi_file_review",
+        "多文件联合审核",
+        "联合检查正文、附件引用和跨文件矛盾。",
+        "runtime",
+        "capabilities",
+        ("app/review/multi_file_reviewer.py",),
+        0,
+        390,
+    ),
+    _ArchitectureNodeSpec(
+        "document_service",
+        "统一文档服务",
+        "统一解析 DOCX、PDF、PPTX，并按需提供 OCR 和页面渲染。",
+        "runtime",
+        "services",
+        ("app/platform/documents",),
+        220,
+        -160,
+    ),
+    _ArchitectureNodeSpec(
+        "web_retrieval",
+        "网页读取与联网搜索",
+        "在公网和来源规则边界内搜索、读取并核验公开材料。",
+        "runtime",
+        "services",
+        ("app/platform/builtin_tools.py",),
+        220,
+        0,
+    ),
+    _ArchitectureNodeSpec(
+        "result_delivery",
+        "结果与附件交付",
+        "统一回传文字和附件，并维护交付检查点与失败告警。",
+        "runtime",
+        "services",
+        ("app/platform/attachment_delivery.py",),
+        220,
+        160,
+    ),
+    _ArchitectureNodeSpec(
+        "policy_knowledge",
+        "政策知识库",
+        "提供经过筛选的监管和宏观政策背景。",
+        "runtime",
+        "knowledge",
+        ("app/policy_knowledge", "docs/knowledge/policy.md"),
+        440,
+        -80,
+    ),
+    _ArchitectureNodeSpec(
+        "bank_knowledge",
+        "微众银行信息库",
+        "提供银行自身产品、数据和事实口径。",
+        "runtime",
+        "knowledge",
+        ("app/bank_knowledge", "docs/knowledge/bank.md"),
+        440,
+        80,
+    ),
+    _ArchitectureNodeSpec(
+        "admin_console",
+        "本机管理台",
+        "集中查看架构、能力状态、运行健康和治理入口。",
+        "governance",
+        "governance",
+        ("app/admin",),
+        -420,
+        560,
+    ),
+    _ArchitectureNodeSpec(
+        "ops_observability",
+        "运维与可观测性",
+        "汇总日志、指标、心跳、告警和工作日日报。",
+        "governance",
+        "governance",
+        ("app/platform/ops", "app/platform/task_status.py", "app/review/observability.py"),
+        -210,
+        560,
+    ),
+    _ArchitectureNodeSpec(
+        "data_governance",
+        "运行数据治理",
+        "管理任务文件、备份、保留周期和清理边界。",
+        "governance",
+        "governance",
+        ("app/platform/data_paths.py", "app/platform/storage.py"),
+        0,
+        560,
+    ),
+    _ArchitectureNodeSpec(
+        "engineering_governance",
+        "研发交付治理",
+        "通过自动化测试、文档闸门和受管 Git 流程保证交付可追溯。",
+        "governance",
+        "governance",
+        ("scripts/project_docs.py", "docs/development/testing-and-delivery.md"),
+        210,
+        560,
+    ),
+    _ArchitectureNodeSpec(
+        "knowledge_governance",
+        "知识库治理",
+        "管理知识来源、更新、质量筛选、备份和可视化维护。",
+        "governance",
+        "governance",
+        ("docs/knowledge",),
+        420,
+        560,
+    ),
+)
+
 _ARCHITECTURE_RELATION_SPECS = (
-    ("writing_bot", "gateway_identity", "身份校验"),
-    ("review_bot", "gateway_identity", "身份校验"),
-    ("rewrite_bot", "gateway_identity", "身份校验"),
-    ("unified_entry", "gateway_identity", "统一接入"),
-    ("writing_bot", "task_intake", "组装请求"),
-    ("review_bot", "task_intake", "组装请求"),
-    ("rewrite_bot", "task_intake", "暂存原文"),
-    ("gateway_identity", "router_registry", "授权路由"),
-    ("task_intake", "router_registry", "提交任务"),
-    ("task_intake", "task_execution", "提交后台任务"),
-    ("task_execution", "runtime_gateway", "恢复执行"),
-    ("router_registry", "runtime_gateway", "选择能力"),
-    ("runtime_gateway", "direct_report", "执行 Skill"),
-    ("runtime_gateway", "brief_writing", "执行 Skill"),
-    ("runtime_gateway", "research_synthesis", "执行 Skill"),
-    ("runtime_gateway", "rewrite", "执行 Skill"),
-    ("runtime_gateway", "shenyinxie_news", "执行 Skill"),
-    ("runtime_gateway", "internal_weekly", "执行 Skill"),
-    ("writing_bot", "research_synthesis", "路由任务"),
-    ("writing_bot", "shenyinxie_news", "路由任务"),
-    ("writing_bot", "internal_weekly", "路由任务"),
-    ("rewrite_bot", "rewrite", "执行润色"),
-    ("conversation_revision", "direct_report", "续改稿件"),
-    ("conversation_revision", "brief_writing", "续改稿件"),
-    ("conversation_revision", "rewrite", "续改稿件"),
-    ("review_bot", "general_text_review", "执行审核"),
-    ("review_bot", "general_word_review", "执行审核"),
-    ("review_bot", "html_review", "执行审核"),
-    ("review_bot", "neican_review", "执行审核"),
-    ("review_bot", "halfmonthly_review", "执行审核"),
-    ("review_bot", "official_format_review", "执行审核"),
-    ("review_bot", "multi_file_review", "执行审核"),
-    ("review_bot", "ppt_review", "执行审核"),
-    ("html_review", "general_word_review", "复用通用规则"),
-    ("shared_review_core", "general_text_review", "复用核心"),
-    ("shared_review_core", "general_word_review", "复用核心"),
-    ("shared_review_core", "html_review", "复用核心"),
-    ("shared_review_core", "neican_review", "复用核心"),
-    ("shared_review_core", "halfmonthly_review", "复用核心"),
-    ("shared_review_core", "ppt_review", "有限复用"),
-    ("shared_review_core", "multi_file_review", "复用指标与调用"),
-    ("document_service", "direct_report", "提供材料"),
-    ("document_service", "brief_writing", "提供材料"),
-    ("document_service", "research_synthesis", "提供材料"),
-    ("document_service", "general_word_review", "提供材料"),
-    ("document_service", "neican_review", "提供材料"),
-    ("document_service", "halfmonthly_review", "提供材料"),
-    ("document_service", "official_format_review", "提供材料"),
-    ("document_service", "multi_file_review", "提供材料"),
-    ("document_service", "ppt_review", "提供材料"),
-    ("web_tools", "direct_report", "提供素材"),
-    ("web_tools", "brief_writing", "提供素材"),
-    ("web_tools", "shenyinxie_news", "检索新闻"),
-    ("web_tools", "internal_weekly", "检索与核验"),
-    ("policy_knowledge", "direct_report", "提供背景"),
-    ("policy_knowledge", "brief_writing", "提供背景"),
-    ("bank_knowledge", "direct_report", "提供事实"),
-    ("bank_knowledge", "brief_writing", "提供事实"),
-    ("bank_knowledge", "rewrite", "核对口径"),
-    ("docx_reader", "document_service", "标准解析"),
-    ("pdf_ppt_reader", "document_service", "标准解析"),
-    ("direct_report", "writing_final_review", "成稿检查"),
-    ("brief_writing", "writing_final_review", "成稿检查"),
-    ("general_word_review", "attachment_delivery", "回传结果"),
-    ("neican_review", "attachment_delivery", "回传结果"),
-    ("halfmonthly_review", "attachment_delivery", "回传结果"),
-    ("official_format_review", "attachment_delivery", "回传结果"),
-    ("multi_file_review", "attachment_delivery", "回传结果"),
-    ("research_synthesis", "attachment_delivery", "回传 Word"),
-    ("shenyinxie_news", "attachment_delivery", "回传 Word"),
-    ("internal_weekly", "attachment_delivery", "回传核对稿"),
-    ("runtime_gateway", "task_files", "保存任务"),
-    ("writing_bot", "logs_identity", "记录对话"),
-    ("review_bot", "logs_identity", "记录任务"),
-    ("rewrite_bot", "logs_identity", "记录任务"),
-    ("writing_bot", "ops_monitoring", "上报状态"),
-    ("review_bot", "ops_monitoring", "上报状态"),
-    ("rewrite_bot", "ops_monitoring", "上报状态"),
-    ("ops_monitoring", "ops_bot", "发送告警"),
-    ("task_files", "retention_cleanup", "到期清理"),
-    ("policy_admin", "policy_knowledge", "治理数据"),
-    ("admin_console", "router_registry", "管理 Skill"),
+    ("business_entry", "platform_access", "提交请求", "runtime"),
+    ("platform_access", "platform_orchestration", "授权并组装", "runtime"),
+    ("platform_orchestration", "agent_runtime", "调度执行", "runtime"),
+    ("agent_runtime", "writing_domain", "执行写作", "runtime"),
+    ("agent_runtime", "review_domain", "执行审核", "runtime"),
+    ("writing_domain", "direct_report", "编排直报", "runtime"),
+    ("writing_domain", "brief_writing", "编排简报", "runtime"),
+    ("writing_domain", "rewrite", "编排润色", "runtime"),
+    ("writing_domain", "thematic_content", "编排专题任务", "runtime"),
+    ("review_domain", "general_review", "编排通用审核", "runtime"),
+    ("review_domain", "special_review", "编排专类审核", "runtime"),
+    ("review_domain", "format_review", "编排格式审核", "runtime"),
+    ("review_domain", "multi_file_review", "编排联合审核", "runtime"),
+    ("writing_domain", "document_service", "读取材料", "runtime"),
+    ("review_domain", "document_service", "读取材料", "runtime"),
+    ("writing_domain", "web_retrieval", "检索与核验", "runtime"),
+    ("policy_knowledge", "writing_domain", "提供政策背景", "runtime"),
+    ("bank_knowledge", "writing_domain", "提供银行事实", "runtime"),
+    ("writing_domain", "result_delivery", "交付结果", "runtime"),
+    ("review_domain", "result_delivery", "交付结果", "runtime"),
+    ("result_delivery", "business_entry", "返回结果", "runtime"),
+    ("admin_console", "ops_observability", "查看运行", "governance"),
+    ("admin_console", "data_governance", "查看数据", "governance"),
+    ("admin_console", "engineering_governance", "查看交付", "governance"),
+    ("admin_console", "knowledge_governance", "管理知识", "governance"),
+    ("ops_observability", "business_entry", "监控入口", "governance"),
+    ("ops_observability", "agent_runtime", "监控运行", "governance"),
+    ("data_governance", "platform_orchestration", "治理任务数据", "governance"),
+    ("engineering_governance", "agent_runtime", "约束交付", "governance"),
+    ("knowledge_governance", "policy_knowledge", "治理政策库", "governance"),
+    ("knowledge_governance", "bank_knowledge", "治理银行信息库", "governance"),
 )
 
 
@@ -1066,16 +1297,17 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
     repository = repository_summary(project_root)
     recent_changes = tuple(list_recent_changes(project_root, limit=8))
     open_todos = [todo for todo in todos if todo.is_open]
-    architecture_layers = tuple(
-        _build_architecture_layers(
+    component_groups = tuple(
+        _build_component_groups(
             project_root=project_root,
             skills=skills,
             todos=todos,
             services=services,
         )
     )
-    architecture_relations = tuple(_build_architecture_relations(architecture_layers))
-    capability_status_counts = _count_capability_statuses(architecture_layers)
+    architecture_nodes = tuple(_build_architecture_nodes(project_root))
+    architecture_relations = tuple(_build_architecture_relations(architecture_nodes))
+    component_status_counts = _count_capability_statuses(component_groups)
     modules = tuple(
         _build_module_summaries(
             project_root=project_root,
@@ -1104,9 +1336,10 @@ def build_project_overview(paths: AdminPaths) -> ProjectOverview:
         repository=repository,
         todos=tuple(todos),
         services=tuple(services),
-        architecture_layers=architecture_layers,
+        architecture_nodes=architecture_nodes,
         architecture_relations=architecture_relations,
-        capability_status_counts=capability_status_counts,
+        component_groups=component_groups,
+        component_status_counts=component_status_counts,
         modules=modules,
         recent_changes=recent_changes,
     )
@@ -1158,18 +1391,18 @@ def list_recent_changes(project_root: Path, *, limit: int = 8) -> list[RecentCha
     return changes
 
 
-def _build_architecture_layers(
+def _build_component_groups(
     *,
     project_root: Path,
     skills: list[SkillAdminSummary],
     todos: list[TodoAdminSummary],
     services: list[ServiceHealthSummary],
-) -> list[ArchitectureLayerSummary]:
+) -> list[ComponentGroupSummary]:
     skills_by_id = {skill.id: skill for skill in skills}
     todos_by_id = {todo.todo_id: todo for todo in todos}
     services_by_id = {service.service: service for service in services}
-    layers: list[ArchitectureLayerSummary] = []
-    for layer_spec in _ARCHITECTURE_LAYER_SPECS:
+    groups: list[ComponentGroupSummary] = []
+    for group_spec in _COMPONENT_GROUP_SPECS:
         capabilities = tuple(
             _build_capability_summary(
                 project_root=project_root,
@@ -1178,18 +1411,43 @@ def _build_architecture_layers(
                 todos_by_id=todos_by_id,
                 services_by_id=services_by_id,
             )
-            for spec in layer_spec.capabilities
+            for spec in group_spec.capabilities
         )
-        layers.append(
-            ArchitectureLayerSummary(
-                key=layer_spec.key,
-                order=layer_spec.order,
-                name=layer_spec.name,
-                description=layer_spec.description,
+        groups.append(
+            ComponentGroupSummary(
+                key=group_spec.key,
+                order=group_spec.order,
+                name=group_spec.name,
+                description=group_spec.description,
                 capabilities=capabilities,
             )
         )
-    return layers
+    return groups
+
+
+def _build_architecture_nodes(project_root: Path) -> list[ArchitectureNodeSummary]:
+    nodes: list[ArchitectureNodeSummary] = []
+    for spec in _ARCHITECTURE_NODE_SPECS:
+        evidence = "、".join(
+            relative_path
+            for relative_path in spec.evidence_paths
+            if (project_root / relative_path).exists()
+        )
+        nodes.append(
+            ArchitectureNodeSummary(
+                id=spec.id,
+                name=spec.name,
+                description=spec.description,
+                plane=spec.plane,
+                plane_name=_ARCHITECTURE_PLANE_LABELS[spec.plane],
+                group=spec.group,
+                group_name=_ARCHITECTURE_GROUP_LABELS[spec.group],
+                evidence=f"代码/文档：{evidence}" if evidence else "规划结构",
+                x=spec.x,
+                y=spec.y,
+            )
+        )
+    return nodes
 
 
 def _build_capability_summary(
@@ -1254,23 +1512,20 @@ def _capability_execution_mode(spec: _CapabilitySpec) -> str:
 
 
 def _build_architecture_relations(
-    layers: tuple[ArchitectureLayerSummary, ...],
+    nodes: tuple[ArchitectureNodeSummary, ...],
 ) -> list[ArchitectureRelationSummary]:
-    capability_ids = {
-        capability.id
-        for layer in layers
-        for capability in layer.capabilities
-    }
+    node_ids = {node.id for node in nodes}
     relations: list[ArchitectureRelationSummary] = []
-    for source_id, target_id, label in _ARCHITECTURE_RELATION_SPECS:
-        unknown_ids = {source_id, target_id} - capability_ids
+    for source_id, target_id, label, relation_type in _ARCHITECTURE_RELATION_SPECS:
+        unknown_ids = {source_id, target_id} - node_ids
         if unknown_ids:
-            raise ValueError(f"架构关系引用了未知能力：{', '.join(sorted(unknown_ids))}")
+            raise ValueError(f"架构关系引用了未知节点：{', '.join(sorted(unknown_ids))}")
         relations.append(
             ArchitectureRelationSummary(
                 source_id=source_id,
                 target_id=target_id,
                 label=label,
+                relation_type=relation_type,
             )
         )
     return relations
@@ -1331,11 +1586,11 @@ def _capability_evidence(
 
 
 def _count_capability_statuses(
-    layers: tuple[ArchitectureLayerSummary, ...],
+    groups: tuple[ComponentGroupSummary, ...],
 ) -> dict[str, int]:
     counts = {status: 0 for status in _CAPABILITY_STATUS_LABELS}
-    for layer in layers:
-        for capability in layer.capabilities:
+    for group in groups:
+        for capability in group.capabilities:
             counts[capability.status] += 1
     return counts
 

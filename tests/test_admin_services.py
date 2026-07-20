@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.admin.services import (  # noqa: E402
-    _ARCHITECTURE_LAYER_SPECS,
+    _COMPONENT_GROUP_SPECS,
     AdminPaths,
     build_project_overview,
     list_jobs,
@@ -559,17 +559,19 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
         )
     )
 
-    assert [layer.name for layer in overview.architecture_layers] == [
-        "用户入口",
-        "通用底座",
-        "业务功能",
-        "工具与知识库",
-        "运维与数据",
+    assert [group.name for group in overview.component_groups] == [
+        "业务入口",
+        "智能体底座",
+        "业务能力",
+        "领域公共组件",
+        "共享工具服务",
+        "知识资产",
+        "管理与治理",
     ]
     capabilities = {
         capability.id: capability
-        for layer in overview.architecture_layers
-        for capability in layer.capabilities
+        for group in overview.component_groups
+        for capability in group.capabilities
     }
     assert capabilities["writing_bot"].runtime_status == "healthy"
     assert capabilities["rewrite_bot"].runtime_status == "healthy"
@@ -606,11 +608,25 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert "general_review" not in capabilities
     assert capabilities["attachment_delivery"].status == "building"
     assert capabilities["task_execution"].status == "building"
-    assert overview.capability_status_counts["building"] >= 1
-    assert overview.capability_status_counts["stable"] >= 1
+    assert overview.component_status_counts["building"] >= 1
+    assert overview.component_status_counts["stable"] >= 1
+
+    groups_by_capability = {
+        capability.id: group.name
+        for group in overview.component_groups
+        for capability in group.capabilities
+    }
+    assert groups_by_capability["admin_console"] == "管理与治理"
+    assert groups_by_capability["ops_bot"] == "管理与治理"
+    assert groups_by_capability["task_files"] == "智能体底座"
+    assert groups_by_capability["document_service"] == "共享工具服务"
+    assert groups_by_capability["shared_review_core"] == "领域公共组件"
+    assert groups_by_capability["policy_admin"] == "知识资产"
+    assert "docx_reader" not in capabilities
+    assert "pdf_ppt_reader" not in capabilities
 
 
-def test_project_overview_architecture_relations_only_reference_known_capabilities(tmp_path):
+def test_project_overview_architecture_separates_runtime_and_governance_planes(tmp_path):
     project_root = tmp_path / "project"
     skills_dir = project_root / "skills"
     _write_skill(skills_dir, "direct_report", enabled=True)
@@ -625,91 +641,63 @@ def test_project_overview_architecture_relations_only_reference_known_capabiliti
         )
     )
 
-    capability_ids = {
-        capability.id
-        for layer in overview.architecture_layers
-        for capability in layer.capabilities
-    }
-    assert len(overview.architecture_relations) >= 20
+    architecture_nodes = {node.id: node for node in overview.architecture_nodes}
+    assert 20 <= len(architecture_nodes) <= 26
+    assert architecture_nodes["business_entry"].plane == "runtime"
+    assert architecture_nodes["agent_runtime"].group == "platform"
+    assert architecture_nodes["direct_report"].group == "capabilities"
+    assert architecture_nodes["brief_writing"].group == "capabilities"
+    assert architecture_nodes["general_review"].group == "capabilities"
+    assert architecture_nodes["multi_file_review"].group == "capabilities"
+    assert architecture_nodes["document_service"].group == "services"
+    assert architecture_nodes["policy_knowledge"].group == "knowledge"
+    assert architecture_nodes["admin_console"].plane == "governance"
+    assert architecture_nodes["knowledge_governance"].plane == "governance"
+    assert "general_word_review" not in architecture_nodes
+    assert len(overview.architecture_relations) >= 15
     assert all(
-        relation.source_id in capability_ids and relation.target_id in capability_ids
+        relation.source_id in architecture_nodes and relation.target_id in architecture_nodes
         for relation in overview.architecture_relations
     )
     assert any(
-        relation.source_id == "writing_bot"
-        and relation.target_id == "task_intake"
-        and relation.label == "组装请求"
+        relation.source_id == "business_entry"
+        and relation.target_id == "platform_access"
+        and relation.label == "提交请求"
         for relation in overview.architecture_relations
     )
     assert any(
         relation.source_id == "policy_knowledge"
-        and relation.target_id == "direct_report"
-        and relation.label == "提供背景"
+        and relation.target_id == "writing_domain"
+        and relation.label == "提供政策背景"
         for relation in overview.architecture_relations
     )
     assert any(
-        relation.source_id == "task_intake"
-        and relation.target_id == "task_execution"
-        and relation.label == "提交后台任务"
+        relation.source_id == "result_delivery"
+        and relation.target_id == "business_entry"
+        and relation.label == "返回结果"
         for relation in overview.architecture_relations
     )
     assert any(
-        relation.source_id == "writing_bot"
-        and relation.target_id == "shenyinxie_news"
-        and relation.label == "路由任务"
+        relation.source_id == "knowledge_governance"
+        and relation.target_id == "policy_knowledge"
+        and relation.relation_type == "governance"
         for relation in overview.architecture_relations
     )
     assert any(
-        relation.source_id == "writing_bot"
-        and relation.target_id == "internal_weekly"
-        and relation.label == "路由任务"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "rewrite_bot"
-        and relation.target_id == "rewrite"
-        and relation.label == "执行润色"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "review_bot"
-        and relation.target_id == "html_review"
-        and relation.label == "执行审核"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "html_review"
-        and relation.target_id == "general_word_review"
-        and relation.label == "复用通用规则"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "shared_review_core"
-        and relation.target_id == "general_word_review"
-        and relation.label == "复用核心"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "web_tools"
-        and relation.target_id == "shenyinxie_news"
-        and relation.label == "检索新闻"
-        for relation in overview.architecture_relations
-    )
-    assert any(
-        relation.source_id == "research_synthesis"
-        and relation.target_id == "attachment_delivery"
-        and relation.label == "回传 Word"
+        relation.source_id == "ops_observability"
+        and relation.target_id == "agent_runtime"
+        and relation.relation_type == "governance"
         for relation in overview.architecture_relations
     )
 
 
-def test_real_skill_configs_are_all_represented_in_architecture():
+def test_real_skill_configs_are_all_represented_in_component_inventory():
     project_root = Path(__file__).resolve().parent.parent
     configured_skill_ids = {skill.id for skill in list_skills(project_root / "skills")}
     represented_skill_ids = {
         skill_id
-        for layer in _ARCHITECTURE_LAYER_SPECS
-        for capability in layer.capabilities
+        for group in _COMPONENT_GROUP_SPECS
+        for capability in group.capabilities
         for skill_id in capability.skill_ids
     }
 

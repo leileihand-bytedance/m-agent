@@ -157,6 +157,49 @@ def render_dashboard(
       overflow: visible;
     }}
     .architecture-section > .section-head {{ padding: 4px 0 16px; }}
+    .architecture-overview-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 18px;
+      padding: 4px 0 16px;
+    }}
+    .architecture-plane-key {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }}
+    .architecture-plane-key span {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #475467;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }}
+    .architecture-plane-key span::before {{
+      content: "";
+      width: 11px;
+      height: 11px;
+      border-radius: 2px;
+      background: #dbeafe;
+      border: 1px solid #2563eb;
+    }}
+    .architecture-plane-key .governance::before {{ background: #f2f4f7; border-color: #667085; }}
+    .architecture-subsection {{
+      min-width: 0;
+      margin-bottom: 20px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }}
+    .architecture-subsection-head {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }}
+    .architecture-subsection-head h3 {{ margin: 0; font-size: 16px; }}
     .architecture-toolbar {{
       min-width: 0;
       display: flex;
@@ -186,40 +229,14 @@ def render_dashboard(
     }}
     .capability-filter:last-child {{ border-right: 0; }}
     .capability-filter.is-active {{ background: #17202a; color: #fff; }}
-    .architecture-viewbar {{
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin: 14px 0 10px;
-    }}
-    .architecture-view-switch {{
-      display: inline-flex;
-      border: 1px solid #b8c2d6;
-      border-radius: 6px;
-      overflow: hidden;
-      background: #fff;
-    }}
-    .architecture-view-button {{
-      border: 0;
-      border-right: 1px solid #d9dee7;
-      border-radius: 0;
-      min-width: 86px;
-    }}
-    .architecture-view-button:last-child {{ border-right: 0; }}
-    .architecture-view-button.is-active {{ background: #17202a; color: #fff; }}
-    .architecture-graph-panel[hidden], .architecture-list-panel[hidden] {{ display: none; }}
     .architecture-graph-layout {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) 284px;
-      min-height: 650px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      overflow: hidden;
+      min-height: 720px;
       background: #fff;
     }}
     .architecture-network-wrap {{ position: relative; min-width: 0; background: #f9fafb; }}
-    #architecture-network {{ width: 100%; height: 650px; }}
+    #architecture-network {{ width: 100%; height: 720px; }}
     .architecture-graph-fallback {{
       position: absolute;
       inset: 0;
@@ -247,7 +264,8 @@ def render_dashboard(
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-top: 9px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
       color: var(--muted);
       font-size: 11px;
     }}
@@ -259,6 +277,12 @@ def render_dashboard(
       background: #fff;
       white-space: nowrap;
     }}
+    .architecture-layer-key .architecture-group-entry {{ background: #fff7ed; border-color: #b45309; }}
+    .architecture-layer-key .architecture-group-platform {{ background: #eff6ff; border-color: #2563eb; }}
+    .architecture-layer-key .architecture-group-capabilities {{ background: #ecfdf3; border-color: #0f8a56; }}
+    .architecture-layer-key .architecture-group-services {{ background: #fefce8; border-color: #a16207; }}
+    .architecture-layer-key .architecture-group-knowledge {{ background: #fdf2f8; border-color: #be185d; }}
+    .architecture-layer-key .architecture-group-governance {{ background: #f2f4f7; border-color: #667085; }}
     .architecture-flow {{ position: relative; }}
     .architecture-layer {{
       position: relative;
@@ -461,13 +485,12 @@ def render_dashboard(
     @media (max-width: 760px) {{
       header {{ padding: 16px; }}
       main {{ width: calc(100% - 20px); }}
-      .architecture-toolbar {{ display: block; }}
+      .architecture-overview-head, .architecture-toolbar, .architecture-subsection-head {{ display: block; }}
+      .architecture-plane-key {{ justify-content: flex-start; margin-top: 10px; }}
       .architecture-filters {{ margin-top: 12px; width: 100%; max-width: 100%; }}
-      .architecture-viewbar {{ align-items: stretch; flex-direction: column; }}
-      .architecture-view-switch {{ width: 100%; }}
-      .architecture-view-button {{ flex: 1 1 50%; }}
       .architecture-graph-layout {{ grid-template-columns: 1fr; min-height: 0; }}
-      #architecture-network {{ height: 520px; }}
+      .architecture-network-wrap {{ overflow-x: auto; }}
+      #architecture-network {{ width: 900px; height: 720px; }}
       .architecture-detail {{ border-left: 0; border-top: 1px solid var(--line); }}
       .architecture-graph-meta {{ align-items: flex-start; flex-direction: column; }}
       .architecture-layer {{ grid-template-columns: 1fr; gap: 12px; }}
@@ -519,38 +542,31 @@ def render_dashboard(
   <script src="/static/vendor/vis-network.min.js"></script>
   <script>
     (() => {{
-      const filters = Array.from(document.querySelectorAll("[data-capability-filter]"));
-      const listNodes = Array.from(document.querySelectorAll("[data-capability-status]"));
-      const layers = Array.from(document.querySelectorAll("[data-architecture-layer]"));
-      const viewButtons = Array.from(document.querySelectorAll("[data-architecture-view]"));
-      const viewPanels = Array.from(document.querySelectorAll("[data-architecture-panel]"));
+      const filters = Array.from(document.querySelectorAll("[data-component-filter]"));
+      const listNodes = Array.from(document.querySelectorAll("[data-component-status]"));
+      const groups = Array.from(document.querySelectorAll("[data-component-group]"));
       const fitButton = document.getElementById("architecture-fit");
       const graphElement = document.getElementById("architecture-network");
       const graphFallback = document.getElementById("architecture-graph-fallback");
       const graphDataElement = document.getElementById("architecture-graph-data");
-      let selectedStatus = "all";
       let network = null;
-      let graphNodeData = null;
-      let graphEdgeData = null;
       let graphRecords = [];
-      let graphEdges = [];
 
       const palette = {{
-        stable: {{ background: "#ecfdf3", border: "#0f8a56", highlight: {{ background: "#d1fadf", border: "#087443" }} }},
-        optimizing: {{ background: "#eff6ff", border: "#2563eb", highlight: {{ background: "#dbeafe", border: "#1d4ed8" }} }},
-        building: {{ background: "#fff7ed", border: "#b45309", highlight: {{ background: "#ffedd5", border: "#92400e" }} }},
-        planned: {{ background: "#f2f4f7", border: "#667085", highlight: {{ background: "#e4e7ec", border: "#475467" }} }},
-        paused: {{ background: "#fff8eb", border: "#7f5632", highlight: {{ background: "#fef0c7", border: "#69421f" }} }},
-        disabled: {{ background: "#f9fafb", border: "#98a2b3", highlight: {{ background: "#f2f4f7", border: "#667085" }} }},
+        entry: {{ background: "#fff7ed", border: "#b45309", highlight: {{ background: "#ffedd5", border: "#92400e" }} }},
+        platform: {{ background: "#eff6ff", border: "#2563eb", highlight: {{ background: "#dbeafe", border: "#1d4ed8" }} }},
+        capabilities: {{ background: "#ecfdf3", border: "#0f8a56", highlight: {{ background: "#d1fadf", border: "#087443" }} }},
+        services: {{ background: "#fefce8", border: "#a16207", highlight: {{ background: "#fef9c3", border: "#854d0e" }} }},
+        knowledge: {{ background: "#fdf2f8", border: "#be185d", highlight: {{ background: "#fce7f3", border: "#9d174d" }} }},
+        governance: {{ background: "#f2f4f7", border: "#667085", highlight: {{ background: "#e4e7ec", border: "#475467" }} }},
       }};
 
       const toGraphNode = (record) => ({{
         id: record.id,
-        label: record.execution_mode_label
-          ? record.name + "\\n" + record.execution_mode_label
-          : record.name,
-        level: record.level,
-        group: record.status,
+        label: record.name,
+        group: record.group,
+        x: record.x,
+        y: record.y,
       }});
 
       const toGraphEdge = (record, index) => ({{
@@ -558,61 +574,25 @@ def render_dashboard(
         from: record.source_id,
         to: record.target_id,
         label: record.label,
+        dashes: record.relation_type === "governance",
+        color: record.relation_type === "governance"
+          ? {{ color: "#667085", highlight: "#344054" }}
+          : {{ color: "#98a2b3", highlight: "#2563eb" }},
       }});
 
       const showNodeDetail = (nodeId) => {{
         const record = graphRecords.find((item) => item.id === nodeId);
         if (!record) return;
-        document.getElementById("architecture-detail-layer").textContent = record.layer_order + " · " + record.layer_name;
+        document.getElementById("architecture-detail-plane").textContent = record.plane_name;
         document.getElementById("architecture-detail-name").textContent = record.name;
         document.getElementById("architecture-detail-description").textContent = record.description;
-        document.getElementById("architecture-detail-status").textContent = record.status_label;
-        document.getElementById("architecture-detail-runtime").textContent = record.runtime_label || "不适用";
-        document.getElementById("architecture-detail-execution").textContent = record.execution_mode_label || "不适用";
+        document.getElementById("architecture-detail-group").textContent = record.group_name;
         document.getElementById("architecture-detail-evidence").textContent = record.evidence;
-        const nextText = record.todo_id && record.next_action
-          ? record.todo_id + "：" + record.next_action
-          : "暂无开放待办";
-        document.getElementById("architecture-detail-next").textContent = nextText;
       }};
 
       const fitGraph = () => {{
         if (!network) return;
         network.fit({{ animation: {{ duration: 320, easingFunction: "easeInOutQuad" }} }});
-      }};
-
-      const applyGraphFilter = () => {{
-        if (!network || !graphNodeData || !graphEdgeData) return;
-        const visibleRecords = graphRecords.filter(
-          (record) => selectedStatus === "all" || record.status === selectedStatus
-        );
-        const visibleIds = new Set(visibleRecords.map((record) => record.id));
-        graphNodeData.clear();
-        graphNodeData.add(visibleRecords.map(toGraphNode));
-        graphEdgeData.clear();
-        graphEdgeData.add(
-          graphEdges
-            .filter((edge) => visibleIds.has(edge.source_id) && visibleIds.has(edge.target_id))
-            .map(toGraphEdge)
-        );
-        const firstRecord = visibleRecords[0];
-        if (firstRecord) {{
-          network.selectNodes([firstRecord.id]);
-          showNodeDetail(firstRecord.id);
-        }}
-        window.setTimeout(fitGraph, 60);
-      }};
-
-      const setView = (view) => {{
-        if (view === "graph" && !network) return;
-        for (const button of viewButtons) {{
-          const active = button.dataset.architectureView === view;
-          button.classList.toggle("is-active", active);
-          button.setAttribute("aria-selected", active ? "true" : "false");
-        }}
-        for (const panel of viewPanels) panel.hidden = panel.dataset.architecturePanel !== view;
-        fitButton.hidden = view !== "graph";
-        if (view === "graph") window.setTimeout(fitGraph, 60);
       }};
 
       const initializeGraph = () => {{
@@ -623,16 +603,16 @@ def render_dashboard(
         try {{
           const graphData = JSON.parse(graphDataElement.textContent || "{{}}");
           graphRecords = Array.isArray(graphData.nodes) ? graphData.nodes : [];
-          graphEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
-          graphNodeData = new window.vis.DataSet(graphRecords.map(toGraphNode));
-          graphEdgeData = new window.vis.DataSet(graphEdges.map(toGraphEdge));
+          const graphEdges = Array.isArray(graphData.edges) ? graphData.edges : [];
+          const graphNodeData = new window.vis.DataSet(graphRecords.map(toGraphNode));
+          const graphEdgeData = new window.vis.DataSet(graphEdges.map(toGraphEdge));
           network = new window.vis.Network(
             graphElement,
             {{ nodes: graphNodeData, edges: graphEdgeData }},
             {{
               autoResize: true,
               groups: Object.fromEntries(
-                Object.entries(palette).map(([status, color]) => [status, {{ color }}])
+                Object.entries(palette).map(([group, color]) => [group, {{ color }}])
               ),
               nodes: {{
                 shape: "box",
@@ -649,19 +629,6 @@ def render_dashboard(
                 selectionWidth: 1.5,
                 font: {{ size: 9, color: "#667085", background: "rgba(249,250,251,0.9)", strokeWidth: 0, align: "horizontal" }},
                 smooth: {{ enabled: true, type: "cubicBezier", forceDirection: "vertical", roundness: 0.35 }},
-              }},
-              layout: {{
-                hierarchical: {{
-                  enabled: true,
-                  direction: "UD",
-                  sortMethod: "directed",
-                  levelSeparation: 175,
-                  nodeSpacing: 170,
-                  treeSpacing: 220,
-                  blockShifting: true,
-                  edgeMinimization: true,
-                  parentCentralization: true,
-                }},
               }},
               physics: false,
               interaction: {{ hover: true, keyboard: true, multiselect: false, tooltipDelay: 200 }},
@@ -681,28 +648,24 @@ def render_dashboard(
             network.selectNodes([graphRecords[0].id]);
             showNodeDetail(graphRecords[0].id);
           }}
-          setView("graph");
+          window.setTimeout(fitGraph, 60);
         }} catch (error) {{
           network = null;
           if (graphFallback) graphFallback.hidden = false;
         }}
       }};
 
-      for (const button of viewButtons) {{
-        button.addEventListener("click", () => setView(button.dataset.architectureView));
-      }}
       fitButton.addEventListener("click", fitGraph);
       for (const filter of filters) {{
         filter.addEventListener("click", () => {{
-          selectedStatus = filter.dataset.capabilityFilter;
+          const selectedStatus = filter.dataset.componentFilter;
           for (const item of filters) item.classList.toggle("is-active", item === filter);
           for (const node of listNodes) {{
-            node.hidden = selectedStatus !== "all" && node.dataset.capabilityStatus !== selectedStatus;
+            node.hidden = selectedStatus !== "all" && node.dataset.componentStatus !== selectedStatus;
           }}
-          for (const layer of layers) {{
-            layer.hidden = !Array.from(layer.querySelectorAll("[data-capability-status]")).some(node => !node.hidden);
+          for (const group of groups) {{
+            group.hidden = !Array.from(group.querySelectorAll("[data-component-status]")).some(node => !node.hidden);
           }}
-          applyGraphFilter();
         }});
       }}
       initializeGraph();
@@ -817,7 +780,7 @@ def main() -> None:
 
 
 def _render_architecture_section(overview: ProjectOverview) -> str:
-    counts = overview.capability_status_counts
+    counts = overview.component_status_counts
     total = sum(counts.values())
     filters = (
         ("all", "全部", total),
@@ -830,103 +793,101 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
     )
     filter_html = "".join(
         f'<button type="button" class="capability-filter{" is-active" if status == "all" else ""}" '
-        f'data-capability-filter="{escape(status)}">{escape(label)} {count}</button>'
+        f'data-component-filter="{escape(status)}">{escape(label)} {count}</button>'
         for status, label, count in filters
     )
-    layers = "\n".join(_render_architecture_layer(layer) for layer in overview.architecture_layers)
-    layer_key = "".join(
-        f'<span>{escape(layer.order)} {escape(layer.name)}</span>'
-        for layer in overview.architecture_layers
+    groups = "\n".join(
+        _render_component_group(group) for group in overview.component_groups
+    )
+    architecture_groups = dict(
+        (node.group, node.group_name) for node in overview.architecture_nodes
+    )
+    group_key = "".join(
+        f'<span class="architecture-group-{escape(group)}">{escape(name)}</span>'
+        for group, name in architecture_groups.items()
     )
     graph_data = _architecture_graph_json(overview)
     return f"""<section id="architecture" class="architecture-section">
-  <div class="architecture-toolbar">
+  <div class="architecture-overview-head">
     <div>
       <h2>项目总览</h2>
-      <p class="hint">建设成熟度、Bot 在线状态和持久队列迁移情况分开显示；迁移标记直接读取真实任务注册。</p>
+      <p class="hint">上半部分说明业务如何运行、治理如何支撑；下半部分逐项展示核心能力和模块状态。</p>
     </div>
-    <div class="architecture-filters" role="group" aria-label="按建设状态筛选功能">
-      {filter_html}
+    <div class="architecture-plane-key" aria-label="架构平面图例">
+      <span>业务运行面</span>
+      <span class="governance">管理与治理面</span>
     </div>
   </div>
-  <div class="architecture-viewbar">
-    <div class="architecture-view-switch" role="tablist" aria-label="架构展示方式">
-      <button type="button" class="architecture-view-button" data-architecture-view="graph" role="tab" aria-selected="false">关系图</button>
-      <button type="button" class="architecture-view-button is-active" data-architecture-view="list" role="tab" aria-selected="true">状态清单</button>
+  <div class="architecture-subsection">
+    <div class="architecture-subsection-head">
+      <div>
+        <h3>业务运行架构</h3>
+        <p class="hint">核心写作与审核能力展开一层；实线表示业务调用，虚线表示治理和监控关系。</p>
+      </div>
+      <button type="button" id="architecture-fit" title="将全部节点缩放到可见区域">适应画布</button>
     </div>
-    <button type="button" id="architecture-fit" title="将全部节点缩放到可见区域" hidden>适应画布</button>
-  </div>
-  <div class="architecture-graph-panel" data-architecture-panel="graph" hidden>
     <div class="architecture-graph-layout">
       <div class="architecture-network-wrap">
-        <div id="architecture-network" role="img" aria-label="M-Agent 五层架构能力关系图"></div>
-        <div id="architecture-graph-fallback" class="architecture-graph-fallback" hidden>关系图组件未能加载，已保留状态清单供查看。</div>
+        <div id="architecture-network" role="img" aria-label="M-Agent 业务运行与管理治理架构图"></div>
+        <div id="architecture-graph-fallback" class="architecture-graph-fallback" hidden>架构图组件未能加载，下方功能与模块状态仍可正常查看。</div>
       </div>
       <aside class="architecture-detail" aria-live="polite">
-        <div class="architecture-detail-kicker" id="architecture-detail-layer">节点详情</div>
+        <div class="architecture-detail-kicker" id="architecture-detail-plane">节点详情</div>
         <h3 id="architecture-detail-name">点击节点查看详情</h3>
-        <p id="architecture-detail-description">节点颜色表示建设成熟度，箭头表示真实调用或数据关系。</p>
+        <p id="architecture-detail-description">节点颜色表示职责分区，箭头表示实际调用、数据供给或治理关系。</p>
         <div class="architecture-detail-row">
-          <span class="architecture-detail-label">建设状态</span>
-          <div class="architecture-detail-value" id="architecture-detail-status">-</div>
-        </div>
-        <div class="architecture-detail-row">
-          <span class="architecture-detail-label">运行状态</span>
-          <div class="architecture-detail-value" id="architecture-detail-runtime">不适用</div>
-        </div>
-        <div class="architecture-detail-row">
-          <span class="architecture-detail-label">执行方式</span>
-          <div class="architecture-detail-value" id="architecture-detail-execution">不适用</div>
+          <span class="architecture-detail-label">架构分区</span>
+          <div class="architecture-detail-value" id="architecture-detail-group">-</div>
         </div>
         <div class="architecture-detail-row">
           <span class="architecture-detail-label">事实依据</span>
           <div class="architecture-detail-value" id="architecture-detail-evidence">-</div>
         </div>
-        <div class="architecture-detail-row">
-          <span class="architecture-detail-label">下一步</span>
-          <div class="architecture-detail-value" id="architecture-detail-next">暂无开放待办</div>
-        </div>
       </aside>
     </div>
     <div class="architecture-graph-meta">
-      <div class="architecture-layer-key">{layer_key}</div>
-      <span>鼠标滚轮或双指缩放，拖动画布查看；筛选会同时作用于关系图和清单。</span>
+      <div class="architecture-layer-key">{group_key}</div>
+      <span>鼠标滚轮或双指缩放，拖动画布查看；建设状态请看下方清单。</span>
     </div>
   </div>
-  <div class="architecture-flow architecture-list-panel" data-architecture-panel="list">{layers}</div>
+  <div class="architecture-subsection">
+    <div class="architecture-subsection-head architecture-toolbar">
+      <div>
+        <h3>功能与模块状态</h3>
+        <p class="hint">建设成熟度、Bot 在线状态和持久队列迁移分别显示，数据来自代码、任务注册、心跳和待办。</p>
+      </div>
+      <div class="architecture-filters" role="group" aria-label="按建设状态筛选功能">
+        {filter_html}
+      </div>
+    </div>
+    <div class="architecture-flow">{groups}</div>
+  </div>
   <script id="architecture-graph-data" type="application/json">{graph_data}</script>
 </section>"""
 
 
 def _architecture_graph_json(overview: ProjectOverview) -> str:
-    nodes: list[dict[str, object]] = []
-    for level, layer in enumerate(overview.architecture_layers):
-        for capability in layer.capabilities:
-            nodes.append(
-                {
-                    "id": capability.id,
-                    "name": capability.name,
-                    "status": capability.status,
-                    "status_label": capability.status_label,
-                    "layer": layer.key,
-                    "layer_name": layer.name,
-                    "layer_order": layer.order,
-                    "level": level,
-                    "description": capability.description,
-                    "evidence": capability.evidence,
-                    "todo_id": capability.todo_id,
-                    "next_action": capability.next_action,
-                    "runtime_status": capability.runtime_status,
-                    "runtime_label": capability.runtime_label,
-                    "execution_mode": capability.execution_mode,
-                    "execution_mode_label": capability.execution_mode_label,
-                }
-            )
+    nodes = [
+        {
+            "id": node.id,
+            "name": node.name,
+            "description": node.description,
+            "plane": node.plane,
+            "plane_name": node.plane_name,
+            "group": node.group,
+            "group_name": node.group_name,
+            "evidence": node.evidence,
+            "x": node.x,
+            "y": node.y,
+        }
+        for node in overview.architecture_nodes
+    ]
     edges = [
         {
             "source_id": relation.source_id,
             "target_id": relation.target_id,
             "label": relation.label,
+            "relation_type": relation.relation_type,
         }
         for relation in overview.architecture_relations
     ]
@@ -944,15 +905,15 @@ def _architecture_graph_json(overview: ProjectOverview) -> str:
     )
 
 
-def _render_architecture_layer(layer: object) -> str:
+def _render_component_group(group: object) -> str:
     capabilities = "\n".join(
-        _render_capability_node(capability) for capability in getattr(layer, "capabilities")
+        _render_capability_node(capability) for capability in getattr(group, "capabilities")
     )
-    return f"""<div class="architecture-layer" data-architecture-layer="{escape(str(getattr(layer, "key")))}">
+    return f"""<div class="architecture-layer" data-component-group="{escape(str(getattr(group, "key")))}">
   <div class="layer-heading">
-    <span class="layer-order">{escape(str(getattr(layer, "order")))}</span>
-    <h3>{escape(str(getattr(layer, "name")))}</h3>
-    <p>{escape(str(getattr(layer, "description")))}</p>
+    <span class="layer-order">{escape(str(getattr(group, "order")))}</span>
+    <h3>{escape(str(getattr(group, "name")))}</h3>
+    <p>{escape(str(getattr(group, "description")))}</p>
   </div>
   <div class="capability-grid">{capabilities}</div>
 </div>"""
@@ -982,7 +943,7 @@ def _render_capability_node(capability: object) -> str:
         next_html = (
             f'<div class="capability-next"><strong>{escape(todo_id)}</strong>：{escape(next_action)}</div>'
         )
-    return f"""<article class="capability-node capability-state-{escape(status)}" data-capability-status="{escape(status)}" data-execution-mode="{escape(execution_mode)}">
+    return f"""<article class="capability-node capability-state-{escape(status)}" data-component-status="{escape(status)}" data-execution-mode="{escape(execution_mode)}">
   <div class="capability-node-head">
     <h4>{escape(str(getattr(capability, "name")))}</h4>
     <span class="capability-status {escape(status)}">{escape(str(getattr(capability, "status_label")))}</span>

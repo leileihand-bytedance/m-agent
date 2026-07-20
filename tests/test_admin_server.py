@@ -232,10 +232,16 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
 
     assert '<h2>项目总览</h2>' in html
     assert "整体架构与功能模块" not in html
-    assert "用户入口" in html
-    assert "通用底座" in html
-    assert "工具与知识库" in html
-    assert "运维与数据" in html
+    assert "业务运行面" in html
+    assert "管理与治理面" in html
+    assert "功能与模块状态" in html
+    assert "业务入口" in html
+    assert "智能体底座" in html
+    assert "共享工具服务" in html
+    assert "知识资产" in html
+    assert "领域公共组件" in html
+    assert "工具与知识库" not in html
+    assert "运维与数据" not in html
     assert "材料润色 Bot" in html
     assert "综合调研整合" in html
     assert "深银协动态" in html
@@ -247,10 +253,10 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert 'data-execution-mode="persistent"' in html
     assert 'data-execution-mode="realtime"' in html
     assert "检查幻灯片文字、逻辑、版式并提供可交付结果" not in html
-    assert 'data-capability-status="stable"' in html
-    assert 'data-capability-status="building"' in html
-    assert 'data-capability-filter="all"' in html
-    assert 'data-capability-filter="building"' in html
+    assert 'data-component-status="stable"' in html
+    assert 'data-component-status="building"' in html
+    assert 'data-component-filter="all"' in html
+    assert 'data-component-filter="building"' in html
     assert "稳定运行" in html
     assert "建设中" in html
     assert "<script>alert(1)</script>" not in html
@@ -272,15 +278,18 @@ def test_render_dashboard_includes_local_interactive_architecture_graph(tmp_path
 
     assert 'id="architecture-network"' in html
     assert 'id="architecture-graph-data"' in html
-    assert 'data-architecture-view="graph"' in html
-    assert 'data-architecture-view="list"' in html
-    assert "关系图" in html
-    assert "状态清单" in html
+    assert "业务运行架构" in html
+    assert 'data-component-status="stable"' in html
+    assert 'data-component-filter="all"' in html
+    assert 'data-architecture-view="graph"' not in html
     assert '<script src="/static/vendor/vis-network.min.js"></script>' in html
     assert "unpkg.com" not in html
-    assert '"source_id":"writing_bot"' in html
-    assert '"execution_mode":"persistent"' in html
-    assert 'record.name + "\\n" + record.execution_mode_label' in html
+    assert '"id":"business_entry"' in html
+    assert '"id":"admin_console"' in html
+    assert '"plane":"runtime"' in html
+    assert '"plane":"governance"' in html
+    assert '"source_id":"business_entry"' in html
+    assert '"relation_type":"governance"' in html
 
 
 def test_interactive_graph_dependency_is_vendored_with_license_files():
