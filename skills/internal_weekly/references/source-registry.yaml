@@ -75,6 +75,16 @@ section_sources:
     - {name: 财新, domain: caixin.com, tier: secondary}
     - {name: 每日经济新闻, domain: nbd.com.cn, tier: secondary}
   市场观察:
+    # 国内宏观、货币与资产管理：价格/统计数据优先回到官方发布主体。
+    - {name: 国家统计局数据发布, domain: stats.gov.cn, tier: primary, entry_url: "https://www.stats.gov.cn/sj/zxfb/"}
+    - {name: 中国人民银行, domain: pbc.gov.cn, tier: primary, entry_url: "https://www.pbc.gov.cn/"}
+    - {name: 国家发展改革委新闻发布, domain: ndrc.gov.cn, tier: primary, entry_url: "https://www.ndrc.gov.cn/xwdt/xwfb/"}
+    - {name: 海关总署, domain: customs.gov.cn, tier: primary}
+    - {name: 国家外汇管理局, domain: safe.gov.cn, tier: primary}
+    - {name: 中国货币网, domain: chinamoney.com.cn, tier: primary, entry_url: "https://www.chinamoney.com.cn/chinese/bkccpr/"}
+    - {name: 中国债券信息网, domain: chinabond.com.cn, tier: primary, entry_url: "https://yield.chinabond.com.cn/cbweb-cbrc-web/cbrc/showCbrc"}
+    - {name: 中国理财网, domain: chinawealth.com.cn, tier: primary, entry_url: "https://www.chinawealth.com.cn/"}
+    - {name: 中国证券投资基金业协会, domain: amac.org.cn, tier: primary, entry_url: "https://www.amac.org.cn/sjtj/tjbg/"}
     - {name: 上海证券交易所, domain: sse.com.cn, tier: primary}
     - {name: 深圳证券交易所, domain: szse.cn, tier: primary}
     - {name: 中证指数, domain: cnindex.com.cn, tier: primary}
@@ -82,6 +92,20 @@ section_sources:
     - {name: 恒生指数公司, domain: hsi.com.hk, tier: primary}
     - {name: 标普道琼斯指数, domain: spglobal.com, tier: primary}
     - {name: 纳斯达克, domain: nasdaq.com, tier: primary}
+    # 全球宏观、央行、能源与资本市场：官方数据/决议优先，通讯社用于事件拼图。
+    - {name: 美国联邦储备委员会, domain: federalreserve.gov, tier: primary, entry_url: "https://www.federalreserve.gov/monetarypolicy.htm"}
+    - {name: 欧洲中央银行, domain: ecb.europa.eu, tier: primary, entry_url: "https://www.ecb.europa.eu/press/govcdec/mopo/html/index.en.html"}
+    - {name: 英格兰银行, domain: bankofengland.co.uk, tier: primary, entry_url: "https://www.bankofengland.co.uk/monetary-policy-summary-and-minutes"}
+    - {name: 日本银行, domain: boj.or.jp, tier: primary}
+    - {name: 美国劳工统计局, domain: bls.gov, tier: primary, entry_url: "https://www.bls.gov/newsroom/home.htm"}
+    - {name: 美国经济分析局, domain: bea.gov, tier: primary, entry_url: "https://www.bea.gov/news"}
+    - {name: 国际货币基金组织, domain: imf.org, tier: primary, entry_url: "https://www.imf.org/en/home"}
+    - {name: 世界银行, domain: worldbank.org, tier: primary}
+    - {name: 美国能源信息署, domain: eia.gov, tier: primary, entry_url: "https://www.eia.gov/petroleum/"}
+    - {name: 国际能源署, domain: iea.org, tier: primary}
+    - {name: 石油输出国组织, domain: opec.org, tier: primary}
+    - {name: 世界贸易组织, domain: wto.org, tier: primary}
+    - {name: 美国证券交易委员会, domain: sec.gov, tier: primary, entry_url: "https://www.sec.gov/newsroom/press-releases"}
     - {name: 新华财经, domain: cnfin.com, tier: secondary}
     - {name: 中国证券报, domain: cs.com.cn, tier: secondary}
     - {name: 上海证券报, domain: cnstock.com, tier: secondary}
@@ -92,6 +116,9 @@ section_sources:
     - {name: 新京报, domain: bjd.com.cn, tier: secondary}
     - {name: 南方财经, domain: sfccn.com, tier: secondary}
     - {name: 美联社, domain: apnews.com, tier: secondary}
+    - {name: 路透社, domain: reuters.com, tier: secondary}
+    - {name: 新华社, domain: news.cn, tier: secondary}
+    - {name: 新华社, domain: xinhuanet.com, tier: secondary}
   前沿观点:
     - {name: 国际清算银行, domain: bis.org, tier: primary}
     - {name: 国际货币基金组织, domain: imf.org, tier: primary}
@@ -100,6 +127,38 @@ section_sources:
     - {name: 美联储, domain: federalreserve.gov, tier: primary}
     - {name: 欧洲中央银行, domain: ecb.europa.eu, tier: primary}
     - {name: 英格兰银行, domain: bankofengland.co.uk, tier: primary}
+
+# 市场观察的非固定内容按主题分组检索，防止单一宽泛查询只命中一类行情。
+# query_templates 由运行时只替换 {date_range}，网页仍须通过本板块域名、日期和正文校验。
+market_observation_topics:
+  - id: domestic_macro
+    name: 国内宏观与经济运行
+    query_templates:
+      - "国家统计局 海关总署 国家发展改革委 GDP CPI PPI PMI 工业增加值 社会消费品零售 固定资产投资 进出口 房地产 经济数据 {date_range}"
+  - id: domestic_rates_fx
+    name: 国内货币信用利率汇率
+    query_templates:
+      - "中国人民银行 中国货币网 中国债券信息网 LPR 逆回购 MLF 社融 信贷 Shibor 资金面 国债收益率 债券收益率 信用利差 人民币汇率 {date_range}"
+  - id: wealth_asset_management
+    name: 财富管理与资产管理
+    query_templates:
+      - "中国理财网 中国证券投资基金业协会 银行理财 固收+ 净值波动 业绩比较基准 公募基金 同业存单 资管市场结构 {date_range}"
+  - id: global_macro_central_banks
+    name: 全球宏观与主要央行
+    query_templates:
+      - "美联储 欧洲央行 日本银行 英格兰银行 IMF GDP CPI PCE 非农 就业 利率决议 会议纪要 通胀预期 经济增长 {date_range}"
+  - id: global_market_stress
+    name: 全球市场波动与金融稳定
+    query_templates:
+      - "新华财经 美联社 路透社 全球债市 股市 汇市 主权债收益率 美元 日元 熔断 流动性 风险溢价 金融稳定 {date_range}"
+  - id: geopolitics_trade_energy
+    name: 地缘贸易能源与供应链
+    query_templates:
+      - "新华社 美联社 路透社 IMF IEA EIA OPEC 地缘冲突 制裁 关税 贸易摩擦 航运 供应链 原油 黄金 大宗商品 通胀影响 {date_range}"
+  - id: major_capital_events
+    name: 重大资本市场事件
+    query_templates:
+      - "证券交易所 美国证券交易委员会 新华财经 美联社 路透社 创纪录 IPO 重大违约 并购 重组 救助 退市 交易中断 市场影响 {date_range}"
 
 peer_entities:
   # 微众银行是本周报服务对象，不作为“同业动向”候选。

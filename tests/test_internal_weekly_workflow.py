@@ -22,6 +22,8 @@ from skills.internal_weekly.workflow import (
     _evidence_in_body,
     _frontier_queries,
     _market_query_groups,
+    _market_observation_query_groups,
+    _merge_candidate_pages_balanced,
     _normalize_market_evidence_mode,
     _normalize_reported_market_period,
     _ordinary_items,
@@ -522,15 +524,206 @@ def test_internal_weekly_ordinary_queries_are_split_by_section_and_cover_expande
     assert any(query.startswith("中国证监会") for query in regulatory_queries)
     assert any(query.startswith("国家外汇管理局") for query in regulatory_queries)
     market_queries = groups["市场观察"]
-    assert len(market_queries) >= 3
+    assert len(market_queries) >= 7
     market_query_text = "\n".join(market_queries)
-    for topic in ("资金面", "人民币汇率", "银行理财", "黄金"):
+    for topic in (
+        "GDP",
+        "CPI",
+        "进出口",
+        "LPR",
+        "债券收益率",
+        "人民币汇率",
+        "银行理财",
+        "美联储",
+        "非农",
+        "熔断",
+        "地缘冲突",
+        "黄金",
+        "IPO",
+    ):
         assert topic in market_query_text
     peer_queries = "\n".join(groups["同业动向"])
     assert "Monzo" in peer_queries
     assert "ZA Bank" in peer_queries
     assert "建信金科" in peer_queries
     assert "工银科技" in peer_queries
+
+
+def test_market_observation_queries_are_registry_driven_and_grouped_by_topic():
+    groups = _market_observation_query_groups(
+        datetime(2026, 7, 6).date(),
+        datetime(2026, 7, 12).date(),
+    )
+
+    assert [topic_id for topic_id, _ in groups] == [
+        "domestic_macro",
+        "domestic_rates_fx",
+        "wealth_asset_management",
+        "global_macro_central_banks",
+        "global_market_stress",
+        "geopolitics_trade_energy",
+        "major_capital_events",
+    ]
+    assert all(queries for _, queries in groups)
+    assert all("2026年7月6日至2026年7月12日" in query for _, queries in groups for query in queries)
+
+
+def test_balanced_market_merge_preserves_every_topic_before_second_page():
+    groups = []
+    for group_index in range(7):
+        groups.append(
+            [
+                WebCandidate(
+                    url=f"https://www.cs.com.cn/{group_index}/{page_index}.htm",
+                    canonical_url=f"https://www.cs.com.cn/{group_index}/{page_index}.htm",
+                    title=f"主题{group_index}候选{page_index}",
+                    site="cs.com.cn",
+                    publish_date="2026-07-10",
+                    body="该候选包含足够长度的金融市场正文内容。",
+                )
+                for page_index in range(2)
+            ]
+        )
+
+    merged = _merge_candidate_pages_balanced(*groups)
+
+    assert [page.title for page in merged[:7]] == [
+        f"主题{group_index}候选0" for group_index in range(7)
+    ]
+
+
+def test_market_observation_applies_source_priority_score_floor_and_impact_instruction():
+    official = WebCandidate(
+        url="https://www.stats.gov.cn/sj/zxfb/202607/macro.html",
+        canonical_url="https://www.stats.gov.cn/sj/zxfb/202607/macro.html",
+        title="国家统计局发布宏观经济数据",
+        site="stats.gov.cn",
+        publisher="国家统计局",
+        publish_date="2026-07-10",
+        body="国家统计局发布国内生产总值和居民消费价格数据，显示经济增长和通胀走势变化。",
+    )
+    media = WebCandidate(
+        url="https://www.cs.com.cn/market/bond.html",
+        canonical_url="https://www.cs.com.cn/market/bond.html",
+        title="全球债市收益率显著波动",
+        site="cs.com.cn",
+        publisher="中国证券报",
+        publish_date="2026-07-10",
+        body="全球债市收益率显著波动，融资成本和市场风险偏好同步变化。",
+    )
+    low_score = WebCandidate(
+        url="https://www.reuters.com/markets/minor.html",
+        canonical_url="https://www.reuters.com/markets/minor.html",
+        title="海外市场日常小幅波动",
+        site="reuters.com",
+        publisher="路透社",
+        publish_date="2026-07-10",
+        body="海外股票市场日常小幅波动，未形成跨市场传导或显著经济影响。",
+    )
+    assessments = {
+        official.canonical_url: ContentCandidateAssessment(
+            source_url=official.canonical_url,
+            include=True,
+            section="市场观察",
+            title=official.title,
+            summary="国内生产总值和居民消费价格数据反映增长与通胀变化。",
+            evidence_excerpt="显示经济增长和通胀走势变化",
+            score=8,
+            reason="国内宏观数据影响利率和经营预期",
+        ),
+        media.canonical_url: ContentCandidateAssessment(
+            source_url=media.canonical_url,
+            include=True,
+            section="市场观察",
+            title=media.title,
+            summary="全球债市收益率波动影响融资成本和风险偏好。",
+            evidence_excerpt="融资成本和市场风险偏好同步变化",
+            score=8,
+            reason="全球市场风险事件",
+        ),
+        low_score.canonical_url: ContentCandidateAssessment(
+            source_url=low_score.canonical_url,
+            include=True,
+            section="市场观察",
+            title=low_score.title,
+            summary="海外市场出现日常小幅波动。",
+            evidence_excerpt="海外股票市场日常小幅波动",
+            score=6.9,
+            reason="影响范围有限",
+        ),
+    }
+    instructions: list[str] = []
+
+    def llm_writer(payload):
+        instructions.append(payload["instruction"])
+        urls = [material["url"] for material in payload["materials"]]
+        return ContentAssessmentBatch(items=[assessments[url] for url in urls])
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [media, low_score, official],
+        gateway,
+        expected_section="市场观察",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert [item.title for item in items] == [official.title, media.title]
+    assert len(records) == 2
+    assert any("评分低于7分" in warning for warning in warnings)
+    assert "增长、通胀、利率、汇率、流动性、风险偏好" in instructions[0]
+    assert "不设最低凑数要求" in instructions[0]
+
+
+def test_market_observation_caps_non_fixed_items_at_five():
+    pages = [
+        WebCandidate(
+            url=f"https://www.cs.com.cn/market/{index}.html",
+            canonical_url=f"https://www.cs.com.cn/market/{index}.html",
+            title=f"全球债市重大波动事件{index}",
+            site="cs.com.cn",
+            publisher="中国证券报",
+            publish_date="2026-07-10",
+            body=f"全球债市重大波动事件{index}影响融资成本、流动性和风险偏好。",
+        )
+        for index in range(6)
+    ]
+    assessments = {
+        page.canonical_url: ContentCandidateAssessment(
+            source_url=page.canonical_url,
+            include=True,
+            section="市场观察",
+            title=page.title,
+            summary=f"全球债市重大波动事件{index}影响融资成本和风险偏好。",
+            evidence_excerpt=f"影响融资成本、流动性和风险偏好",
+            score=9 - index * 0.1,
+            reason="重大跨市场影响",
+        )
+        for index, page in enumerate(pages)
+    }
+
+    def llm_writer(payload):
+        urls = [material["url"] for material in payload["materials"]]
+        return ContentAssessmentBatch(items=[assessments[url] for url in urls])
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        pages,
+        gateway,
+        expected_section="市场观察",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert len(items) == 5
+    assert len(records) == 5
+    assert warnings == []
 
 
 def test_party_assessment_instruction_covers_broad_management_relevance():

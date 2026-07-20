@@ -36,9 +36,11 @@ from skills.internal_weekly.selection import (
     validate_frontier_selection,
 )
 from skills.internal_weekly.source_registry import (
+    market_observation_topic_specs,
     peer_query_names,
     section_source_feed_urls,
     section_source_feed_specs,
+    section_source_tier,
 )
 from skills.internal_weekly.source_policy import (
     candidate_allowed,
@@ -52,6 +54,8 @@ from skills.internal_weekly.source_policy import (
 
 MAX_PAGES_PER_GROUP = 30
 MAX_ITEMS_PER_ORDINARY_SECTION = 6
+MAX_MARKET_OBSERVATION_ITEMS = 5
+MIN_MARKET_OBSERVATION_SCORE = 7.0
 MAX_PAGES_PER_ASSESSMENT_BATCH = 5
 MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
 MAX_ORDINARY_BODY_CHARS = 12000
@@ -406,6 +410,22 @@ def _party_assessment_rank(assessment: ContentCandidateAssessment) -> float:
     return assessment.score + preference
 
 
+def _ordinary_assessment_rank(
+    assessment: ContentCandidateAssessment,
+    page_map: dict[str, WebCandidate],
+    expected_section: str,
+) -> float:
+    if expected_section == "党政要闻":
+        return _party_assessment_rank(assessment)
+    if expected_section != "市场观察":
+        return assessment.score
+    page = page_map.get(assessment.source_url)
+    if page is None:
+        return assessment.score
+    tier = section_source_tier(page.canonical_url or page.url, "市场观察")
+    return assessment.score + (0.5 if tier == "primary" else 0.0)
+
+
 def _normalized_party_event_title(title: str) -> str:
     normalized = title
     for marker in PARTY_EVENT_TITLE_NOISE:
@@ -745,6 +765,25 @@ def _merge_candidate_pages(*groups: list[WebCandidate]) -> list[WebCandidate]:
     return merged
 
 
+def _merge_candidate_pages_balanced(*groups: list[WebCandidate]) -> list[WebCandidate]:
+    """轮询合并主题候选，避免前几个搜索组耗尽总页面预算。"""
+    merged: list[WebCandidate] = []
+    seen: set[str] = set()
+    max_group_size = max((len(group) for group in groups), default=0)
+    for page_index in range(max_group_size):
+        for pages in groups:
+            if page_index >= len(pages):
+                continue
+            page = pages[page_index]
+            if page.canonical_url in seen:
+                continue
+            seen.add(page.canonical_url)
+            merged.append(page)
+            if len(merged) >= MAX_PAGES_PER_GROUP:
+                return merged
+    return merged
+
+
 def _format_date_range(period_start: date, period_end: date) -> str:
     return (
         f"{period_start.year}年{period_start.month}月{period_start.day}日"
@@ -783,6 +822,28 @@ def _regulatory_query_groups(
             ),
         ),
     ]
+
+
+def _market_observation_query_groups(
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """按案例归纳的市场影响主题生成独立查询组。"""
+    date_range = _format_date_range(period_start, period_end)
+    groups: list[tuple[str, tuple[str, ...]]] = []
+    for spec in market_observation_topic_specs():
+        topic_id = str(spec.get("id") or "").strip()
+        templates = spec.get("query_templates", ())
+        if not topic_id or not isinstance(templates, tuple):
+            continue
+        queries = tuple(
+            template.replace("{date_range}", date_range)
+            for template in templates
+            if isinstance(template, str) and template.strip()
+        )
+        if queries:
+            groups.append((topic_id, queries))
+    return groups
 
 
 def _ordinary_query_groups(
@@ -834,15 +895,13 @@ def _ordinary_query_groups(
         ),
         (
             "市场观察",
-            (
-                "中国证券报 证券时报 上海证券报 资金面 利率 债券收益率 "
-                f"信用利差 银行间市场 银行业影响 {date_range}",
-                "新华财经 第一财经 人民币汇率 外汇市场 跨境资金 利率走势 "
-                f"银行经营影响 {date_range}",
-                "中国证券报 证券时报 银行理财 资管 公募基金 同业存单 "
-                f"市场结构 配置变化 {date_range}",
-                "新华财经 第一财经 黄金 原油 大宗商品 全球市场 "
-                f"风险偏好 银行业影响 {date_range}",
+            tuple(
+                query
+                for _, queries in _market_observation_query_groups(
+                    period_start,
+                    period_end,
+                )
+                for query in queries
             ),
         ),
     ]
@@ -1023,9 +1082,15 @@ def _ordinary_items(
         else ""
     )
     market_scope_instruction = (
-        "市场观察除固定资本市场综述外，应从资金面与利率债券、人民币汇率与跨境"
-        "资金、银行理财与资管、黄金及全球市场中优选2至4条对银行经营有参考价值的"
-        "统计期动态；不得把单一机构宣传写成市场趋势。"
+        "市场观察除固定资本市场综述外，要覆盖可能改变增长、通胀、利率、汇率、"
+        "流动性、风险偏好或银行资产负债环境的国内外重大事件，包括国内宏观数据，"
+        "货币信用、利率汇率，财富与资管，主要央行和海外宏观数据，全球市场异常"
+        "波动，地缘贸易能源冲击，以及创纪录IPO、重大违约等资本市场事件。每条"
+        "include=true候选都必须给出从事件到上述至少一个影响渠道的直接事实链，"
+        "并按影响范围、变化幅度、银行相关性、证据质量、本周新颖性五项各0至2分"
+        "评分，总分不得低于7分。官方原始发布优先于媒体，同等事件只留信息最完整的一条。"
+        "不设最低凑数要求，最多选5条；普通日评、轻微波动、未证实传闻、单一机构"
+        "宣传，以及应归党政要闻或监管动态的政策部署、监管处罚一律排除。"
         if expected_section == "市场观察"
         else ""
     )
@@ -1083,10 +1148,10 @@ def _ordinary_items(
     party_event_item_indexes: dict[str, int] = {}
     for assessment, page_map in sorted(
         assessed,
-        key=lambda pair: (
-            _party_assessment_rank(pair[0])
-            if expected_section == "党政要闻"
-            else pair[0].score
+        key=lambda pair: _ordinary_assessment_rank(
+            pair[0],
+            pair[1],
+            expected_section,
         ),
         reverse=True,
     ):
@@ -1099,6 +1164,14 @@ def _ordinary_items(
             warnings.append(f"模型返回了候选集外的来源：{assessment.source_url}")
             continue
         if page.canonical_url in seen_urls:
+            continue
+        if (
+            expected_section == "市场观察"
+            and assessment.score < MIN_MARKET_OBSERVATION_SCORE
+        ):
+            warnings.append(
+                f"《{assessment.title}》市场影响评分低于7分，已排除"
+            )
             continue
         evidence = assessment.evidence_excerpt.strip()
         if not _evidence_in_body(evidence, page.body):
@@ -1218,10 +1291,12 @@ def _ordinary_items(
             item_index = len(items) - 1
             for key in party_event_keys:
                 party_event_item_indexes[key] = item_index
-        if (
-            expected_section != "党政要闻"
-            and len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION
-        ):
+        item_limit = (
+            MAX_MARKET_OBSERVATION_ITEMS
+            if expected_section == "市场观察"
+            else MAX_ITEMS_PER_ORDINARY_SECTION
+        )
+        if expected_section != "党政要闻" and len(items) >= item_limit:
             break
     return items, records, warnings
 
@@ -1636,6 +1711,24 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
                 period_start=period_start,
                 period_end=period_end,
             )
+        elif section_name == "市场观察":
+            market_topic_page_groups: list[list[WebCandidate]] = []
+            group_warnings = []
+            for _, topic_queries in _market_observation_query_groups(
+                period_start,
+                period_end,
+            ):
+                topic_pages, topic_warnings = _collect_pages(
+                    list(topic_queries),
+                    tools,
+                    period_start=period_start,
+                    period_end=period_end,
+                    source_section=section_name,
+                    max_results_per_query=10,
+                )
+                market_topic_page_groups.append(topic_pages)
+                group_warnings.extend(topic_warnings)
+            pages = _merge_candidate_pages_balanced(*market_topic_page_groups)
         else:
             pages, group_warnings = _collect_pages(
                 list(queries),

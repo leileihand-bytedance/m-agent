@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -128,6 +129,62 @@ def section_source_feed_specs(section: str) -> tuple[dict[str, str], ...]:
         }
         values.append(spec)
     return tuple(values)
+
+
+def market_observation_topic_specs() -> tuple[dict[str, object], ...]:
+    """返回市场观察的主题化检索配置，避免查询规则散落在工作流代码中。"""
+    payload = load_source_registry()
+    topics = payload.get("market_observation_topics", [])
+    if not isinstance(topics, list):
+        return ()
+    values: list[dict[str, object]] = []
+    for topic in topics:
+        if not isinstance(topic, dict):
+            continue
+        topic_id = str(topic.get("id") or "").strip()
+        name = str(topic.get("name") or "").strip()
+        templates = topic.get("query_templates", [])
+        if not topic_id or not name or not isinstance(templates, list):
+            continue
+        query_templates = tuple(
+            str(template).strip()
+            for template in templates
+            if str(template).strip()
+        )
+        if not query_templates:
+            continue
+        values.append(
+            {
+                "id": topic_id,
+                "name": name,
+                "query_templates": query_templates,
+            }
+        )
+    return tuple(values)
+
+
+def section_source_tier(url: str, section: str) -> str | None:
+    """返回来源在指定板块登记的层级，供同分候选优先选择官方原始来源。"""
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if not host:
+        return None
+    payload = load_source_registry()
+    section_sources = payload.get("section_sources", {})
+    if not isinstance(section_sources, dict):
+        return None
+    entries = section_sources.get(section, [])
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        domain = str(entry.get("domain") or "").strip().lower()
+        match = str(entry.get("match") or "suffix").strip().lower()
+        matched = host == domain if match == "exact" else (
+            host == domain or host.endswith(f".{domain}")
+        )
+        if matched:
+            tier = str(entry.get("tier") or "").strip().lower()
+            return tier or None
+    return None
 
 
 def registered_domains() -> frozenset[str]:

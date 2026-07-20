@@ -23,9 +23,11 @@ from skills.internal_weekly.selection import (
 from skills.internal_weekly.source_policy import candidate_allowed, domain_allowed_for_section
 from skills.internal_weekly.source_registry import (
     load_source_registry,
+    market_observation_topic_specs,
     section_source_entry_urls,
     section_source_feed_urls,
     section_source_feed_specs,
+    section_source_tier,
 )
 
 
@@ -105,6 +107,69 @@ def test_classify_section_copies_internal_weekly_taxonomy(title, body, expected)
 
 
 @pytest.mark.parametrize(
+    ("title", "body"),
+    [
+        (
+            "中国人民银行公布最新贷款市场报价利率",
+            "1年期和5年期以上LPR保持不变，影响贷款定价与银行净息差预期。",
+        ),
+        (
+            "国家统计局发布居民消费价格数据",
+            "CPI同比变化，市场据此调整通胀和利率预期。",
+        ),
+        (
+            "美联储公布FOMC利率决议",
+            "联邦基金利率维持不变，美债收益率和美元汇率随之波动。",
+        ),
+        (
+            "霍尔木兹海峡通航受阻推升国际油价",
+            "地缘冲突通过原油、黄金和通胀预期影响全球金融市场。",
+        ),
+        (
+            "大型科技企业完成创纪录IPO",
+            "发行规模刷新市场纪录并影响科技板块估值和风险偏好。",
+        ),
+    ],
+)
+def test_market_observation_priority_signals_override_entity_only_classification(
+    title,
+    body,
+):
+    assert classify_section(title, body) == "市场观察"
+
+
+def test_market_observation_does_not_absorb_regulatory_enforcement_or_central_policy():
+    assert (
+        classify_section(
+            "中国证监会处罚非法证券经营活动",
+            "中国证监会依法立案调查并作出行政处罚。",
+        )
+        == "监管动态"
+    )
+    assert (
+        classify_section(
+            "中国证监会处罚IPO信息披露违法行为",
+            "中国证监会依法立案调查并作出行政处罚。",
+        )
+        == "监管动态"
+    )
+    assert (
+        classify_section(
+            "国务院常务会议部署扩大内需",
+            "国务院研究促进消费和推动经济高质量发展的政策措施。",
+        )
+        == "党政要闻"
+    )
+    assert (
+        classify_section(
+            "国务院部署推动GDP和居民收入协同增长",
+            "国务院常务会议研究促进经济高质量发展的政策措施。",
+        )
+        == "党政要闻"
+    )
+
+
+@pytest.mark.parametrize(
     "entity",
     ["Monzo", "Starling", "Revolut", "N26", "Nubank", "ZA Bank", "Mox Bank"],
 )
@@ -171,6 +236,58 @@ def test_regulatory_source_registry_includes_user_designated_priority_entries():
         "csrc",
     ]
     assert all(item["tier"] == "primary" for item in feed_specs)
+
+
+def test_market_observation_registry_has_case_derived_topic_and_source_system():
+    topic_specs = market_observation_topic_specs()
+    topic_ids = {item["id"] for item in topic_specs}
+
+    assert topic_ids == {
+        "domestic_macro",
+        "domestic_rates_fx",
+        "wealth_asset_management",
+        "global_macro_central_banks",
+        "global_market_stress",
+        "geopolitics_trade_energy",
+        "major_capital_events",
+    }
+    assert all(item["query_templates"] for item in topic_specs)
+
+    market_domains = {
+        item["domain"]
+        for item in load_source_registry()["section_sources"]["市场观察"]
+    }
+    for domain in (
+        "stats.gov.cn",
+        "pbc.gov.cn",
+        "chinamoney.com.cn",
+        "chinabond.com.cn",
+        "amac.org.cn",
+        "federalreserve.gov",
+        "ecb.europa.eu",
+        "bls.gov",
+        "bea.gov",
+        "eia.gov",
+        "sec.gov",
+        "reuters.com",
+        "news.cn",
+    ):
+        assert domain in market_domains
+
+    assert (
+        section_source_tier(
+            "https://www.stats.gov.cn/sj/zxfb/202607/example.html",
+            "市场观察",
+        )
+        == "primary"
+    )
+    assert (
+        section_source_tier(
+            "https://www.reuters.com/markets/example/",
+            "市场观察",
+        )
+        == "secondary"
+    )
 
 
 def test_unknown_ordinary_content_is_not_misclassified_as_market_observation():

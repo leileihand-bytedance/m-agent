@@ -31,6 +31,21 @@ REGULATORY_ENTITIES = frozenset(
         "外汇局",
     }
 )
+REGULATORY_ACTION_MARKERS = frozenset(
+    {
+        "监管制度",
+        "监管要求",
+        "监管规定",
+        "监管办法",
+        "行政处罚",
+        "处罚",
+        "罚款",
+        "立案",
+        "查处",
+        "风险提示",
+        "征求意见",
+    }
+)
 PARTY_CENTRAL_ENTITIES = frozenset(
     {
         "党中央",
@@ -85,6 +100,19 @@ PARTY_GOV_ENTITIES = frozenset(
         "中央纪委国家监委",
         "中央纪委",
         "中纪委",
+    }
+)
+PARTY_POLICY_ACTION_MARKERS = frozenset(
+    {
+        "部署",
+        "国务院常务会议",
+        "中央政治局会议",
+        "会议研究",
+        "政策措施",
+        "审议通过",
+        "印发方案",
+        "印发意见",
+        "出台政策",
     }
 )
 DOMESTIC_DIGITAL_BANK_ENTITIES = peer_entities("domestic_digital_banks")
@@ -153,6 +181,51 @@ MARKET_OBSERVATION_MARKERS = frozenset(
         "金融市场",
     }
 )
+MARKET_PRIORITY_SIGNALS = frozenset(
+    {
+        "贷款市场报价利率",
+        "LPR",
+        "SHIBOR",
+        "MLF",
+        "逆回购",
+        "公开市场操作",
+        "国内生产总值",
+        "GDP",
+        "居民消费价格",
+        "CPI",
+        "工业生产者出厂价格",
+        "PPI",
+        "采购经理指数",
+        "PMI",
+        "规模以上工业增加值",
+        "社会消费品零售总额",
+        "固定资产投资",
+        "进出口总值",
+        "非农就业",
+        "非农",
+        "FOMC",
+        "联邦基金利率",
+        "美联储利率",
+        "欧洲央行利率",
+        "英格兰银行利率",
+        "日本央行利率",
+        "主权债收益率",
+        "美债收益率",
+        "全球债市",
+        "触发熔断",
+        "霍尔木兹海峡",
+        "国际油价",
+        "原油价格",
+        "黄金价格",
+        "供应链中断",
+        "航运中断",
+        "关税冲击",
+        "首次公开募股",
+        "IPO",
+        "重大违约",
+        "交易中断",
+    }
+)
 PARTY_BUILDING_MARKERS = frozenset(
     {"党建", "党的建设", "党委", "党组", "党纪学习", "全面从严治党"}
 )
@@ -203,6 +276,17 @@ def calculate_weekly_window(value: date | datetime) -> tuple[date, date, date]:
 def classify_section(title: str, body: str) -> str | None:
     """按周报自身持有的分类规则给普通材料归类。"""
     text = f"{title}\n{body[:180]}"
+    if any(entity in text for entity in REGULATORY_ENTITIES) and any(
+        marker in text for marker in REGULATORY_ACTION_MARKERS
+    ):
+        return "监管动态"
+    if any(entity in text for entity in PARTY_GOV_ENTITIES) and any(
+        marker in text for marker in PARTY_POLICY_ACTION_MARKERS
+    ):
+        return "党政要闻"
+    normalized_market_text = text.upper()
+    if any(marker.upper() in normalized_market_text for marker in MARKET_PRIORITY_SIGNALS):
+        return "市场观察"
     for markers, section in (
         (REGULATORY_ENTITIES, "监管动态"),
         (PARTY_GOV_ENTITIES, "党政要闻"),

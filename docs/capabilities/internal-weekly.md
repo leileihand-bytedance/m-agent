@@ -47,7 +47,9 @@
 
 真实网页可读性校验后，上周 A 股和美股会补充检索新华财经全球周评，美股增加英文日期的美联社查询，港股继续使用能同时列出三项必填指数的周评来源。搜索结果只有空摘要时不能作为证据；必须由网页读取器取得正文并通过逐字校验。
 
-资本市场综述只是市场观察的固定首项，不是整个板块。其后另用四组查询覆盖资金面与利率债券、人民币汇率与跨境资金、银行理财与资管、黄金及全球市场，每条查询最多读取 10 个候选，通常优选 2 至 4 条对银行经营、资产负债管理、风险判断或客户配置有参考价值的统计期动态。实际合格材料不足时保留缺口，不用单一机构宣传或模型文字凑数。
+资本市场综述只是市场观察的固定首项，不是整个板块。对 5 期案例逐项归纳后，非固定内容实际涉及国内利率与贷款定价、全球主权债和通胀、主要央行、海外市场异常波动、地缘贸易航运对油价和黄金的传导、标志性 IPO，以及银行理财和资管结构变化；案例中以监管处罚为核心的内容按本 Skill 的互斥规则归监管动态，不在市场观察重复收录。
+
+系统因此改为七组独立查询：国内宏观与经济运行、国内货币信用利率汇率、财富管理与资产管理、全球宏观与主要央行、全球市场波动与金融稳定、地缘贸易能源与供应链、重大资本市场事件。每条查询最多读取 10 个候选，各主题通过域名、日期和正文校验后轮询合并，避免热门主题垄断候选池。模型按影响范围、变化幅度、银行相关性、证据质量和本周新颖性五项各 0 至 2 分评分，必须说明“事件或数据—影响渠道—对银行经营或市场判断的意义”；总分不低于 7 分才可入选，非固定条目最多 5 条、不设最低数量。事实相当时优先官方原始来源，权威媒体用于补充跨市场影响；普通日评、轻微涨跌、传闻、机构宣传和固定综述已覆盖的常规行情不收录。完整规则由 `skills/internal_weekly/references/market-observation-system.md` 持有。
 
 前沿观点当前采用“研报采集、中文压缩、原文核验”。系统使用多条不写死报告题名的中性查询并合并去重，除 Working Paper、Bulletin 外，还按统计年份和月份检索 BIS Annual Economic Report、数字支付与银行金融报告系列，并扩大每条研究查询的候选结果数，降低搜索排序波动。系统先找上一完整自然周内的报告；周内没有合格结果时，补充检索截至统计期末近 30 日内的报告，并明确标记使用兜底。出版日当天新发布的报告不进入上一周周报；模型返回日期还必须与来源页面日期一致。模型依据入选原文生成中文题名和中文压缩摘要，过长内容按完整句边界进一步压缩，正文结尾标明中文机构名和报告原文题名。用于支撑摘要的段落必须逐字存在于已读取页面并以完整句末标点结束；大段英文不再直接作为周报正文，而是保留在核对信息和 JSON 溯源清单中供人工核验。近 30 日仍没有合格报告时保留缺口，不生成 AI 观点替代。
 
@@ -58,6 +60,8 @@
 | 用途 | 已核验的公开来源 | 当前可用方式 | 主要边界 |
 |---|---|---|---|
 | 金融监管动态 | [人民银行新闻发布](https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html)、[金融监管总局监管动态](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=915&itemUrl=ItemListRightList.html&itemName=%E7%9B%91%E7%AE%A1%E5%8A%A8%E6%80%81)、[政策解读](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=917&itemUrl=ItemListRightList.html&itemName=%E6%94%BF%E7%AD%96%E8%A7%A3%E8%AF%BB&itemsubPId=916)、[领导活动及讲话](https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=919&itemUrl=ItemListRightList.html&itemName=%E9%A2%86%E5%AF%BC%E6%B4%BB%E5%8A%A8%E5%8F%8A%E8%AE%B2%E8%AF%9D)、[证监会要闻](https://www.csrc.gov.cn/csrc/c100028/common_xq_list.shtml) | 先读取栏目自己的列表或数据接口，按统计期发现原文，再逐篇读取正文 | 固定入口按机构独立判断；该机构无合格正文时才公开检索，外汇局仍为官网优先检索 |
+| 国内宏观与市场定价 | [国家统计局数据发布](https://www.stats.gov.cn/sj/zxfb/)、[人民银行](https://www.pbc.gov.cn/)、[中国货币网](https://www.chinamoney.com.cn/chinese/bkccpr/)、[中债收益率曲线](https://yield.chinabond.com.cn/cbweb-cbrc-web/cbrc/showCbrc) | 用官方发布确认宏观数据、LPR、资金利率、人民币汇率和债券收益率等事实 | 中央政策部署仍归党政要闻；监管制度和处罚归监管动态 |
+| 全球宏观、央行与重大事件 | [美联储货币政策](https://www.federalreserve.gov/monetarypolicy.htm)、[欧洲央行货币政策决议](https://www.ecb.europa.eu/press/govcdec/mopo/html/index.en.html)、[美国劳工统计局新闻发布](https://www.bls.gov/newsroom/home.htm)、[美国经济分析局新闻](https://www.bea.gov/news)、[美国能源信息署石油数据](https://www.eia.gov/petroleum/)、[美国证券交易委员会新闻稿](https://www.sec.gov/newsroom/press-releases) | 官方来源确认决议、数据和公告，新华社、路透社、美联社等登记来源补充地缘、贸易、能源和跨市场传导 | 二手来源不得覆盖官方相反事实；未证实传闻和匿名预测不入选 |
 | 国际银行与金融稳定研究 | [BIS Working Papers](https://www.bis.org/wpapers/index.htm) | 报告落地页通常提供题名、作者、日期、摘要和 PDF 链接，可先摘录 HTML 摘要 | PDF 全文读取要等公共受限 PDF 工具接入 |
 | 宏观金融研究 | [IMF Publications](https://www.imf.org/en/publications) | Working Papers 落地页可提供元数据和摘要，适合作为候选入口 | 部分全文在 eLibrary，页面结构和访问方式需逐篇核验 |
 | 发展金融研究 | [World Bank Policy Research Working Papers](https://www.worldbank.org/en/research/brief/world-bank-policy-research-working-papers) | 系列页和 Open Knowledge Repository 可用于检索题名、作者、日期及公开文件 | 不能只凭系列页摘要代替报告原文 |
