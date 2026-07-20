@@ -230,7 +230,7 @@ def render_dashboard(
     .architecture-flow-svg {{
       position: absolute;
       inset: 0;
-      z-index: 2;
+      z-index: 5;
       width: 100%;
       height: 100%;
       overflow: visible;
@@ -295,16 +295,17 @@ def render_dashboard(
       font-weight: 700;
     }}
     .architecture-main-flow {{
-      display: grid;
-      grid-template-columns: 116px 282px minmax(430px, 1fr) 138px;
-      gap: 24px;
-      align-items: stretch;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 26px;
+      padding: 4px 40px 8px;
     }}
     .architecture-flow-column {{
       display: flex;
+      width: min(240px, 100%);
       min-width: 0;
       flex-direction: column;
-      justify-content: center;
       gap: 8px;
     }}
     .architecture-phase {{
@@ -312,12 +313,13 @@ def render_dashboard(
       color: #667085;
       font-size: 9px;
       font-weight: 800;
+      text-align: center;
       text-transform: uppercase;
     }}
     .architecture-agent-core {{
       position: relative;
       z-index: 3;
-      align-self: center;
+      width: min(560px, 100%);
       min-width: 0;
       padding: 12px;
       border: 1px solid #9eb4df;
@@ -335,20 +337,11 @@ def render_dashboard(
     .architecture-agent-core-head small {{ grid-column: 2; color: #667085; font-size: 9px; }}
     .architecture-platform-stack {{ display: grid; gap: 9px; }}
     .architecture-platform-stage {{ position: relative; }}
-    .architecture-platform-stage:not(:last-child)::after {{
-      content: "";
-      position: absolute;
-      z-index: 2;
-      left: 50%;
-      bottom: -9px;
-      width: 1px;
-      height: 9px;
-      background: #91a4c8;
-    }}
     .architecture-capability-domains {{
       display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      width: min(920px, 100%);
     }}
     .architecture-domain-card {{
       position: relative;
@@ -423,7 +416,7 @@ def render_dashboard(
     .architecture-governance-grid {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }}
     .architecture-node {{
       position: relative;
-      z-index: 4;
+      z-index: 6;
       display: block;
       width: 100%;
       min-width: 0;
@@ -785,6 +778,12 @@ def render_dashboard(
         ["writing_domain>result_delivery", "writing"],
         ["review_domain>result_delivery", "review"],
       ]);
+      const branchPairStyles = new Set([
+        "agent_runtime>writing_domain",
+        "agent_runtime>review_domain",
+        "writing_domain>result_delivery",
+        "review_domain>result_delivery",
+      ]);
 
       const roundedOrthogonalPath = (start, end, orientation, laneOffset = 0) => {{
         const radius = 9;
@@ -819,7 +818,9 @@ def render_dashboard(
       }};
 
       const nodeBounds = (nodeId) => {{
-        const element = document.querySelector(`[data-architecture-node="${{nodeId}}"]`);
+        const element =
+          document.querySelector(`[data-architecture-edge-box="${{nodeId}}"]`) ||
+          document.querySelector(`[data-architecture-node="${{nodeId}}"]`);
         if (!element || !diagram) return null;
         const elementRect = element.getBoundingClientRect();
         const diagramRect = diagram.getBoundingClientRect();
@@ -833,71 +834,23 @@ def render_dashboard(
         }};
       }};
 
-      const segmentIntersectsBox = (start, end, box) => {{
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        const p = [-dx, dx, -dy, dy];
-        const q = [
-          start.x - box.left,
-          box.right - start.x,
-          start.y - box.top,
-          box.bottom - start.y,
-        ];
-        let lower = 0;
-        let upper = 1;
-        for (let index = 0; index < p.length; index += 1) {{
-          if (Math.abs(p[index]) < 0.001) {{
-            if (q[index] < 0) return false;
-            continue;
-          }}
-          const ratio = q[index] / p[index];
-          if (p[index] < 0) lower = Math.max(lower, ratio);
-          else upper = Math.min(upper, ratio);
-          if (lower > upper) return false;
-        }}
-        return true;
-      }};
-
-      const straightPathIsClear = (relation, start, end) => {{
-        for (const element of architectureNodeElements) {{
-          const nodeId = element.dataset.architectureNode;
-          if (nodeId === relation.source_id || nodeId === relation.target_id) continue;
-          const bounds = nodeBounds(nodeId);
-          if (!bounds) continue;
-          const clearance = 5;
-          if (segmentIntersectsBox(start, end, {{
-            left: bounds.left - clearance,
-            right: bounds.right + clearance,
-            top: bounds.top - clearance,
-            bottom: bounds.bottom + clearance,
-          }})) return false;
-        }}
-        return true;
-      }};
-
-      const relationPath = (relation, index) => {{
+      const relationPath = (relation) => {{
         const source = nodeBounds(relation.source_id);
         const target = nodeBounds(relation.target_id);
         if (!source || !target) return "";
-        const horizontal = Math.abs(target.centerX - source.centerX) >= Math.abs(target.centerY - source.centerY);
-        const laneOffset = ((index % 3) - 1) * 5;
-        if (horizontal) {{
-          const targetOnRight = target.centerX >= source.centerX;
-          const start = {{ x: targetOnRight ? source.right : source.left, y: source.centerY }};
-          const end = {{ x: targetOnRight ? target.left : target.right, y: target.centerY }};
-          if (straightPathIsClear(relation, start, end)) return `M ${{start.x}} ${{start.y}} L ${{end.x}} ${{end.y}}`;
-          return roundedOrthogonalPath(start, end, "horizontal", laneOffset);
+        const pair = relation.source_id + ">" + relation.target_id;
+        const start = {{ x: source.centerX, y: source.bottom }};
+        const end = {{ x: target.centerX, y: target.top }};
+        if (branchPairStyles.has(pair)) {{
+          return roundedOrthogonalPath(start, end, "vertical");
         }}
-        const targetBelow = target.centerY >= source.centerY;
-        const start = {{ x: source.centerX, y: targetBelow ? source.bottom : source.top }};
-        const end = {{ x: target.centerX, y: targetBelow ? target.top : target.bottom }};
-        if (straightPathIsClear(relation, start, end)) return `M ${{start.x}} ${{start.y}} L ${{end.x}} ${{end.y}}`;
-        return roundedOrthogonalPath(start, end, "vertical", laneOffset);
+        if (Math.abs(start.x - end.x) < 2) return `M ${{start.x}} ${{start.y}} V ${{end.y}}`;
+        return roundedOrthogonalPath(start, end, "vertical");
       }};
 
-      const appendEdge = (relation, style, index) => {{
+      const appendEdge = (relation, style) => {{
         if (!flowSvg) return;
-        const pathData = relationPath(relation, index);
+        const pathData = relationPath(relation);
         if (!pathData) return;
         const path = document.createElementNS(svgNamespace, "path");
         path.setAttribute("d", pathData);
@@ -920,10 +873,10 @@ def render_dashboard(
         if (!diagram || !flowSvg) return;
         flowSvg.querySelectorAll(".architecture-edge").forEach((edge) => edge.remove());
         flowSvg.setAttribute("viewBox", `0 0 ${{diagram.clientWidth}} ${{diagram.clientHeight}}`);
-        graphEdges.forEach((relation, index) => {{
+        graphEdges.forEach((relation) => {{
           const pair = relation.source_id + ">" + relation.target_id;
           const style = primaryPairStyles.get(pair);
-          if (style) appendEdge(relation, style, index);
+          if (style) appendEdge(relation, style);
         }});
       }};
 
@@ -1196,7 +1149,7 @@ def _render_architecture_diagram(overview: ProjectOverview) -> str:
         <span>受控能力范围</span><span>任务级隔离</span><span>可恢复执行</span><span>可追溯交付</span>
       </div>
     </div>
-    <div class="architecture-main-flow">
+    <div class="architecture-main-flow architecture-main-flow--vertical">
       <div class="architecture-flow-column architecture-flow-column--entry">
         <span class="architecture-phase">01 · 请求入口</span>
         {node_button("business_entry", "main", "企业微信 / 本地入口")}
@@ -1220,7 +1173,7 @@ def _render_architecture_diagram(overview: ProjectOverview) -> str:
         </div>
       </div>
       <div class="architecture-capability-domains">
-        <div class="architecture-domain-card architecture-domain-card--writing">
+        <div class="architecture-domain-card architecture-domain-card--writing" data-architecture-edge-box="writing_domain">
           <div class="architecture-domain-index"><span>05A · 写作域</span><span>Skill 驱动</span></div>
           {node_button("writing_domain", "domain", "成稿、改稿与专题内容生产")}
           <div class="architecture-domain-capabilities">
@@ -1230,7 +1183,7 @@ def _render_architecture_diagram(overview: ProjectOverview) -> str:
             {node_button("thematic_content", "micro")}
           </div>
         </div>
-        <div class="architecture-domain-card architecture-domain-card--review">
+        <div class="architecture-domain-card architecture-domain-card--review" data-architecture-edge-box="review_domain">
           <div class="architecture-domain-index"><span>05B · 审核域</span><span>规则与证据</span></div>
           {node_button("review_domain", "domain", "通用、专项、格式与跨文件审核")}
           <div class="architecture-domain-capabilities">

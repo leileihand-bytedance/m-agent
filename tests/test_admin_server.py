@@ -291,6 +291,7 @@ def test_render_dashboard_includes_controlled_detailed_architecture_diagram(tmp_
     assert 'data-architecture-node="result_delivery"' in html
     assert 'class="architecture-domain-card architecture-domain-card--writing"' in html
     assert 'class="architecture-domain-card architecture-domain-card--review"' in html
+    assert 'class="architecture-main-flow architecture-main-flow--vertical"' in html
     assert 'class="architecture-agent-core"' in html
     assert 'class="architecture-control-gates"' in html
     assert 'class="architecture-foundation"' in html
@@ -308,9 +309,10 @@ def test_render_dashboard_includes_controlled_detailed_architecture_diagram(tmp_
     assert "政策知识库" in html
     assert "运维与可观测性" in html
     assert "roundedOrthogonalPath" in html
-    assert "straightPathIsClear" in html
-    assert "segmentIntersectsBox" in html
-    assert "if (straightPathIsClear(relation, start, end))" in html
+    assert "branchPairStyles" in html
+    assert "branchPairStyles.has(pair)" in html
+    assert "straightPathIsClear" not in html
+    assert "segmentIntersectsBox" not in html
     assert "architecture-edge--flow" in html
     assert "@keyframes architecture-information-flow" in html
     assert "prefers-reduced-motion: reduce" in html

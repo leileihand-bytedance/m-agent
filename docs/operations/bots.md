@@ -39,25 +39,26 @@ M_AGENT_TEST_OPS_BOT_SECRET=
 
 只需配置本次要联调的测试 Bot。测试模式不会读取对应生产凭据，也不会回退到生产数据目录；所有任务、会话、队列、日志、用户表、知识库和运维状态必须位于测试根目录。`--check-config` 会显示运行环境、遮罩后的 Bot ID 和数据根目录，不显示 Secret。
 
-## 写作和审核常驻服务
+## 写作、审核和管理台常驻服务
 
-生产写作 Bot 和审核 Bot 使用 macOS LaunchAgent 常驻运行。首次安装必须在 `main` 执行：
+生产写作 Bot、审核 Bot 和本机管理台使用 macOS LaunchAgent 常驻运行。首次安装必须在 `main` 执行：
 
 ```bash
 uv run --locked python scripts/bot_services.py install all
 ```
 
-安装命令先分别运行 `--check-config`，通过后才写入本机 `~/Library/LaunchAgents/` 并启动服务。服务文件只保存项目、`uv` 和日志的绝对路径，不保存 Bot 凭证或模型密钥。用户登录 macOS 后服务自动启动；进程异常退出时由系统延迟拉起，配置检查正常退出或管理员主动停止时不会反复重启。
+安装命令先对写作和审核 Bot 分别运行 `--check-config`，通过后才写入本机 `~/Library/LaunchAgents/` 并启动服务；管理台没有 Bot 凭证，不执行该检查，固定只监听 `127.0.0.1:8787`。服务文件只保存项目、`uv`、启动参数和日志的绝对路径，不保存 Bot 凭证或模型密钥。用户登录 macOS 后服务自动启动；进程异常退出时由系统延迟拉起，配置检查正常退出或管理员主动停止时不会反复重启。三个服务均以后台进程运行，不打开终端窗口。
 
 常用管理命令：
 
 ```bash
-# 查看两个 Bot
+# 查看三个常驻服务
 uv run --locked python scripts/bot_services.py status all
 
 # 分别重启
 uv run --locked python scripts/bot_services.py restart writing
 uv run --locked python scripts/bot_services.py restart review
+uv run --locked python scripts/bot_services.py restart admin
 
 # 一起启停
 uv run --locked python scripts/bot_services.py stop all
@@ -71,10 +72,11 @@ uv run --locked python scripts/bot_services.py uninstall all
 
 - 只改 `app/writing/` 或写作 Skill：重启 `writing`。
 - 只改 `app/review/` 或审核规则：重启 `review`。
+- 只改 `app/admin/` 或管理台展示：重启 `admin`。
 - 改 `app/platform/`、公共配置、模型配置、`pyproject.toml` 或 `uv.lock`：先执行 `uv sync --locked`，再重启 `all`。
 - 只新增任务材料、知识库数据、队列记录或文档说明：通常不需要重启；不确定配置是否在启动时加载时，重启对应 Bot。
 
-服务标准输出分别写入 `runtime/logs/writing-bot-service.*.log` 和 `runtime/logs/review-bot-service.*.log`。常驻服务只在当前 macOS 用户登录后运行，不等同于无需登录的系统级守护进程。
+服务标准输出分别写入 `runtime/logs/writing-bot-service.*.log`、`runtime/logs/review-bot-service.*.log` 和 `runtime/logs/admin-console-service.*.log`。常驻服务只在当前 macOS 用户登录后运行，不等同于无需登录的系统级守护进程。
 
 ## 写作 Bot
 

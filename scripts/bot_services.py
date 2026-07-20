@@ -27,6 +27,8 @@ class BotService:
     label: str
     module: str
     log_prefix: str
+    arguments: tuple[str, ...] = ()
+    requires_config_check: bool = True
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,14 @@ BOT_SERVICES = {
         label="com.magent.review-bot",
         module="app.review.main",
         log_prefix="review-bot-service",
+    ),
+    "admin": BotService(
+        key="admin",
+        label="com.magent.admin-console",
+        module="app.admin.server",
+        log_prefix="admin-console-service",
+        arguments=("--host", "127.0.0.1", "--port", "8787"),
+        requires_config_check=False,
     ),
 }
 
@@ -78,6 +88,7 @@ def build_launch_agent(
             "python",
             "-m",
             service.module,
+            *service.arguments,
         ],
         "WorkingDirectory": str(project_root),
         "RunAtLoad": True,
@@ -259,6 +270,8 @@ class BotServiceManager:
             )
 
     def _check_config(self, service: BotService) -> None:
+        if not service.requires_config_check:
+            return
         self._run(
             (
                 str(self.uv_path),
@@ -283,12 +296,12 @@ class BotServiceManager:
         self._require_macos()
         if self.branch_name != "main":
             raise ServiceManagerError(
-                f"生产 Bot 常驻服务只能从 main 安装、启动或重启；当前分支为 {self.branch_name}。"
+                f"生产常驻服务只能从 main 安装、启动或重启；当前分支为 {self.branch_name}。"
             )
 
     def _require_macos(self) -> None:
         if self.platform_name != "Darwin":
-            raise ServiceManagerError("Bot 常驻服务当前只支持 macOS LaunchAgent。")
+            raise ServiceManagerError("常驻服务当前只支持 macOS LaunchAgent。")
 
     def _run(
         self,
@@ -347,7 +360,7 @@ def selected_services(value: str) -> tuple[BotService, ...]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="管理写作和审核 Bot 的 macOS 常驻服务"
+        description="管理写作、审核和管理台常驻服务"
     )
     parser.add_argument(
         "command",
@@ -356,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "service",
         nargs="?",
-        choices=("writing", "review", "all"),
+        choices=(*BOT_SERVICES.keys(), "all"),
         default="all",
     )
     return parser

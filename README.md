@@ -44,7 +44,7 @@ uv run --locked python -c "import sys; print(sys.executable); print(sys.version)
 # 检查公共底座配置
 uv run --locked python -m app.platform.cli --check-config
 
-# 写作、审核 Bot 常驻服务（macOS，首次使用 install）
+# 写作、审核和管理台常驻服务（macOS，首次使用 install）
 uv run --locked python scripts/bot_services.py install all
 uv run --locked python scripts/bot_services.py status all
 uv run --locked python scripts/bot_services.py restart all
@@ -61,8 +61,8 @@ uv run --locked python -m app.review.main
 uv run --locked python -m app.rewrite_bot --check-config
 uv run --locked python -m app.rewrite_bot
 
-# 本机项目控制台
-uv run --locked python -m app.admin.server --port 8787
+# 本机项目控制台由 admin 常驻服务提供
+uv run --locked python scripts/bot_services.py status admin
 ```
 
 所有真实密钥只写入本机 `.env`。用户上传文件、系统输出、日志、会话、任务队列和知识库默认保存在项目同级的 `M-Agent-Files/`，不进入 Git。

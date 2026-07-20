@@ -16,8 +16,19 @@
 
 ## 启动
 
+管理台默认作为 macOS 后台服务运行，不打开终端窗口。首次安装或日常管理在 `main` 执行：
+
 ```bash
-uv run --locked python -m app.admin.server --port 8787
+uv run --locked python scripts/bot_services.py install admin
+uv run --locked python scripts/bot_services.py status admin
+uv run --locked python scripts/bot_services.py restart admin
+```
+
+后台日志位于 `M-Agent-Files/runtime/logs/admin-console-service.*.log`。只有排障时才先停止后台服务，再运行前台命令：
+
+```bash
+uv run --locked python scripts/bot_services.py stop admin
+uv run --locked python -m app.admin.server --host 127.0.0.1 --port 8787
 ```
 
 浏览器访问：
@@ -52,7 +63,7 @@ http://127.0.0.1:8787/
 
 更细的综合调研、深银协动态、内参周报，以及通用文字、通用 Word、HTML、PPTX、内参、半月报等能力位于下半部分“功能与模块状态”，按七个职责组逐项展示。状态筛选只作用于这份明细，不会把架构图节点隐藏掉。
 
-主图使用“主链 + 固定分区”：动态线只连接业务入口、三层 Agent 内核、写作/审核域和结果交付，直接路径没有节点阻挡时使用直线箭头，必须避让时才转为圆角直角路径；子能力、工具、知识和治理控制按对齐分组表达，不把每个依赖都画成跨区连线。五道运行约束明确显示安全与可靠性不是只靠 Prompt。全部架构节点均可查看职责和代码依据，窄屏时仅在图内横向浏览。图由服务端 HTML、CSS 和原生 SVG 生成，不依赖第三方关系图库或 CDN；用户暂停动效或系统启用“减少动态效果”时，动态线停止。
+主图使用“纵向主链 + 固定分区”：业务入口、三层 Agent 内核和结果交付从上到下排列，普通阶段使用垂直直线；Agent 分流到写作和审核，以及两条业务路线汇合到交付时，使用圆角转弯线。子能力、工具、知识和治理控制按对齐分组表达，不把每个依赖都画成跨区连线。五道运行约束明确显示安全与可靠性不是只靠 Prompt。全部架构节点均可查看职责和代码依据，窄屏时仅在图内横向浏览。图由服务端 HTML、CSS 和原生 SVG 生成，不依赖第三方关系图库或 CDN；用户暂停动效或系统启用“减少动态效果”时，动态线停止。
 
 七个明细组的边界是：
 

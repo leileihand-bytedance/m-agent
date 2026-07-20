@@ -11,6 +11,7 @@ from scripts.bot_services import (
     ServiceManagerError,
     build_launch_agent,
     parse_launchctl_status,
+    selected_services,
 )
 
 
@@ -67,6 +68,32 @@ def test_launch_agent_runs_locked_project_command_without_secrets(tmp_path: Path
     assert "SECRET" not in plistlib.dumps(payload).decode("utf-8")
 
 
+def test_admin_launch_agent_runs_silently_on_local_port(tmp_path: Path):
+    payload = build_launch_agent(
+        BOT_SERVICES["admin"],
+        project_root=tmp_path / "M-Agent",
+        uv_path=Path("/opt/local/bin/uv"),
+        logs_dir=tmp_path / "M-Agent-Files" / "runtime" / "logs",
+    )
+
+    assert payload["Label"] == "com.magent.admin-console"
+    assert payload["ProgramArguments"] == [
+        "/opt/local/bin/uv",
+        "run",
+        "--locked",
+        "python",
+        "-m",
+        "app.admin.server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8787",
+    ]
+    assert payload["ProcessType"] == "Background"
+    assert payload["StandardOutPath"].endswith("admin-console-service.out.log")
+    assert payload["StandardErrorPath"].endswith("admin-console-service.err.log")
+
+
 def test_install_validates_config_and_bootstraps_only_selected_service(tmp_path: Path):
     runner = FakeRunner()
     manager = BotServiceManager(
@@ -103,6 +130,27 @@ def test_install_validates_config_and_bootstraps_only_selected_service(tmp_path:
         str(plist_path),
     ) in runner.calls
     assert not any("writing-bot" in " ".join(call) for call in runner.calls)
+
+
+def test_install_admin_skips_bot_config_check(tmp_path: Path):
+    runner = FakeRunner()
+    manager = BotServiceManager(
+        project_root=tmp_path / "M-Agent",
+        data_root=tmp_path / "M-Agent-Files",
+        launch_agents_dir=tmp_path / "LaunchAgents",
+        uv_path=Path("/opt/local/bin/uv"),
+        uid=502,
+        branch_name="main",
+        platform_name="Darwin",
+        runner=runner,
+    )
+
+    manager.install((BOT_SERVICES["admin"],))
+
+    plist_path = tmp_path / "LaunchAgents" / "com.magent.admin-console.plist"
+    assert plist_path.is_file()
+    assert not any("--check-config" in call for call in runner.calls)
+    assert ("launchctl", "enable", "gui/502/com.magent.admin-console") in runner.calls
 
 
 def test_install_refuses_non_main_or_non_macos(tmp_path: Path):
@@ -168,6 +216,14 @@ def test_parse_launchctl_status_is_concise():
     assert parse_launchctl_status("state = waiting\n") == ("waiting", None)
 
 
+def test_all_services_include_admin_console():
+    assert [service.key for service in selected_services("all")] == [
+        "writing",
+        "review",
+        "admin",
+    ]
+
+
 def test_script_can_run_directly_without_pythonpath():
     result = subprocess.run(
         (sys.executable, str(ROOT / "scripts" / "bot_services.py"), "--help"),
@@ -179,4 +235,5 @@ def test_script_can_run_directly_without_pythonpath():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "管理写作和审核 Bot" in result.stdout
+    assert "管理写作、审核和管理台常驻服务" in result.stdout
+    assert "admin" in result.stdout
