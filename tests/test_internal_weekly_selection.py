@@ -25,6 +25,7 @@ from skills.internal_weekly.source_registry import (
     load_source_registry,
     section_source_entry_urls,
     section_source_feed_urls,
+    section_source_feed_specs,
 )
 
 
@@ -149,6 +150,27 @@ def test_party_source_registry_includes_state_council_news_list_entry():
     assert section_source_feed_urls("党政要闻") == (
         "https://www.gov.cn/yaowen/liebiao/YAOWENLIEBIAO.json",
     )
+
+
+def test_regulatory_source_registry_includes_user_designated_priority_entries():
+    entry_urls = section_source_entry_urls("监管动态")
+    feed_specs = section_source_feed_specs("监管动态")
+
+    assert entry_urls == (
+        "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html",
+        "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=915&itemUrl=ItemListRightList.html&itemName=监管动态",
+        "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=917&itemUrl=ItemListRightList.html&itemName=政策解读&itemsubPId=916",
+        "https://www.nfra.gov.cn/cn/view/pages/ItemList.html?itemPId=914&itemId=919&itemUrl=ItemListRightList.html&itemName=领导活动及讲话",
+        "https://www.csrc.gov.cn/csrc/c100028/common_xq_list.shtml",
+    )
+    assert [item["source_group"] for item in feed_specs] == [
+        "pbc",
+        "nfra",
+        "nfra",
+        "nfra",
+        "csrc",
+    ]
+    assert all(item["tier"] == "primary" for item in feed_specs)
 
 
 def test_unknown_ordinary_content_is_not_misclassified_as_market_observation():
