@@ -19,6 +19,7 @@
 
 - [直报写作](direct-report/README.md)
 - [简报写作](brief-writing.md)
+- [简报质量回归方法](brief-quality-regression.md)
 - [材料润色](rewrite.md)
 - [综合调研整合](research-synthesis.md)
 - [深银协动态](shenyinxie-news.md)

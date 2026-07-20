@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.pydantic_runtime import PydanticAIWriter
 from skills.direct_report.schema import DirectReportResult
 from skills.rewrite.schema import RewriteResult
+from skills.writer1.schema import BriefPlanResult
 from pydantic import BaseModel
 from app.platform.model_reliability import ModelCallError
 
@@ -42,6 +43,23 @@ class _FlakyAgent:
         if self.errors:
             raise self.errors.pop(0)
         return _FakeRunResult(self.output)
+
+
+def test_pydantic_writer_schema_hint_lists_generic_output_fields():
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=lambda *args: None,
+    )
+
+    hint = writer._schema_hint(BriefPlanResult)
+
+    assert "BriefPlanResult" in hint
+    assert "brief_type" in hint
+    assert "selected_fact_ids" in hint
+    assert "excluded_details" in hint
 
 
 def test_pydantic_writer_uses_shared_timeout_and_bounded_retry():

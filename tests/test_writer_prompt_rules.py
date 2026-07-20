@@ -7,13 +7,11 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_writer1_prompt_uses_our_bank_naming_rule():
     prompt = (ROOT / "skills/writer1/prompts/draft.md").read_text(encoding="utf-8")
     skill = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
-    writing_materials = (ROOT / "skills/writer1/knowledge/writing-materials.json").read_text(encoding="utf-8")
 
     assert "深圳前海微众银行（以下简称“我行”）" in prompt
     assert "后文统一使用“我行”" in prompt
     assert "深圳前海微众银行（以下简称“我行”）" in skill
-    assert "深圳前海微众银行（以下简称“我行”）" in writing_materials
-    assert '以下简称"我行"' not in prompt + skill + writing_materials
+    assert '以下简称"我行"' not in prompt + skill
 
 
 def test_writer2_prompt_uses_our_bank_naming_rule():
@@ -95,3 +93,26 @@ def test_writer2_prompt_mentions_unified_theme_weak_relation_and_revision_feedba
     assert "外部认可型" in prompt + skill
     assert "内部流转简报" not in prompt + skill + critic
     assert "适合内部流转和领导阅读" not in prompt + skill + critic
+
+
+def test_brief_skills_do_not_keep_stale_or_exaggerated_guidance():
+    writer1 = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
+    writer2 = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
+    combined = writer1 + writer2
+
+    assert "topic-selector" not in combined
+    assert "knowledge/写作素材库.json" not in combined
+    assert "knowledge/领域术语库.json" not in combined
+    assert "knowledge/政策背景库.json" not in combined
+    assert "行业领先地位" not in combined
+    assert '从0到1' not in combined
+    assert "政治站位" not in combined
+    assert "竞争对手" not in combined
+
+
+def test_brief_todo_uses_external_reporting_positioning():
+    todo = (ROOT / "docs/development/TODO.md").read_text(encoding="utf-8")
+    section = todo.split("### TODO-002", 1)[1].split("### TODO-", 1)[0]
+
+    assert "内部流转和领导阅读" not in section
+    assert "地方政府和监管部门" in section

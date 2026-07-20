@@ -1,4 +1,4 @@
-from skills.writer1.schema import BriefResult
+from skills.writer1.schema import BriefPlanResult, BriefResult, BriefRevisionPlanResult
 
 
-__all__ = ["BriefResult"]
+__all__ = ["BriefPlanResult", "BriefResult", "BriefRevisionPlanResult"]

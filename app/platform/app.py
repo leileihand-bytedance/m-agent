@@ -1280,6 +1280,7 @@ def build_platform_tools(
             max_file_bytes=config.document_max_bytes,
             ocr_scanned_pages=config.document_ocr_enabled,
         ),
+        "llm_planner": writer.write,
         "llm_writer": writer.write,
     }
 

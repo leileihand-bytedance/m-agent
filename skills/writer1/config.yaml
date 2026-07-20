@@ -16,6 +16,7 @@ allowed_tools:
   - word_reader
   - pdf_reader
   - document_reader
+  - llm_planner
   - llm_writer
 workflow: skills.writer1.workflow:run
 supports_revision: true

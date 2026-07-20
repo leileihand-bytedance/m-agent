@@ -183,7 +183,14 @@ class PydanticAIWriter:
 - needs_clarification: 是否需要追问
 - message: 给用户的补充说明
 """
-        return f"请严格按 {output_type.__name__} 的结构化字段返回结果，不要输出额外说明。"
+        fields = [
+            f"- {name}: {'必填' if field.is_required() else '可选'}"
+            for name, field in output_type.model_fields.items()
+        ]
+        return (
+            f"请严格返回 {output_type.__name__} 结构化结果，不要输出额外说明：\n"
+            + "\n".join(fields)
+        )
 
     def _resolve_skill_dir(self, payload: dict[str, object]) -> Path:
         skill_id = str(payload.get("skill_id") or payload.get("task") or "").strip()

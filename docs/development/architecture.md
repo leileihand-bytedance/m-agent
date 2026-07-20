@@ -220,6 +220,7 @@ ToolGateway
 - skill 只能调用 `config.yaml` 声明的工具。
 - 未授权工具直接拒绝。
 - 所有基础工具都必须经过这里。
+- `llm_writer` 和 `llm_planner` 是同一受控 Pydantic AI 运行器的两个授权别名；前者生成业务结果，后者只生成 Skill 声明的结构化规划，别名不扩大模型或文件权限。
 
 ### 6. 基础工具层
 
@@ -262,14 +263,16 @@ PydanticAIWriter
 - 创建 Pydantic AI Agent。
 - 使用项目 `.env` 中的模型配置。
 - 读取 skill 规则和 prompt。
-- 要求模型返回 Pydantic 结构化结果。
+- 要求模型返回调用方指定的 Pydantic 结构化结果，并从模型字段自动生成字段清单提示。
 - 按公共策略设置请求超时和有限重试，并把供应商异常转换为安全错误码。
 
-当前 direct_report 输出模型：
+业务结果、语义规划和 critic 均使用各 Skill 声明的 Pydantic 模型，例如：
 
 ```text
 skills/direct_report/schema.py
 DirectReportResult
+skills/writer1/schema.py
+BriefResult / BriefPlanResult / BriefRevisionPlanResult / BriefCriticResult
 ```
 
 模型配置规则：

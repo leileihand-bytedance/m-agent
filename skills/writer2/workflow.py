@@ -1,10 +1,16 @@
 import re
 
 from app.platform.tools import ToolGateway
+from skills.brief_revision import (
+    apply_revision_constraints,
+    build_revision_plan,
+    render_revision_plan,
+    validate_revision_result,
+)
 from skills.brief_quality import assess_multi_source_relation, brief_critic_check, build_brief_plan, format_brief_violations, validate_brief_deterministic
 from skills.material_priority import source_materials_have_quantitative_data
 from skills.revision_support import build_revision_payload, previous_sources
-from skills.writer1.schema import BriefResult
+from skills.writer1.schema import BriefResult, BriefRevisionPlanResult
 from skills.writer1.workflow import (
     _bank_materials,
     _has_read_errors,
@@ -53,7 +59,13 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
     if not source_materials_have_quantitative_data(source_materials):
         materials.extend(_bank_materials(inputs=inputs, materials=list(source_materials), tools=tools))
     materials.extend(_policy_research_materials(inputs=inputs, materials=list(source_materials), tools=tools))
-    planning_note = build_brief_plan(str(inputs.get("text", "") or ""), materials, multi_source=True)
+    planning_note = build_brief_plan(
+        str(inputs.get("text", "") or ""),
+        materials,
+        multi_source=True,
+        tools=tools,
+        skill_id="writer2",
+    )
     return _generate_and_validate(
         payload={
             "skill_id": "writer2",
@@ -69,6 +81,16 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
 
 
 def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
+    previous_title = str(inputs.get("previous_title", "") or "")
+    previous_body = str(inputs.get("previous_body", "") or "")
+    revision_request = str(inputs.get("revision_request") or inputs.get("text") or "").strip()
+    revision_plan = build_revision_plan(
+        revision_request,
+        previous_title=previous_title,
+        previous_body=previous_body,
+        tools=tools,
+        skill_id="writer2",
+    )
     payload = build_revision_payload(inputs, skill_id="writer2")
     sources = previous_sources(inputs)
     if inputs.get("supplement_materials"):
@@ -90,12 +112,25 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
             for item in supplemental
             if str(item.get("url", "")).strip()
         )
-    payload["planning_note"] = build_brief_plan(str(payload.get("instruction", "") or ""), payload["materials"], multi_source=True)
+    payload["planning_note"] = (
+        build_brief_plan(
+            str(payload.get("instruction", "") or ""),
+            payload["materials"],
+            multi_source=True,
+            tools=tools,
+            skill_id="writer2",
+        )
+        + "\n\n"
+        + render_revision_plan(revision_plan)
+    )
     return _generate_and_validate(
         payload=payload,
         tools=tools,
         sources=list(dict.fromkeys(sources)),
         default_message="已根据上一稿完成多素材简报修改。",
+        revision_plan=revision_plan,
+        previous_title=previous_title,
+        previous_body=previous_body,
     )
 
 
@@ -157,6 +192,9 @@ def _generate_and_validate(
     sources: list[str],
     default_message: str,
     feedback: str | None = None,
+    revision_plan: BriefRevisionPlanResult | None = None,
+    previous_title: str = "",
+    previous_body: str = "",
 ) -> BriefResult:
     draft_payload = dict(payload)
     if feedback:
@@ -175,7 +213,30 @@ def _generate_and_validate(
             message=str(draft.get("message", "") or ""),
         )
 
-    deterministic_violations = validate_brief_deterministic(title, body)
+    if revision_plan is not None:
+        title, body = apply_revision_constraints(
+            revision_plan,
+            previous_title=previous_title,
+            previous_body=previous_body,
+            generated_title=title,
+            generated_body=body,
+        )
+
+    deterministic_violations = validate_brief_deterministic(
+        title,
+        body,
+        materials=list(draft_payload.get("materials") or []),
+    )
+    if revision_plan is not None:
+        deterministic_violations.extend(
+            validate_revision_result(
+                revision_plan,
+                previous_title=previous_title,
+                previous_body=previous_body,
+                revised_title=title,
+                revised_body=body,
+            )
+        )
     critic_violations = brief_critic_check(
         title=title,
         body=body,
@@ -192,6 +253,9 @@ def _generate_and_validate(
             sources=sources,
             default_message=default_message,
             feedback=format_brief_violations(blocking_violations),
+            revision_plan=revision_plan,
+            previous_title=previous_title,
+            previous_body=previous_body,
         )
 
     message = str(draft.get("message", "") or default_message)

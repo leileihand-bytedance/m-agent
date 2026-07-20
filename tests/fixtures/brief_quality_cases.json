@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "manual_review_dimensions": [
+    "usable",
+    "reporting_value",
+    "fact_accuracy",
+    "type_fit",
+    "structure",
+    "brief_style",
+    "revision_cost"
+  ],
+  "cases": [
+    {
+      "case_id": "comprehensive-results",
+      "brief_type": "综合成果型",
+      "multi_source": true,
+      "instruction": "请把两项阶段性成果整合成一篇简报",
+      "materials": [
+        {"title": "服务进展", "text": "我行围绕重点领域持续完善服务机制，形成阶段性成果。"},
+        {"title": "能力进展", "text": "我行同步优化数字化服务流程，提升服务覆盖能力。"}
+      ]
+    },
+    {
+      "case_id": "mechanism-results",
+      "brief_type": "机制成果型",
+      "multi_source": false,
+      "instruction": "请围绕协调工作机制写一篇简报",
+      "materials": [
+        {"title": "机制建设", "text": "我行成立工作专班，建立常态化协调机制，推动重点事项落地。"}
+      ]
+    },
+    {
+      "case_id": "product-tool",
+      "brief_type": "产品工具型",
+      "multi_source": false,
+      "instruction": "请根据金融健康自测工具材料写简报",
+      "materials": [
+        {"title": "自测工具", "text": "我行推出面向小微企业的金融健康自测工具，提供测量、诊断和建议服务。"}
+      ]
+    },
+    {
+      "case_id": "platform-cooperation",
+      "brief_type": "平台合作型",
+      "multi_source": false,
+      "instruction": "请围绕跨境数据验证平台写简报",
+      "materials": [
+        {"title": "平台上线", "text": "我行参与跨境数据验证平台建设，负责总体方案设计及技术支持。"}
+      ]
+    },
+    {
+      "case_id": "standard-leadership",
+      "brief_type": "标准引领型",
+      "multi_source": false,
+      "instruction": "请围绕参与国际国内标准制定写简报",
+      "materials": [
+        {"title": "标准工作", "text": "我行持续参与金融科技相关国际标准和国家标准制定，推动技术成果规范化应用。"}
+      ]
+    },
+    {
+      "case_id": "capability-building",
+      "brief_type": "能力建设型",
+      "multi_source": false,
+      "instruction": "请围绕AI工程化平台和科技管理效能写简报",
+      "materials": [
+        {"title": "能力建设", "text": "我行建设AI工程化平台，并将相关能力应用于研发、运维和科技管理场景。"}
+      ]
+    },
+    {
+      "case_id": "external-recognition",
+      "brief_type": "外部认可型",
+      "multi_source": false,
+      "instruction": "请根据ESG评级和奖项材料写简报",
+      "materials": [
+        {"title": "外部认可", "text": "我行ESG实践获得专业机构评级和行业奖项认可。"}
+      ]
+    },
+    {
+      "case_id": "event-showcase",
+      "brief_type": "活动亮相型",
+      "multi_source": false,
+      "instruction": "请根据金融科技周亮相情况写简报",
+      "materials": [
+        {"title": "活动展示", "text": "我行在金融科技周集中展示数字银行技术能力及跨境合作实践。"}
+      ]
+    },
+    {
+      "case_id": "special-governance",
+      "brief_type": "专项治理型",
+      "multi_source": false,
+      "instruction": "请围绕金融黑灰产专项治理写简报",
+      "materials": [
+        {"title": "专项治理", "text": "我行完善异常监控和部门协同机制，配合开展金融黑灰产专项治理。"}
+      ]
+    }
+  ]
+}

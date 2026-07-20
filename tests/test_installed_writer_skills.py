@@ -15,9 +15,7 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
 
     assert (writer1 / "SKILL.md").exists()
     assert (writer1 / "config.yaml").exists()
-    assert (writer1 / "knowledge" / "writing-materials.json").exists()
-    assert (writer1 / "knowledge" / "domain-terms.json").exists()
-    assert (writer1 / "knowledge" / "policy-backgrounds.json").exists()
+    assert not list((writer1 / "knowledge").glob("*.json"))
 
     assert (writer2 / "SKILL.md").exists()
     assert (writer2 / "config.yaml").exists()
