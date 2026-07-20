@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+from app.platform.delivery_state import DeliveryOutcome
 from app.platform.models import UploadedFile
 from app.platform.task_execution import (
     ClaimLimits,
@@ -222,9 +223,9 @@ def test_multi_file_delivery_checkpoints_summary_and_each_attachment(tmp_path: P
     task_dir = Path(str(submission.task.payload["task_dir"]))
     checkpoint = json.loads((task_dir / "execution.json").read_text(encoding="utf-8"))
     assert [item["status"] for item in checkpoint["delivery_items"]] == [
-        "delivered",
-        "delivered",
-        "delivered",
+        "confirmed_delivered",
+        "confirmed_delivered",
+        "confirmed_delivered",
     ]
 
 
@@ -748,7 +749,7 @@ def test_completed_general_review_is_not_processed_or_delivered_twice(tmp_path: 
         )
     )
     assert checkpoint["processing_status"] == "completed"
-    assert checkpoint["delivery_status"] == "delivered"
+    assert checkpoint["delivery_status"] == "confirmed_delivered"
     status = json.loads(
         (Path(str(submission.task.payload["task_dir"])) / "status.json").read_text(
             encoding="utf-8"
@@ -825,6 +826,48 @@ def test_restart_does_not_resend_when_delivery_status_is_uncertain(tmp_path: Pat
     ]
 
 
+def test_review_sender_outcome_persists_confirmed_delivery_receipt(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.text("没有发现问题，可以走审批了。")
+
+    async def sender(_recipient: str, _text: str):
+        return DeliveryOutcome(
+            status="confirmed_delivered",
+            evidence="sdk_ack_success",
+            correlation_id="ack-0123456789abcdef",
+        )
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=sender,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="review-receipt-001",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["schema_version"] == 2
+    assert checkpoint["delivery_status"] == "confirmed_delivered"
+    assert checkpoint["delivery_items"][0]["evidence"] == "sdk_ack_success"
+    assert checkpoint["delivery_items"][0]["correlation_id"] == "ack-0123456789abcdef"
+
+
 def test_text_parts_are_sent_in_order_and_not_reprocessed_after_completion(
     tmp_path: Path,
 ):
@@ -863,6 +906,72 @@ def test_text_parts_are_sent_in_order_and_not_reprocessed_after_completion(
     assert first.status == repeated.status == "completed"
     assert calls == {"process": 1}
     assert sent == ["第一段", "第二段"]
+
+
+def test_text_parts_stop_on_unknown_receipt_without_resending_confirmed_part(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    calls: list[str] = []
+
+    async def processor(_workspace):
+        return PreparedReviewDelivery.multipart_text(("第一段", "第二段"))
+
+    async def sender(_recipient: str, value: str):
+        calls.append(value)
+        if value == "第一段":
+            return True
+        return DeliveryOutcome(
+            status="delivery_unknown",
+            evidence="sdk_ack_timeout",
+            safe_error_code="delivery_ack_timeout",
+        )
+
+    service = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=sender,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="multipart-unknown-001",
+        filename="材料.docx",
+        file_bytes=b"docx-content",
+    )
+
+    with pytest.raises(SafeTaskError) as first_error:
+        asyncio.run(service.handle(submission.task))
+    assert first_error.value.safe_error_code == "delivery_status_uncertain"
+
+    async def must_not_process(_workspace):
+        raise AssertionError("恢复检查不应重新审核")
+
+    async def must_not_send(_recipient: str, _value: str):
+        raise AssertionError("已确认或送达未知的分段都不应自动重发")
+
+    restarted = _service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=must_not_process,
+        text_sender=must_not_send,
+    )
+    with pytest.raises(SafeTaskError) as second_error:
+        asyncio.run(restarted.handle(submission.task))
+
+    assert second_error.value.safe_error_code == "delivery_status_uncertain"
+    assert calls == ["第一段", "第二段"]
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [item["status"] for item in checkpoint["delivery_items"]] == [
+        "confirmed_delivered",
+        "delivery_unknown",
+    ]
     checkpoint = json.loads(
         (
             Path(str(submission.task.payload["task_dir"])) / "execution.json"
@@ -963,5 +1072,5 @@ def test_failed_delivery_checkpoint_notifies_after_restart(tmp_path: Path):
 
     error = asyncio.run(scenario())
 
-    assert error.safe_error_code == "delivery_failed"
-    assert failures == [("user-1", "delivery_failed", submission.task.task_id)]
+    assert error.safe_error_code == "delivery_not_delivered"
+    assert failures == [("user-1", "delivery_not_delivered", submission.task.task_id)]

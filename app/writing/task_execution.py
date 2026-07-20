@@ -10,6 +10,18 @@ from typing import Awaitable, Callable
 from uuid import uuid4
 
 from app.platform.app import PreparedPlatformJob
+from app.platform.delivery_state import (
+    CHECKPOINT_DELIVERY_STATUSES,
+    CONFIRMED_DELIVERED,
+    CONFIRMED_NOT_DELIVERED,
+    DELIVERY_UNKNOWN,
+    DeliveryOutcome,
+    aggregate_delivery_status,
+    apply_delivery_outcome,
+    begin_delivery_attempt,
+    normalize_checkpoint_status,
+    normalize_delivery_outcome,
+)
 from app.platform.gateway.wecom import format_text_reply
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
 from app.platform.storage import JobContext
@@ -53,8 +65,8 @@ class WritingTaskSubmission:
 TextPreparer = Callable[..., PreparedPlatformJob]
 StructuredPreparer = Callable[..., PreparedPlatformJob]
 WritingProcessor = Callable[[WritingTaskWorkspace], Awaitable[PlatformResult]]
-TextSender = Callable[[str, str], Awaitable[bool]]
-AttachmentSender = Callable[[str, Path, Path], Awaitable[bool]]
+TextSender = Callable[[str, str], Awaitable[DeliveryOutcome | bool]]
+AttachmentSender = Callable[[str, Path, Path], Awaitable[DeliveryOutcome | bool]]
 ResultFinalizer = Callable[[WritingTaskWorkspace, PlatformResult], Awaitable[None]]
 FailureFinalizer = Callable[[WritingTaskWorkspace], Awaitable[None]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
@@ -203,30 +215,52 @@ class WritingTaskService:
         if isinstance(delivery_items, list) and delivery_items:
             return await self._deliver_items(task, workspace, checkpoint, delivery_items)
 
-        delivery_status = str(checkpoint["delivery_status"])
-        if delivery_status == "delivered":
+        delivery_status = normalize_checkpoint_status(checkpoint["delivery_status"])
+        if delivery_status == CONFIRMED_DELIVERED:
             return TaskHandlerResult.completed()
-        if delivery_status == "sending":
+        if delivery_status == DELIVERY_UNKNOWN:
+            checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            update_task_status(
+                workspace.task_dir,
+                delivery_status="unknown",
+                source="writing_task_delivery",
+            )
             await self._notify_failure(
                 task.user_id,
                 "delivery_status_uncertain",
                 task.task_id,
             )
             raise SafeTaskError("delivery_status_uncertain", retryable=False)
-        if delivery_status == "failed":
-            await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-            raise SafeTaskError("delivery_failed", retryable=False)
+        if delivery_status == CONFIRMED_NOT_DELIVERED:
+            await self._notify_failure(task.user_id, "delivery_not_delivered", task.task_id)
+            raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-        checkpoint["delivery_status"] = "sending"
+        attempt_id = begin_delivery_attempt(checkpoint)
         self._write_checkpoint(workspace.task_dir, checkpoint)
         try:
-            delivered = await self._text_sender(
-                workspace.prepared.sender_userid,
-                format_text_reply(result),
+            outcome = normalize_delivery_outcome(
+                await self._text_sender(
+                    workspace.prepared.sender_userid,
+                    format_text_reply(result),
+                )
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            outcome = DeliveryOutcome(
+                status=DELIVERY_UNKNOWN,
+                evidence="sender_exception",
+                safe_error_code="delivery_ack_unknown",
+                attempt_id=attempt_id,
+            )
+            apply_delivery_outcome(checkpoint, outcome)
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            update_task_status(
+                workspace.task_dir,
+                delivery_status="unknown",
+                source="writing_task_delivery",
+            )
             await self._notify_failure(
                 task.user_id,
                 "delivery_status_uncertain",
@@ -234,19 +268,30 @@ class WritingTaskService:
             )
             raise SafeTaskError("delivery_status_uncertain", retryable=False) from exc
 
-        if not delivered:
-            checkpoint["delivery_status"] = "failed"
+        apply_delivery_outcome(checkpoint, outcome)
+        self._write_checkpoint(workspace.task_dir, checkpoint)
+        if outcome.status == DELIVERY_UNKNOWN:
+            update_task_status(
+                workspace.task_dir,
+                delivery_status="unknown",
+                source="writing_task_delivery",
+            )
+            await self._notify_failure(
+                task.user_id,
+                "delivery_status_uncertain",
+                task.task_id,
+            )
+            raise SafeTaskError("delivery_status_uncertain", retryable=False)
+        if outcome.status == CONFIRMED_NOT_DELIVERED:
             self._write_checkpoint(workspace.task_dir, checkpoint)
             update_task_status(
                 workspace.task_dir,
                 delivery_status="failed",
                 source="writing_task_delivery",
             )
-            await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-            raise SafeTaskError("delivery_failed", retryable=False)
+            await self._notify_failure(task.user_id, "delivery_not_delivered", task.task_id)
+            raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-        checkpoint["delivery_status"] = "delivered"
-        self._write_checkpoint(workspace.task_dir, checkpoint)
         update_task_status(
             workspace.task_dir,
             delivery_status="delivered",
@@ -264,27 +309,54 @@ class WritingTaskService:
         for raw_item in delivery_items:
             if not isinstance(raw_item, dict):
                 raise SafeTaskError("invalid_task_payload", retryable=False)
-            status = str(raw_item.get("status", ""))
-            if status == "delivered":
+            status = normalize_checkpoint_status(raw_item.get("status", ""))
+            raw_item["status"] = status
+            if status == CONFIRMED_DELIVERED:
                 continue
-            if status == "sending":
+            if status == DELIVERY_UNKNOWN:
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="writing_task_delivery",
+                )
                 await self._notify_failure(
                     task.user_id,
                     "delivery_status_uncertain",
                     task.task_id,
                 )
                 raise SafeTaskError("delivery_status_uncertain", retryable=False)
-            if status == "failed":
-                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-                raise SafeTaskError("delivery_failed", retryable=False)
+            if status == CONFIRMED_NOT_DELIVERED:
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-            raw_item["status"] = "sending"
+            attempt_id = begin_delivery_attempt(raw_item)
+            checkpoint["delivery_status"] = aggregate_delivery_status(delivery_items)
             self._write_checkpoint(workspace.task_dir, checkpoint)
             try:
-                delivered = await self._deliver_item(workspace, raw_item)
+                outcome = normalize_delivery_outcome(
+                    await self._deliver_item(workspace, raw_item)
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                outcome = DeliveryOutcome(
+                    status=DELIVERY_UNKNOWN,
+                    evidence="sender_exception",
+                    safe_error_code="delivery_ack_unknown",
+                    attempt_id=attempt_id,
+                )
+                apply_delivery_outcome(raw_item, outcome)
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="writing_task_delivery",
+                )
                 await self._notify_failure(
                     task.user_id,
                     "delivery_status_uncertain",
@@ -295,22 +367,34 @@ class WritingTaskService:
                     retryable=False,
                 ) from exc
 
-            if not delivered:
-                raw_item["status"] = "failed"
-                checkpoint["delivery_status"] = "failed"
+            apply_delivery_outcome(raw_item, outcome)
+            checkpoint["delivery_status"] = aggregate_delivery_status(delivery_items)
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            if outcome.status == DELIVERY_UNKNOWN:
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="writing_task_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id,
+                    "delivery_status_uncertain",
+                    task.task_id,
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False)
+            if outcome.status == CONFIRMED_NOT_DELIVERED:
                 self._write_checkpoint(workspace.task_dir, checkpoint)
                 update_task_status(
                     workspace.task_dir,
                     delivery_status="failed",
                     source="writing_task_delivery",
                 )
-                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-                raise SafeTaskError("delivery_failed", retryable=False)
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-            raw_item["status"] = "delivered"
-            self._write_checkpoint(workspace.task_dir, checkpoint)
-
-        checkpoint["delivery_status"] = "delivered"
+        checkpoint["delivery_status"] = CONFIRMED_DELIVERED
         self._write_checkpoint(workspace.task_dir, checkpoint)
         update_task_status(
             workspace.task_dir,
@@ -323,7 +407,7 @@ class WritingTaskService:
         self,
         workspace: WritingTaskWorkspace,
         item: dict[str, object],
-    ) -> bool:
+    ) -> DeliveryOutcome | bool:
         kind = str(item.get("kind", ""))
         if kind == "text":
             return await self._text_sender(
@@ -530,7 +614,7 @@ class WritingTaskService:
     ) -> dict[str, object]:
         delivery_items = self._build_delivery_items(workspace, result)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "processing_status": "completed",
             "finalization_status": "pending",
             "delivery_status": "pending",
@@ -556,6 +640,7 @@ class WritingTaskService:
                     "text": format_text_reply(result),
                     "file": "",
                     "status": "pending",
+                    "item_id": "text-1",
                 }
             ]
         if self._attachment_sender is None:
@@ -564,12 +649,14 @@ class WritingTaskService:
         return [
             {
                 "kind": "text",
+                "item_id": "text-1",
                 "text": message,
                 "file": "",
                 "status": "pending",
             },
             {
                 "kind": "attachment",
+                "item_id": "attachment-1",
                 "text": "",
                 "file": str(output_file.relative_to(workspace.task_dir)),
                 "status": "pending",
@@ -622,7 +709,7 @@ class WritingTaskService:
         path = task_dir / "execution.json"
         if not path.is_file():
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "processing_status": "pending",
                 "finalization_status": "pending",
                 "delivery_status": "pending",
@@ -630,29 +717,29 @@ class WritingTaskService:
                 "result": {},
             }
         payload = _read_json(path, label="写作任务执行状态")
-        if payload.get("schema_version") != 1:
+        if payload.get("schema_version") not in {1, 2}:
             raise ValueError("写作任务执行状态版本不受支持")
         if payload.get("processing_status") != "completed":
             raise ValueError("写作任务处理状态无效")
         if payload.get("finalization_status") not in {"pending", "completed"}:
             raise ValueError("写作任务收尾状态无效")
-        if payload.get("delivery_status") not in {
-            "pending",
-            "sending",
-            "delivered",
-            "failed",
-        }:
+        payload["delivery_status"] = normalize_checkpoint_status(
+            payload.get("delivery_status")
+        )
+        if payload.get("delivery_status") not in CHECKPOINT_DELIVERY_STATUSES:
             raise ValueError("写作任务交付状态无效")
         delivery_items = payload.get("delivery_items", [])
         if not isinstance(delivery_items, list):
             raise ValueError("写作任务交付清单无效")
-        for item in delivery_items:
+        for index, item in enumerate(delivery_items, start=1):
             if not isinstance(item, dict):
                 raise ValueError("写作任务交付项无效")
             kind = item.get("kind")
             if kind not in {"text", "attachment"}:
                 raise ValueError("写作任务交付项类型无效")
-            if item.get("status") not in {"pending", "sending", "delivered", "failed"}:
+            item["status"] = normalize_checkpoint_status(item.get("status"))
+            item.setdefault("item_id", f"item-{index}")
+            if item.get("status") not in CHECKPOINT_DELIVERY_STATUSES:
                 raise ValueError("写作任务交付项状态无效")
             if kind == "text" and not str(item.get("text", "")).strip():
                 raise ValueError("写作任务交付文字为空")
@@ -660,6 +747,7 @@ class WritingTaskService:
                 relative_path = Path(str(item.get("file", "")))
                 if relative_path.is_absolute() or ".." in relative_path.parts:
                     raise ValueError("写作任务交付附件引用无效")
+        payload["schema_version"] = 2
         WritingTaskService._result_from_checkpoint(payload)
         return payload
 

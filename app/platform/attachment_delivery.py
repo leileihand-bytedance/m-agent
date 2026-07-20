@@ -14,6 +14,13 @@ from typing import Any
 import uuid
 
 from app.platform.ops.events import OpsEventLogger
+from app.platform.delivery_state import (
+    CONFIRMED_DELIVERED,
+    CONFIRMED_NOT_DELIVERED,
+    DELIVERY_UNKNOWN,
+    DeliveryOutcome,
+    capture_wecom_delivery,
+)
 from app.platform.task_status import update_task_status
 
 
@@ -88,8 +95,26 @@ class DeliveryResult:
     error_code: str
     user_message: str
     metrics_path: Path | None
+    evidence: str = ""
+    safe_error_code: str = ""
+    occurred_at: str = ""
+    attempt_id: str = ""
+    correlation_id: str = ""
     compressed: bool = False
     images_compressed: bool = False
+
+    def to_outcome(self) -> DeliveryOutcome:
+        values: dict[str, str] = {
+            "status": self.status,
+            "evidence": self.evidence or "attachment_delivery_result",
+            "safe_error_code": self.safe_error_code or self.error_code,
+            "correlation_id": self.correlation_id,
+        }
+        if self.occurred_at:
+            values["occurred_at"] = self.occurred_at
+        if self.attempt_id:
+            values["attempt_id"] = self.attempt_id
+        return DeliveryOutcome(**values)
 
 
 class AttachmentDelivery:
@@ -144,6 +169,7 @@ class AttachmentDelivery:
         attempts = 0
         last_exc: BaseException | None = None
         last_error_code = ""
+        last_outcome: DeliveryOutcome | None = None
         size_bytes = int(validation["size_bytes"])
         estimated_chunks = self._estimate_chunks(size_bytes)
         resolved_file = Path(str(validation["resolved_file"]))
@@ -171,7 +197,7 @@ class AttachmentDelivery:
             for attempt in range(1, self._config.max_attempts + 1):
                 attempts = attempt
                 try:
-                    await self._upload_and_reply(
+                    outcome = await self._upload_and_reply(
                         ws_client=ws_client,
                         frame=request.frame,
                         chat_id=request.chat_id,
@@ -179,9 +205,17 @@ class AttachmentDelivery:
                         filename=resolved_file.name,
                         upload_timeout=self._upload_timeout_for(size_bytes),
                     )
+                    if outcome.status != CONFIRMED_DELIVERED:
+                        last_outcome = outcome
+                        last_error_code = (
+                            "reply_timeout"
+                            if outcome.safe_error_code == "delivery_ack_timeout"
+                            else outcome.safe_error_code or "reply_failed"
+                        )
+                        break
                     result = DeliveryResult(
                         delivered=True,
-                        status="delivered",
+                        status=outcome.status,
                         attempts=attempts,
                         size_bytes=size_bytes,
                         estimated_chunks=estimated_chunks,
@@ -189,6 +223,11 @@ class AttachmentDelivery:
                         error_code="",
                         user_message="",
                         metrics_path=None,
+                        evidence=outcome.evidence,
+                        safe_error_code=outcome.safe_error_code,
+                        occurred_at=outcome.occurred_at,
+                        attempt_id=outcome.attempt_id,
+                        correlation_id=outcome.correlation_id,
                     )
                     return self._finalize_result(
                         result=result,
@@ -210,15 +249,27 @@ class AttachmentDelivery:
             attempts=attempts,
             error_code=last_error_code or "upload_failed",
             error=last_exc,
+            delivery_status=(
+                last_outcome.status
+                if last_outcome is not None
+                else CONFIRMED_NOT_DELIVERED
+            ),
         )
+        is_unknown = last_outcome is not None and last_outcome.status == DELIVERY_UNKNOWN
         user_message = self._manual_retrieval_message(
-            prefix="文件上传失败，",
+            prefix=(
+                "文件发送状态暂时无法确认，"
+                if is_unknown
+                else "文件上传失败，"
+            ),
             alert_recorded=alert_recorded,
             job_id=request.job_id,
         )
         result = DeliveryResult(
             delivered=False,
-            status="failed",
+            status=(
+                last_outcome.status if last_outcome is not None else CONFIRMED_NOT_DELIVERED
+            ),
             attempts=attempts,
             size_bytes=size_bytes,
             estimated_chunks=estimated_chunks,
@@ -226,6 +277,19 @@ class AttachmentDelivery:
             error_code=last_error_code or "upload_failed",
             user_message=user_message,
             metrics_path=None,
+            evidence=(
+                last_outcome.evidence if last_outcome is not None else "upload_failed"
+            ),
+            safe_error_code=(
+                last_outcome.safe_error_code
+                if last_outcome is not None
+                else last_error_code or "upload_failed"
+            ),
+            occurred_at=(last_outcome.occurred_at if last_outcome is not None else ""),
+            attempt_id=(last_outcome.attempt_id if last_outcome is not None else ""),
+            correlation_id=(
+                last_outcome.correlation_id if last_outcome is not None else ""
+            ),
         )
         finalized = self._finalize_result(
             result=result,
@@ -244,7 +308,7 @@ class AttachmentDelivery:
         file_bytes: bytes,
         filename: str,
         upload_timeout: float,
-    ) -> None:
+    ) -> DeliveryOutcome:
         try:
             upload_result = await asyncio.wait_for(
                 ws_client.upload_media(file_bytes, type="file", filename=filename),
@@ -260,19 +324,18 @@ class AttachmentDelivery:
             exc = ValueError("upload response missing media_id")
             raise _AttemptFailure(error_code="missing_media_id", cause=exc) from exc
 
-        try:
+        async def send_message() -> object:
             if chat_id:
                 sender = getattr(ws_client, "send_media_message", None)
                 if not callable(sender):
-                    raise AttributeError("active media sender unavailable")
-                send_call = sender(chat_id, "file", media_id)
-            else:
-                send_call = ws_client.reply_media(frame, "file", media_id)
-            await asyncio.wait_for(send_call, timeout=self._config.reply_timeout_seconds)
-        except asyncio.TimeoutError as exc:
-            raise _AttemptFailure(error_code="reply_timeout", cause=exc) from exc
-        except Exception as exc:
-            raise _AttemptFailure(error_code="reply_failed", cause=exc) from exc
+                    raise RuntimeError("WebSocket not connected, unable to send data")
+                return await sender(chat_id, "file", media_id)
+            return await ws_client.reply_media(frame, "file", media_id)
+
+        return await capture_wecom_delivery(
+            send_message,
+            timeout_seconds=self._config.reply_timeout_seconds,
+        )
 
     def _rejected_result(
         self,
@@ -284,7 +347,7 @@ class AttachmentDelivery:
     ) -> DeliveryResult:
         return DeliveryResult(
             delivered=False,
-            status="rejected",
+            status=CONFIRMED_NOT_DELIVERED,
             attempts=0,
             size_bytes=size_bytes,
             estimated_chunks=self._estimate_chunks(size_bytes),
@@ -292,6 +355,8 @@ class AttachmentDelivery:
             error_code=error_code,
             user_message=user_message,
             metrics_path=None,
+            evidence="local_validation_rejected",
+            safe_error_code=error_code,
         )
 
     def _validate_request(self, *, file_path: Path, allowed_root: Path) -> dict[str, object]:
@@ -549,7 +614,13 @@ class AttachmentDelivery:
             if request.manage_task_status:
                 self._update_task_status(
                     task_dir=task_dir,
-                    delivery_status="delivered" if result.delivered else "failed",
+                    delivery_status=(
+                        "delivered"
+                        if result.delivered
+                        else "unknown"
+                        if result.status == DELIVERY_UNKNOWN
+                        else "failed"
+                    ),
                     source=request.source,
                 )
         return DeliveryResult(
@@ -562,6 +633,11 @@ class AttachmentDelivery:
             error_code=result.error_code,
             user_message=result.user_message,
             metrics_path=metrics_path,
+            evidence=result.evidence,
+            safe_error_code=result.safe_error_code,
+            occurred_at=result.occurred_at,
+            attempt_id=result.attempt_id,
+            correlation_id=result.correlation_id,
             compressed=result.compressed,
             images_compressed=result.images_compressed,
         )
@@ -618,6 +694,7 @@ class AttachmentDelivery:
         attempts: int,
         error_code: str,
         error: BaseException | None,
+        delivery_status: str = CONFIRMED_NOT_DELIVERED,
     ) -> bool:
         if self._ops_event_logger is None:
             return False
@@ -629,15 +706,17 @@ class AttachmentDelivery:
             f"大小: {size_bytes} 字节\n"
             f"估算分片: {estimated_chunks}\n"
             f"尝试次数: {attempts}\n"
+            f"交付状态: {delivery_status}\n"
             f"异常类型: {error_type}\n"
             f"安全错误码: {safe_error_code}\n"
             f"异常摘要: {safe_summary}"
         )
         try:
+            is_unknown = delivery_status == DELIVERY_UNKNOWN
             self._ops_event_logger.record(
                 source=request.source,
-                severity="error",
-                subject="附件交付失败",
+                severity="warning" if is_unknown else "error",
+                subject="附件交付状态未知" if is_unknown else "附件交付失败",
                 detail=detail,
                 sender_userid=request.sender_userid,
                 sender_name=request.sender_name,

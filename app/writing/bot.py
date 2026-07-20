@@ -15,6 +15,7 @@ from app.platform.attachment_delivery import (
     DeliveryResult,
 )
 from app.platform.config import PlatformConfig, ROOT
+from app.platform.delivery_state import DeliveryOutcome, capture_wecom_delivery
 from app.platform.gateway.wecom import extract_message_id, format_text_reply
 from app.platform.intent import ConversationIntent
 from app.platform.models import PlatformResult, UploadedFile
@@ -711,15 +712,14 @@ async def _send_active_writing_text(
     text: str,
     *,
     timeout_seconds: float = 30.0,
-) -> bool:
+) -> DeliveryOutcome:
     sender = getattr(ws_client, "send_message", None)
     if not callable(sender):
         raise RuntimeError("企业微信 SDK 不支持主动文本消息")
-    await asyncio.wait_for(
-        sender(recipient, {"msgtype": "text", "text": {"content": text}}),
-        timeout=timeout_seconds,
+    return await capture_wecom_delivery(
+        lambda: sender(recipient, {"msgtype": "text", "text": {"content": text}}),
+        timeout_seconds=timeout_seconds,
     )
-    return True
 
 
 async def _run_writing_task_worker_supervised(
@@ -1000,7 +1000,7 @@ async def run_bot(config) -> None:
         recipient: str,
         path: Path,
         task_dir: Path,
-    ) -> bool:
+    ) -> DeliveryOutcome:
         resolved_path = path.resolve(strict=True)
         output_root = (task_dir / "output").resolve(strict=True)
         if not resolved_path.is_file() or not resolved_path.is_relative_to(output_root):
@@ -1021,9 +1021,7 @@ async def run_bot(config) -> None:
                 manage_task_status=False,
             ),
         )
-        if not result.delivered and result.error_code in {"reply_timeout", "reply_failed"}:
-            raise RuntimeError("附件发送状态无法确认")
-        return result.delivered
+        return result.to_outcome()
 
     async def notify_queued_writing_failure(
         recipient: str,
@@ -1035,6 +1033,7 @@ async def run_bot(config) -> None:
                 "初稿已经生成，但发送状态暂时无法确认。为避免重复发送，我已暂停自动重发并提醒管理员核对。"
             ),
             "delivery_failed": "初稿已经生成，但发送失败，已经提醒管理员处理。",
+            "delivery_not_delivered": "初稿已经生成，但企业微信明确未接收，已经提醒管理员处理。",
             "writing_processing_failed": "写作处理失败，已经提醒管理员排查，请稍后重试。",
             "writing_finalization_failed": "初稿处理状态异常，已经提醒管理员排查。",
             "invalid_task_payload": "写作任务状态异常，已经提醒管理员排查。",

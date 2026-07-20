@@ -78,7 +78,9 @@ Pydantic AI Agent
 - `app/platform/gateway/wecom.py`：企业微信文本消息处理核心，负责提取文本、调用平台 runner、格式化回复。
 - `app/platform/intake.py`：写作和审核共用的任务暂存内核，统一原子状态、文件安全暂存、用户隔离、重启恢复、TTL 清理和数量/总大小校验，不包含具体写作或审核判断。
 - `app/platform/task_execution.py`：SQLite 持久化后台任务内核，提供消息幂等、分级并发、worker 租约与 fencing token、跨进程执行锁、周期恢复、取消、待补充后恢复、状态迁移和安全失败分类；进程存活且同步线程未收敛时不会被第二个 worker 重领，进程退出后由操作系统释放锁。
-- `app/platform/attachment_delivery.py`：公共附件交付，统一任务目录校验、串行上传、动态超时、完整重试、主动/被动媒体发送、交付状态、运维事件和“处理编号”兜底。
+- `app/platform/delivery_state.py`：企业微信文本和附件共用的交付状态合同，把 SDK 回执统一收敛为“已确认送达、明确未送达、送达未知”，保存判断依据、时间、本地尝试编号和脱敏回执关联标识。
+- `app/platform/delivery_recovery.py`：只供本机运维使用的交付恢复入口；按原检查点重发、确认已送达或关闭送达未知任务，不重新调用模型。
+- `app/platform/attachment_delivery.py`：公共附件交付，统一任务目录校验、串行上传、动态超时、上传阶段重试、主动/被动媒体发送、交付状态、运维事件和“处理编号”兜底。进入最终媒体发送后，状态未知不会自动重发。
 - `app/platform/documents/enrichment.py`：扫描 PDF 按需 OCR 以及 PDF/PPTX 逐页渲染；外部文档工具使用绝对命令、隔离环境和资源限制，失败时保留文本解析结果并记录结构化告警。
 - `app/platform/cli.py`：新底座 CLI，可做配置检查和本地消息测试。
 - `app/platform/runtime_environment.py`：生产/测试运行模式、Bot 凭据选择、Git 分支和数据目录边界的公共启动守卫。
@@ -108,7 +110,7 @@ Pydantic AI Agent
 当前交付边界必须分成两类理解：
 
 - **已经接入现有入口**：公共任务暂存、跨消息材料组装、DOCX/PDF/PPTX 安全读取、扫描 PDF 按需 OCR、结果附件重试和运维告警。这些能力已经直接改善当前写作或审核流程。
-- **已经进入切流验收**：审核八类能力使用审核专用 SQLite；直报、两类简报和深银协动态使用写作专用 SQLite。十二类任务都支持快速受理、消息幂等、后台执行、检查点恢复和主动交付；发送状态无法确认时停止自动重发并告警，worker 意外退出会告警并自动重启。
+- **已经进入切流验收**：审核八类能力使用审核专用 SQLite；直报、两类简报和深银协动态使用写作专用 SQLite。十二类任务都支持快速受理、消息幂等、后台执行、检查点恢复和主动交付；发送状态按统一三态保存，无法确认时停止自动重发并告警，worker 意外退出会告警并自动重启。
 - **底座已完成、其他业务待切流**：持久化任务排队、重复消息幂等、分级并发、取消和进程重启恢复。`research_synthesis` 和 `internal_weekly` 尚未获得这套生产行为，不能根据公共内核存在就标为已接入。
 
 当前入口接入边界：
@@ -326,7 +328,9 @@ app/platform/storage.py
 ../M-Agent-Files/tasks/writing/YYYY/MM/<job_id>/
 ```
 
-运行数据根目录位于 Git 仓库之外；每个新任务固定包含 `input/`、`work/`、`output/`、`meta.json` 和 `status.json`。`status.json` 将处理状态分为 `processing`、`completed`、`needs_input`、`failed`、`incomplete`，并单独保存交付状态。生成结果不等于企业微信已成功回传，因此当前无法确认的历史和新任务交付状态统一记为 `unknown`，管理台不得把它展示为“已送达”。
+运行数据根目录位于 Git 仓库之外；每个新任务固定包含 `input/`、`work/`、`output/`、`meta.json` 和 `status.json`。`status.json` 将处理状态分为 `processing`、`completed`、`needs_input`、`failed`、`incomplete`，并用 `delivered`、`failed`、`unknown` 保存面向管理台的粗粒度交付状态。持久任务的 `execution.json` 保存更精确的 `confirmed_delivered`、`confirmed_not_delivered` 和 `delivery_unknown` 及逐项判断依据。生成结果不等于企业微信已成功回传，管理台不得把未知状态展示为“已送达”。
+
+企业微信 SDK 1.0.7 的主动发送会等待请求回执，但没有可用的发送状态查询接口。底座只能把 `errcode=0` 作为已确认送达，把非零回执或本地明确拒绝作为明确未送达；回执超时和无法解释的发送异常必须保留为送达未知。明确未送达可由本机管理员按原检查点恢复；送达未知在人工确认前禁止重发。恢复只改变交付检查点和队列状态，不重新解析材料或调用模型；故障提示自身的发送结果也不能覆盖原结果的交付状态。
 
 历史任务状态通过 `scripts/backfill_task_status.py` 补齐。该脚本只在任务目录增加状态索引，不改原始材料和结果正文；正式执行前必须先预演，再加 `--apply`。管理台只读取 `status.json`、元信息文件是否存在和审核报告是否存在，不通过读取用户正文推断完成状态。
 

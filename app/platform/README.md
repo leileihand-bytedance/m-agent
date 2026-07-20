@@ -38,6 +38,8 @@ app/platform/demo.py      # 本地 demo
 app/platform/gateway/     # 企业微信消息核心适配
 app/platform/intake.py    # 公共材料引用、任务动作、提交协议和安全暂存
 app/platform/task_execution.py # 持久任务、幂等、并发、租约、恢复和取消
+app/platform/delivery_state.py # 企业微信文本和附件统一交付状态
+app/platform/delivery_recovery.py # 本机受控交付恢复，不重新运行模型
 app/platform/attachment_delivery.py # 企业微信结果附件交付和失败兜底
 app/platform/documents/   # 统一安全解析、扫描 PDF OCR 和页面渲染
 ```
@@ -45,5 +47,5 @@ app/platform/documents/   # 统一安全解析、扫描 PDF OCR 和页面渲染
 ## 测试
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_delivery_state.py tests/test_platform_delivery_recovery.py tests/test_platform_attachment_delivery.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py -v
 ```

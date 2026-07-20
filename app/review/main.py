@@ -64,6 +64,10 @@ from app.platform.attachment_delivery import (  # noqa: E402
 from app.platform.ops.events import OpsEventLogger  # noqa: E402
 from app.platform.ops.heartbeat import write_heartbeat  # noqa: E402
 from app.platform.data_paths import DataPaths, configured_path  # noqa: E402
+from app.platform.delivery_state import (  # noqa: E402
+    DeliveryOutcome,
+    capture_wecom_delivery,
+)
 from app.platform.runtime_environment import (  # noqa: E402
     RuntimeEnvironment,
     RuntimeEnvironmentError,
@@ -1555,7 +1559,8 @@ async def _deliver_review_attachment(
     notify_user_on_failure: bool = True,
     raise_on_uncertain: bool = False,
     manage_task_status: bool = True,
-) -> bool:
+    return_outcome: bool = False,
+) -> bool | DeliveryOutcome:
     task_dir = path.parent.parent if path.parent.name == "output" else path.parent
     result = await attachment_delivery.deliver(
         ws_client=ws_client,
@@ -1573,6 +1578,8 @@ async def _deliver_review_attachment(
             manage_task_status=manage_task_status,
         ),
     )
+    if return_outcome:
+        return result.to_outcome()
     if result.delivered:
         return True
     if raise_on_uncertain and result.error_code in {"reply_timeout", "reply_failed"}:
@@ -1623,18 +1630,17 @@ async def _send_queued_review_text(
     text: str,
     *,
     timeout_seconds: float = 30.0,
-) -> bool:
+) -> DeliveryOutcome:
     sender = getattr(ws_client, "send_message", None)
     if not callable(sender):
         raise RuntimeError("企业微信 SDK 不支持主动文本消息")
-    await asyncio.wait_for(
-        sender(
+    return await capture_wecom_delivery(
+        lambda: sender(
             recipient,
             {"msgtype": "markdown", "markdown": {"content": text}},
         ),
-        timeout=timeout_seconds,
+        timeout_seconds=timeout_seconds,
     )
-    return True
 
 
 async def _run_review_task_worker_supervised(
@@ -2053,7 +2059,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
         recipient: str,
         path: Path,
         task_dir: Path,
-    ) -> bool:
+    ) -> DeliveryOutcome:
         if path.parent.parent != task_dir:
             raise ValueError("审核结果附件不属于当前任务目录")
         return await _deliver_review_attachment(
@@ -2069,6 +2075,7 @@ async def run_review_bot(config: ReviewConfig) -> None:
             notify_user_on_failure=False,
             raise_on_uncertain=True,
             manage_task_status=False,
+            return_outcome=True,
         )
 
     async def notify_queued_review_failure(
@@ -2083,6 +2090,10 @@ async def run_review_bot(config: ReviewConfig) -> None:
             ),
             "delivery_failed": (
                 "审核已经完成，但结果发送失败，已经提醒管理员处理。"
+                f"处理编号：{task_id}"
+            ),
+            "delivery_not_delivered": (
+                "审核已经完成，但企业微信明确未接收结果，已经提醒管理员处理。"
                 f"处理编号：{task_id}"
             ),
             "review_processing_failed": (

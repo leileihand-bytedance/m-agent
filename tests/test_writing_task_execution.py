@@ -8,6 +8,7 @@ import pytest
 
 from app.platform.app import PlatformApp, PreparedPlatformJob
 from app.platform.conversation import ConversationStore
+from app.platform.delivery_state import DeliveryOutcome
 from app.platform.identity import AccessPolicy
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
 from app.platform.storage import JobStore
@@ -201,8 +202,8 @@ def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path
         )
     )
     assert [item["status"] for item in checkpoint["delivery_items"]] == [
-        "delivered",
-        "delivered",
+        "confirmed_delivered",
+        "confirmed_delivered",
     ]
 
 
@@ -480,6 +481,105 @@ def test_restart_does_not_resend_when_writing_delivery_is_uncertain(tmp_path: Pa
     assert failures == [("user-1", "delivery_status_uncertain", submission.task.task_id)]
 
 
+def test_writing_sender_outcome_persists_unknown_delivery_evidence(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    failures: list[str] = []
+
+    async def processor(_workspace):
+        return _result()
+
+    async def sender(_recipient: str, _text: str):
+        return DeliveryOutcome(
+            status="delivery_unknown",
+            evidence="sdk_ack_timeout",
+            safe_error_code="delivery_ack_timeout",
+        )
+
+    async def failure_notifier(_recipient: str, code: str, _task_id: str) -> None:
+        failures.append(code)
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=sender,
+        failure_notifier=failure_notifier,
+    )
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-outcome-unknown",
+        skill_id="writer1",
+        text="写简报：https://example.com",
+    )
+
+    with pytest.raises(SafeTaskError) as error:
+        asyncio.run(service.handle(submission.task))
+
+    assert error.value.safe_error_code == "delivery_status_uncertain"
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["schema_version"] == 2
+    assert checkpoint["delivery_status"] == "delivery_unknown"
+    item = checkpoint["delivery_items"][0]
+    assert item["status"] == "delivery_unknown"
+    assert item["evidence"] == "sdk_ack_timeout"
+    assert item["safe_error_code"] == "delivery_ack_timeout"
+    assert item["attempt_id"].startswith("delivery-")
+    status = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "status.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert status["delivery_status"] == "unknown"
+    assert failures == ["delivery_status_uncertain"]
+
+
+def test_writing_confirmed_rejection_is_recoverable_not_delivered(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+
+    async def processor(_workspace):
+        return _result()
+
+    async def sender(_recipient: str, _text: str):
+        return DeliveryOutcome(
+            status="confirmed_not_delivered",
+            evidence="sdk_ack_rejected",
+            safe_error_code="wecom_rejected",
+        )
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=sender,
+    )
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-outcome-rejected",
+        skill_id="writer1",
+        text="写简报：https://example.com",
+    )
+
+    with pytest.raises(SafeTaskError) as error:
+        asyncio.run(service.handle(submission.task))
+
+    assert error.value.safe_error_code == "delivery_not_delivered"
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert checkpoint["delivery_status"] == "confirmed_not_delivered"
+    assert checkpoint["delivery_items"][0]["evidence"] == "sdk_ack_rejected"
+
+
 def test_clarification_result_is_checkpointed_and_finalized_before_delivery(tmp_path: Path):
     repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
     order: list[str] = []
@@ -526,7 +626,7 @@ def test_clarification_result_is_checkpointed_and_finalized_before_delivery(tmp_
     )
     assert checkpoint["processing_status"] == "completed"
     assert checkpoint["finalization_status"] == "completed"
-    assert checkpoint["delivery_status"] == "delivered"
+    assert checkpoint["delivery_status"] == "confirmed_delivered"
     assert checkpoint["result"]["needs_clarification"] is True
 
 

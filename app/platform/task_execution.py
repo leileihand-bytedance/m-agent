@@ -380,6 +380,49 @@ class TaskRepository:
             raise KeyError(f"未知任务：{task_id}")
         return self._row_to_record(row)
 
+    def recover_failed_delivery(
+        self,
+        task_id: str,
+        *,
+        to_status: Literal["queued", "completed"],
+    ) -> TaskRecord:
+        """由本机受控恢复入口收敛交付失败，不开放给业务消息。"""
+
+        if to_status not in {"queued", "completed"}:
+            raise ValueError("交付恢复目标状态无效")
+        allowed_codes = {
+            "delivery_failed",
+            "delivery_not_delivered",
+            "delivery_status_uncertain",
+        }
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._fetch_row(conn, task_id)
+            if row["status"] != "failed" or row["safe_error_code"] not in allowed_codes:
+                raise InvalidTaskTransitionError("当前任务不是可人工恢复的交付失败")
+            timestamp = self._timestamp()
+            attempts = 0 if to_status == "queued" else int(row["attempts"])
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?,
+                    attempts = ?,
+                    worker_id = NULL,
+                    lease_token = NULL,
+                    lease_expires_at = NULL,
+                    heartbeat_at = NULL,
+                    updated_at = ?,
+                    safe_error_code = NULL,
+                    state_version = state_version + 1
+                WHERE task_id = ?
+                """,
+                (to_status, attempts, timestamp, task_id),
+            )
+            record = self._row_to_record(self._fetch_row(conn, task_id))
+            conn.commit()
+        self._notify_transition(record)
+        return record
+
     def count_tasks(self) -> int:
         with closing(self._connect()) as conn:
             row = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()

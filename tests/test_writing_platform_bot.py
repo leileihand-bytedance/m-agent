@@ -36,6 +36,7 @@ class FakeWsClient:
 
     async def send_message(self, sender, payload):
         self.sent_messages.append((sender, payload))
+        return {"headers": {"req_id": "send-001"}, "errcode": 0, "errmsg": "ok"}
 
     async def download_file(self, url, aes_key):
         return {"buffer": b"fake docx", "filename": "material.docx"}
@@ -46,6 +47,7 @@ class FakeWsClient:
 
     async def reply_media(self, frame, media_type, media_id):
         self.media_replies.append((frame, media_type, media_id))
+        return {"headers": {"req_id": "reply-001"}, "errcode": 0, "errmsg": "ok"}
 
 
 class FailingFinalReplyWsClient(FakeWsClient):

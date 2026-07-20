@@ -958,6 +958,11 @@ def test_review_attachment_delivery_uses_public_status_and_metrics(tmp_path: Pat
 
         async def reply_media(self, frame, media_type, media_id):
             self.replied.append((frame, media_type, media_id))
+            return {
+                "headers": {"req_id": "reply-001"},
+                "errcode": 0,
+                "errmsg": "ok",
+            }
 
         async def reply_stream(self, frame, req_id, text, finish):
             raise AssertionError("成功交付不应发送失败提示")
@@ -1053,17 +1058,18 @@ def test_queued_review_text_timeout_is_not_retried():
 
     ws_client = FakeWsClient()
 
-    with pytest.raises(asyncio.TimeoutError):
-        asyncio.run(
-            _send_queued_review_text(
-                ws_client,
-                "user-1",
-                "审核完成",
-                timeout_seconds=0.01,
-            )
+    outcome = asyncio.run(
+        _send_queued_review_text(
+            ws_client,
+            "user-1",
+            "审核完成",
+            timeout_seconds=0.01,
         )
+    )
 
     assert ws_client.calls == 1
+    assert outcome.status == "delivery_unknown"
+    assert outcome.safe_error_code == "delivery_ack_timeout"
 
 
 def test_queued_review_text_uses_sdk_supported_markdown_message():
@@ -1075,12 +1081,13 @@ def test_queued_review_text_uses_sdk_supported_markdown_message():
 
         async def send_message(self, chat_id, body):
             self.messages.append((chat_id, body))
+            return {"headers": {"req_id": "send-001"}, "errcode": 0, "errmsg": "ok"}
 
     ws_client = FakeWsClient()
 
     sent = asyncio.run(_send_queued_review_text(ws_client, "user-1", "审核完成"))
 
-    assert sent is True
+    assert sent.status == "confirmed_delivered"
     assert ws_client.messages == [
         (
             "user-1",

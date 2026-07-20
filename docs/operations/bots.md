@@ -95,6 +95,37 @@ M-Agent-Files/runtime/task-execution/   # 持久任务队列和恢复状态
 4. 检查持久队列状态和交付检查点，避免人工操作造成重复发送。
 5. 修复后使用脱敏样本建立自动化回归，再恢复服务。
 
+## 企业微信结果交付恢复
+
+持久任务的精确交付状态保存在任务 `execution.json`：`confirmed_delivered` 表示已收到成功回执，`confirmed_not_delivered` 表示企业微信明确拒绝或本地明确未发送，`delivery_unknown` 表示发送已发起但没有取得可判断回执。管理台 `status.json` 仍只展示 `delivered`、`failed`、`unknown`。SDK 1.0.7 没有发送状态查询接口，未知状态必须人工核实，不能直接重发。
+
+先用运维告警中的处理编号查看脱敏依据；该命令不显示结果正文、附件路径和原始企业微信请求标识：
+
+```bash
+uv run --locked python -m app.platform.delivery_recovery <处理编号> inspect
+```
+
+确认“明确未送达”后，按原检查点重新排队，不重新调用模型：
+
+```bash
+uv run --locked python -m app.platform.delivery_recovery <处理编号> retry --operator <操作人>
+```
+
+如果状态为“送达未知”，必须先由管理员从用户侧或企业微信侧人工核实。确认实际未送达后才允许：
+
+```bash
+uv run --locked python -m app.platform.delivery_recovery <处理编号> retry --confirm-unknown-not-delivered --operator <操作人>
+```
+
+确认实际已经送达，或决定保留未知状态并关闭任务时分别使用：
+
+```bash
+uv run --locked python -m app.platform.delivery_recovery <处理编号> confirm-delivered --operator <操作人>
+uv run --locked python -m app.platform.delivery_recovery <处理编号> close --operator <操作人>
+```
+
+所有变更写入交付历史和脱敏运维事件，操作人只保存哈希标识。生产恢复只能从 `main` 和生产数据目录执行；任务分支的命令会被运行环境守卫限制为专用测试数据，不能借此操作生产任务。已确认送达的结果禁止恢复重发。
+
 ## 配置来源
 
 - 公共示例：`app/config.example.env`

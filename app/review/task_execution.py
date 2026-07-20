@@ -12,6 +12,18 @@ import shutil
 from typing import Awaitable, Callable, Literal, cast
 from uuid import uuid4
 
+from app.platform.delivery_state import (
+    CHECKPOINT_DELIVERY_STATUSES,
+    CONFIRMED_DELIVERED,
+    CONFIRMED_NOT_DELIVERED,
+    DELIVERY_UNKNOWN,
+    DeliveryOutcome,
+    aggregate_delivery_status,
+    apply_delivery_outcome,
+    begin_delivery_attempt,
+    normalize_checkpoint_status,
+    normalize_delivery_outcome,
+)
 from app.platform.models import UploadedFile
 from app.platform.task_execution import (
     SafeTaskError,
@@ -148,8 +160,8 @@ MultiFileReviewProcessor = Callable[
     [MultiFileReviewWorkspace],
     Awaitable[PreparedMultiFileReviewDelivery],
 ]
-TextSender = Callable[[str, str], Awaitable[bool]]
-AttachmentSender = Callable[[str, Path, Path], Awaitable[bool]]
+TextSender = Callable[[str, str], Awaitable[DeliveryOutcome | bool]]
+AttachmentSender = Callable[[str, Path, Path], Awaitable[DeliveryOutcome | bool]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
 
 
@@ -376,46 +388,88 @@ class GeneralReviewTaskService:
                     retryable=retryable,
                 ) from exc
 
-        delivery_status = str(checkpoint["delivery_status"])
-        if delivery_status == "delivered":
-            return TaskHandlerResult.completed()
-        if delivery_status == "sending":
-            await self._notify_failure(
-                task.user_id,
-                "delivery_status_uncertain",
-                task.task_id,
-            )
-            raise SafeTaskError("delivery_status_uncertain", retryable=False)
-        if delivery_status == "failed":
-            await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-            raise SafeTaskError("delivery_failed", retryable=False)
+        delivery_items = checkpoint.get("delivery_items")
+        if not isinstance(delivery_items, list) or not delivery_items:
+            raise SafeTaskError("invalid_task_checkpoint", retryable=False)
+        for raw_item in delivery_items:
+            if not isinstance(raw_item, dict):
+                raise SafeTaskError("invalid_task_checkpoint", retryable=False)
+            status = normalize_checkpoint_status(raw_item.get("status"))
+            raw_item["status"] = status
+            if status == CONFIRMED_DELIVERED:
+                continue
+            if status == DELIVERY_UNKNOWN:
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_task_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id, "delivery_status_uncertain", task.task_id
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False)
+            if status == CONFIRMED_NOT_DELIVERED:
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-        checkpoint["delivery_status"] = "sending"
-        self._write_checkpoint(workspace.task_dir, checkpoint)
-        try:
-            delivered = await self._deliver(workspace, checkpoint)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            await self._notify_failure(
-                task.user_id,
-                "delivery_status_uncertain",
-                task.task_id,
-            )
-            raise SafeTaskError("delivery_status_uncertain", retryable=False) from exc
-
-        if not delivered:
-            checkpoint["delivery_status"] = "failed"
+            attempt_id = begin_delivery_attempt(raw_item)
+            checkpoint["delivery_status"] = aggregate_delivery_status(delivery_items)
             self._write_checkpoint(workspace.task_dir, checkpoint)
-            update_task_status(
-                workspace.task_dir,
-                delivery_status="failed",
-                source="review_task_delivery",
-            )
-            await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-            raise SafeTaskError("delivery_failed", retryable=False)
+            try:
+                outcome = normalize_delivery_outcome(
+                    await self._deliver_item(workspace, raw_item)
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                outcome = DeliveryOutcome(
+                    status=DELIVERY_UNKNOWN,
+                    evidence="sender_exception",
+                    safe_error_code="delivery_ack_unknown",
+                    attempt_id=attempt_id,
+                )
+                apply_delivery_outcome(raw_item, outcome)
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_task_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id, "delivery_status_uncertain", task.task_id
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False) from exc
 
-        checkpoint["delivery_status"] = "delivered"
+            apply_delivery_outcome(raw_item, outcome)
+            checkpoint["delivery_status"] = aggregate_delivery_status(delivery_items)
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            if outcome.status == DELIVERY_UNKNOWN:
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_task_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id, "delivery_status_uncertain", task.task_id
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False)
+            if outcome.status == CONFIRMED_NOT_DELIVERED:
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="failed",
+                    source="review_task_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
+
+        checkpoint["delivery_status"] = CONFIRMED_DELIVERED
         self._write_checkpoint(workspace.task_dir, checkpoint)
         update_task_status(
             workspace.task_dir,
@@ -424,25 +478,19 @@ class GeneralReviewTaskService:
         )
         return TaskHandlerResult.completed()
 
-    async def _deliver(
+    async def _deliver_item(
         self,
         workspace: GeneralReviewWorkspace,
-        checkpoint: dict[str, object],
-    ) -> bool:
-        if checkpoint["result_kind"] == "text":
+        item: dict[str, object],
+    ) -> DeliveryOutcome | bool:
+        if item.get("kind") == "text":
             return await self._text_sender(
                 workspace.sender_userid,
-                str(checkpoint["result_text"]),
+                str(item.get("text", "")),
             )
-        if checkpoint["result_kind"] == "text_parts":
-            parts = checkpoint["result_text_parts"]
-            if not isinstance(parts, list):
-                raise ValueError("审核任务多段文字结果无效")
-            for part in parts:
-                if not await self._text_sender(workspace.sender_userid, str(part)):
-                    return False
-            return True
-        relative_path = Path(str(checkpoint["result_file"]))
+        if item.get("kind") != "attachment":
+            raise ValueError("审核任务交付项类型无效")
+        relative_path = Path(str(item.get("file", "")))
         result_path = (workspace.task_dir / relative_path).resolve(strict=True)
         if not result_path.is_relative_to(workspace.task_dir):
             raise ValueError("审核结果文件超出任务目录")
@@ -461,26 +509,45 @@ class GeneralReviewTaskService:
             if not prepared.text.strip():
                 raise ValueError("文字审核结果不能为空")
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "processing_status": "completed",
                 "delivery_status": "pending",
                 "result_kind": "text",
                 "result_text": prepared.text.strip(),
                 "result_text_parts": [],
                 "result_file": "",
+                "delivery_items": [
+                    {
+                        "item_id": "text-1",
+                        "kind": "text",
+                        "text": prepared.text.strip(),
+                        "file": "",
+                        "status": "pending",
+                    }
+                ],
             }
         if prepared.kind == "text_parts":
             parts = tuple(value.strip() for value in prepared.text_parts if value.strip())
             if not parts:
                 raise ValueError("多段文字审核结果不能为空")
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "processing_status": "completed",
                 "delivery_status": "pending",
                 "result_kind": "text_parts",
                 "result_text": "",
                 "result_text_parts": list(parts),
                 "result_file": "",
+                "delivery_items": [
+                    {
+                        "item_id": f"text-{index}",
+                        "kind": "text",
+                        "text": part,
+                        "file": "",
+                        "status": "pending",
+                    }
+                    for index, part in enumerate(parts, start=1)
+                ],
             }
         if prepared.file_path is None:
             raise ValueError("附件审核结果缺少文件")
@@ -488,13 +555,22 @@ class GeneralReviewTaskService:
         if not result_path.is_relative_to(workspace.task_dir):
             raise ValueError("审核结果文件超出任务目录")
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "processing_status": "completed",
             "delivery_status": "pending",
             "result_kind": "attachment",
             "result_text": "",
             "result_text_parts": [],
             "result_file": str(result_path.relative_to(workspace.task_dir)),
+            "delivery_items": [
+                {
+                    "item_id": "attachment-1",
+                    "kind": "attachment",
+                    "text": "",
+                    "file": str(result_path.relative_to(workspace.task_dir)),
+                    "status": "pending",
+                }
+            ],
         }
 
     def _workspace_from_task(self, task: TaskRecord) -> GeneralReviewWorkspace:
@@ -580,13 +656,14 @@ class GeneralReviewTaskService:
         path = task_dir / "execution.json"
         if not path.is_file():
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "processing_status": "pending",
                 "delivery_status": "pending",
                 "result_kind": "",
                 "result_text": "",
                 "result_text_parts": [],
                 "result_file": "",
+                "delivery_items": [],
             }
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -594,16 +671,14 @@ class GeneralReviewTaskService:
             raise ValueError("审核任务执行状态损坏") from exc
         if not isinstance(payload, dict):
             raise ValueError("审核任务执行状态格式错误")
-        if payload.get("schema_version") != 1:
+        if payload.get("schema_version") not in {1, 2}:
             raise ValueError("审核任务执行状态版本不受支持")
         if payload.get("processing_status") != "completed":
             raise ValueError("审核任务处理状态无效")
-        if payload.get("delivery_status") not in {
-            "pending",
-            "sending",
-            "delivered",
-            "failed",
-        }:
+        payload["delivery_status"] = normalize_checkpoint_status(
+            payload.get("delivery_status")
+        )
+        if payload.get("delivery_status") not in CHECKPOINT_DELIVERY_STATUSES:
             raise ValueError("审核任务交付状态无效")
         result_kind = payload.get("result_kind")
         if result_kind == "text":
@@ -627,6 +702,59 @@ class GeneralReviewTaskService:
                 raise ValueError("审核任务附件引用无效")
         else:
             raise ValueError("审核任务结果类型无效")
+        items = payload.get("delivery_items")
+        if not isinstance(items, list) or not items:
+            if result_kind == "text":
+                items = [
+                    {
+                        "item_id": "text-1",
+                        "kind": "text",
+                        "text": str(payload.get("result_text", "")),
+                        "file": "",
+                        "status": payload["delivery_status"],
+                    }
+                ]
+            elif result_kind == "text_parts":
+                items = [
+                    {
+                        "item_id": f"text-{index}",
+                        "kind": "text",
+                        "text": str(part),
+                        "file": "",
+                        "status": payload["delivery_status"],
+                    }
+                    for index, part in enumerate(
+                        cast(list[object], payload.get("result_text_parts", [])), start=1
+                    )
+                ]
+            else:
+                items = [
+                    {
+                        "item_id": "attachment-1",
+                        "kind": "attachment",
+                        "text": "",
+                        "file": str(payload.get("result_file", "")),
+                        "status": payload["delivery_status"],
+                    }
+                ]
+            payload["delivery_items"] = items
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError("审核任务交付项无效")
+            item.setdefault("item_id", f"item-{index}")
+            item["status"] = normalize_checkpoint_status(item.get("status"))
+            if item.get("status") not in CHECKPOINT_DELIVERY_STATUSES:
+                raise ValueError("审核任务交付项状态无效")
+            if item.get("kind") == "text" and not str(item.get("text", "")).strip():
+                raise ValueError("审核任务交付文字为空")
+            if item.get("kind") == "attachment":
+                relative = Path(str(item.get("file", "")))
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ValueError("审核任务交付附件引用无效")
+            if item.get("kind") not in {"text", "attachment"}:
+                raise ValueError("审核任务交付项类型无效")
+        payload["delivery_status"] = aggregate_delivery_status(items)
+        payload["schema_version"] = 2
         return payload
 
     @staticmethod
@@ -817,27 +945,54 @@ class MultiFileReviewTaskService:
         for raw_item in items:
             if not isinstance(raw_item, dict):
                 raise SafeTaskError("invalid_task_payload", retryable=False)
-            status = str(raw_item.get("status", ""))
-            if status == "delivered":
+            status = normalize_checkpoint_status(raw_item.get("status", ""))
+            raw_item["status"] = status
+            if status == CONFIRMED_DELIVERED:
                 continue
-            if status == "sending":
+            if status == DELIVERY_UNKNOWN:
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_multi_file_delivery",
+                )
                 await self._notify_failure(
                     task.user_id,
                     "delivery_status_uncertain",
                     task.task_id,
                 )
                 raise SafeTaskError("delivery_status_uncertain", retryable=False)
-            if status == "failed":
-                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-                raise SafeTaskError("delivery_failed", retryable=False)
+            if status == CONFIRMED_NOT_DELIVERED:
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-            raw_item["status"] = "sending"
+            attempt_id = begin_delivery_attempt(raw_item)
+            checkpoint["delivery_status"] = aggregate_delivery_status(items)
             self._write_checkpoint(workspace.task_dir, checkpoint)
             try:
-                delivered = await self._deliver_item(workspace, raw_item)
+                outcome = normalize_delivery_outcome(
+                    await self._deliver_item(workspace, raw_item)
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                outcome = DeliveryOutcome(
+                    status=DELIVERY_UNKNOWN,
+                    evidence="sender_exception",
+                    safe_error_code="delivery_ack_unknown",
+                    attempt_id=attempt_id,
+                )
+                apply_delivery_outcome(raw_item, outcome)
+                checkpoint["delivery_status"] = DELIVERY_UNKNOWN
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_multi_file_delivery",
+                )
                 await self._notify_failure(
                     task.user_id,
                     "delivery_status_uncertain",
@@ -848,22 +1003,32 @@ class MultiFileReviewTaskService:
                     retryable=False,
                 ) from exc
 
-            if not delivered:
-                raw_item["status"] = "failed"
-                checkpoint["delivery_status"] = "failed"
+            apply_delivery_outcome(raw_item, outcome)
+            checkpoint["delivery_status"] = aggregate_delivery_status(items)
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            if outcome.status == DELIVERY_UNKNOWN:
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="unknown",
+                    source="review_multi_file_delivery",
+                )
+                await self._notify_failure(
+                    task.user_id, "delivery_status_uncertain", task.task_id
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False)
+            if outcome.status == CONFIRMED_NOT_DELIVERED:
                 self._write_checkpoint(workspace.task_dir, checkpoint)
                 update_task_status(
                     workspace.task_dir,
                     delivery_status="failed",
                     source="review_multi_file_delivery",
                 )
-                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
-                raise SafeTaskError("delivery_failed", retryable=False)
+                await self._notify_failure(
+                    task.user_id, "delivery_not_delivered", task.task_id
+                )
+                raise SafeTaskError("delivery_not_delivered", retryable=False)
 
-            raw_item["status"] = "delivered"
-            self._write_checkpoint(workspace.task_dir, checkpoint)
-
-        checkpoint["delivery_status"] = "delivered"
+        checkpoint["delivery_status"] = CONFIRMED_DELIVERED
         self._write_checkpoint(workspace.task_dir, checkpoint)
         update_task_status(
             workspace.task_dir,
@@ -876,7 +1041,7 @@ class MultiFileReviewTaskService:
         self,
         workspace: MultiFileReviewWorkspace,
         item: dict[str, object],
-    ) -> bool:
+    ) -> DeliveryOutcome | bool:
         kind = str(item.get("kind", ""))
         if kind == "text":
             return await self._text_sender(
@@ -1051,6 +1216,7 @@ class MultiFileReviewTaskService:
     ) -> dict[str, object]:
         items: list[dict[str, object]] = [
             {
+                "item_id": "text-1",
                 "kind": "text",
                 "text": prepared.summary_text.strip(),
                 "file": "",
@@ -1058,12 +1224,13 @@ class MultiFileReviewTaskService:
             }
         ]
         output_root = (workspace.task_dir / "output").resolve(strict=True)
-        for path in prepared.attachment_paths:
+        for index, path in enumerate(prepared.attachment_paths, start=1):
             resolved = path.resolve(strict=True)
             if not resolved.is_file() or not resolved.is_relative_to(output_root):
                 raise ValueError("联合审核结果附件超出任务输出目录")
             items.append(
                 {
+                    "item_id": f"attachment-{index}",
                     "kind": "attachment",
                     "text": "",
                     "file": str(resolved.relative_to(workspace.task_dir)),
@@ -1071,7 +1238,7 @@ class MultiFileReviewTaskService:
                 }
             )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "processing_status": "completed",
             "delivery_status": "pending",
             "delivery_items": items,
@@ -1082,7 +1249,7 @@ class MultiFileReviewTaskService:
         path = task_dir / "execution.json"
         if not path.is_file():
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "processing_status": "pending",
                 "delivery_status": "pending",
                 "delivery_items": [],
@@ -1091,21 +1258,26 @@ class MultiFileReviewTaskService:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("联合审核执行状态损坏") from exc
-        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        if not isinstance(payload, dict) or payload.get("schema_version") not in {1, 2}:
             raise ValueError("联合审核执行状态版本无效")
         if payload.get("processing_status") != "completed":
             raise ValueError("联合审核处理状态无效")
-        if payload.get("delivery_status") not in {"pending", "delivered", "failed"}:
+        payload["delivery_status"] = normalize_checkpoint_status(
+            payload.get("delivery_status")
+        )
+        if payload.get("delivery_status") not in CHECKPOINT_DELIVERY_STATUSES:
             raise ValueError("联合审核交付状态无效")
         items = payload.get("delivery_items")
         if not isinstance(items, list) or not items:
             raise ValueError("联合审核交付清单为空")
-        for item in items:
+        for index, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 raise ValueError("联合审核交付项无效")
             if item.get("kind") not in {"text", "attachment"}:
                 raise ValueError("联合审核交付项类型无效")
-            if item.get("status") not in {"pending", "sending", "delivered", "failed"}:
+            item.setdefault("item_id", f"item-{index}")
+            item["status"] = normalize_checkpoint_status(item.get("status"))
+            if item.get("status") not in CHECKPOINT_DELIVERY_STATUSES:
                 raise ValueError("联合审核交付项状态无效")
             if item.get("kind") == "text" and not str(item.get("text", "")).strip():
                 raise ValueError("联合审核交付摘要为空")
@@ -1113,6 +1285,8 @@ class MultiFileReviewTaskService:
                 relative = Path(str(item.get("file", "")))
                 if relative.is_absolute() or ".." in relative.parts:
                     raise ValueError("联合审核交付附件引用无效")
+        payload["delivery_status"] = aggregate_delivery_status(items)
+        payload["schema_version"] = 2
         return payload
 
     @staticmethod

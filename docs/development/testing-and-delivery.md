@@ -119,7 +119,7 @@ uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_
 修改持久化后台任务或附件交付时，至少额外运行：
 
 ```bash
-uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_writing_platform_bot.py tests/test_review_bot.py -v
+uv run --locked pytest tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_delivery_state.py tests/test_platform_delivery_recovery.py tests/test_platform_attachment_delivery.py tests/test_writing_platform_bot.py tests/test_review_bot.py -v
 ```
 
 单项审核已接入持久任务后，还要运行：
@@ -163,7 +163,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 
 ### 持久任务生产接入验收
 
-持久化执行器按任务类型分批接入。当前审核八类能力，以及直报、`writer1`、`writer2` 和 `shenyinxie_news` 已分别接入审核、写作专用 SQLite。多文件联合审核与深银协动态必须额外验证多个交付项的检查点：已经确认成功的摘要或附件不能因重启重复发送，处于 `sending` 且无法确认的交付项必须暂停自动重发并告警。`research_synthesis` 和 `internal_weekly` 仍走实时路径，不能因为共用入口就视为已切流。
+持久化执行器按任务类型分批接入。当前审核八类能力，以及直报、`writer1`、`writer2` 和 `shenyinxie_news` 已分别接入审核、写作专用 SQLite。多文件联合审核与深银协动态必须额外验证多个交付项的检查点：已经确认成功的摘要或附件不能因重启重复发送；进程在 `sending` 中断，或发送已发起但没有取得可判断回执时，必须转为 `delivery_unknown`、暂停自动重发并告警。`research_synthesis` 和 `internal_weekly` 仍走实时路径，不能因为共用入口就视为已切流。
 
 每个任务类型接入时都必须完成：
 
@@ -173,6 +173,10 @@ uv run --locked python -m app.rewrite_bot --check-config
 4. 在生成过程中重启对应 Bot，确认任务恢复或安全失败，不会永久停在“处理中”。
 5. 分别验证用户取消、模型或网络失败、正文已生成但附件发送失败，以及运维 Bot 告警。
 6. 核对外部发送幂等：已经成功发送的结果不会因重试或重启再次发送，失败交付也不会触发重新生成两份稿件。
+
+企业微信结果交付还要分别覆盖文本、单附件、多段文本和多附件：本地校验或上传失败进入明确未送达；SDK 非零回执进入明确未送达；本地等待超时、SDK 回执超时和无法解释的发送异常进入送达未知；成功回执进入已确认送达。明确未送达只按原检查点恢复一次，送达未知在人工确认前禁止重发，已确认送达始终禁止重发。恢复前后都要验证模型调用和文件生成次数没有增加，故障提示发送失败不改变原结果状态。
+
+真实故障注入只能在任务分支使用专用测试 Bot、`M_AGENT_RUNTIME_ENV=test` 和独立 `M_AGENT_TEST_DATA_DIR`。至少验证一次“远端可能已接收但本机确认丢失”、一次明确拒绝、一次发送中重启，并分别执行查看、确认未送达后重发、确认已送达和关闭未知状态。SDK 1.0.7 没有发送状态查询接口，测试不得把人工判断描述为自动查询。
 
 代码和离线测试完成后可标为“已接入、验收中”；只有以上真实验收完成，才能在文档和控制台中标为“稳定运行”。
 

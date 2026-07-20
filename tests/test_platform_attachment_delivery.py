@@ -32,9 +32,11 @@ class FakeWsClient:
 
     async def reply_media(self, frame, media_type, media_id):
         self.media_replies.append((frame, media_type, media_id))
+        return {"headers": {"req_id": "reply-001"}, "errcode": 0, "errmsg": "ok"}
 
     async def send_media_message(self, chatid, media_type, media_id):
         self.sent_media.append((chatid, media_type, media_id))
+        return {"headers": {"req_id": "send-001"}, "errcode": 0, "errmsg": "ok"}
 
 
 class RetryReplyWsClient(FakeWsClient):
@@ -180,7 +182,7 @@ async def test_attachment_delivery_succeeds_and_writes_metrics_and_status(tmp_pa
     )
 
     assert result.delivered is True
-    assert result.status == "delivered"
+    assert result.status == "confirmed_delivered"
     assert result.attempts == 1
     assert result.size_bytes == 9
     assert result.estimated_chunks == 3
@@ -196,7 +198,7 @@ async def test_attachment_delivery_succeeds_and_writes_metrics_and_status(tmp_pa
     payload = json.loads(metrics_path.read_text(encoding="utf-8"))
     assert payload["delivered"] is True
     assert payload["filename"] == "result.docx"
-    assert payload["status"] == "delivered"
+    assert payload["status"] == "confirmed_delivered"
     assert payload["compressed"] is False
     assert payload["images_compressed"] is False
     assert "file_path" not in payload
@@ -258,7 +260,7 @@ async def test_attachment_delivery_can_actively_send_to_chat_without_callback_fr
 
 
 @pytest.mark.anyio
-async def test_attachment_delivery_retries_full_upload_when_reply_fails(tmp_path):
+async def test_attachment_delivery_does_not_retry_when_reply_status_is_unknown(tmp_path):
     allowed_root = tmp_path / "allowed"
     file_path = _write_file(allowed_root / "output" / "retry.docx", 5)
     ws_client = RetryReplyWsClient()
@@ -275,10 +277,11 @@ async def test_attachment_delivery_retries_full_upload_when_reply_fails(tmp_path
         request=_build_request(file_path=file_path, allowed_root=allowed_root),
     )
 
-    assert result.delivered is True
-    assert result.attempts == 2
-    assert len(ws_client.uploaded_media) == 2
-    assert ws_client.reply_attempts == 2
+    assert result.delivered is False
+    assert result.status == "delivery_unknown"
+    assert result.attempts == 1
+    assert len(ws_client.uploaded_media) == 1
+    assert ws_client.reply_attempts == 1
 
 
 @pytest.mark.anyio
@@ -337,7 +340,7 @@ async def test_attachment_delivery_rejects_path_outside_allowed_root(tmp_path):
     )
 
     assert result.delivered is False
-    assert result.status == "rejected"
+    assert result.status == "confirmed_not_delivered"
     assert result.error_code == "path_outside_allowed_root"
     assert ws_client.uploaded_media == []
     assert "目录" in result.user_message
@@ -361,7 +364,7 @@ async def test_attachment_delivery_rejects_oversized_file(tmp_path):
     )
 
     assert result.delivered is False
-    assert result.status == "rejected"
+    assert result.status == "confirmed_not_delivered"
     assert result.error_code == "file_too_large"
     assert ws_client.uploaded_media == []
 
@@ -430,14 +433,16 @@ async def test_attachment_delivery_treats_missing_media_id_as_failure(tmp_path):
 @pytest.mark.anyio
 async def test_attachment_delivery_classifies_reply_timeout(tmp_path):
     allowed_root = tmp_path / "allowed"
+    ops_dir = tmp_path / "ops_events"
     file_path = _write_file(allowed_root / "output" / "reply-timeout.docx", 5)
     delivery = AttachmentDelivery(
         config=AttachmentDeliveryConfig(
-            max_attempts=1,
+            max_attempts=3,
             max_file_bytes=1024,
             small_upload_timeout_seconds=0.5,
             reply_timeout_seconds=0.01,
-        )
+        ),
+        ops_event_logger=OpsEventLogger(ops_dir),
     )
 
     result = await delivery.deliver(
@@ -447,6 +452,15 @@ async def test_attachment_delivery_classifies_reply_timeout(tmp_path):
 
     assert result.delivered is False
     assert result.error_code == "reply_timeout"
+    assert result.status == "delivery_unknown"
+    assert result.evidence == "local_wait_timeout"
+    assert result.safe_error_code == "delivery_ack_timeout"
+    assert result.attempts == 1
+    events = read_ops_events(ops_dir, date.today())
+    assert len(events) == 1
+    assert events[0].subject == "附件交付状态未知"
+    assert events[0].severity == "warning"
+    assert "delivery_unknown" in events[0].detail
 
 
 @pytest.mark.anyio
@@ -548,7 +562,7 @@ async def test_attachment_delivery_rejects_file_replaced_by_symlink_inside_lock(
     )
 
     assert result.delivered is False
-    assert result.status == "rejected"
+    assert result.status == "confirmed_not_delivered"
     assert result.error_code in {"file_symlink", "path_outside_allowed_root", "file_changed"}
     assert ws_client.started_filenames == ["hold.docx"]
 
@@ -561,7 +575,7 @@ async def test_attachment_delivery_rejects_file_replaced_by_oversized_file_insid
     )
 
     assert result.delivered is False
-    assert result.status == "rejected"
+    assert result.status == "confirmed_not_delivered"
     assert result.error_code == "file_too_large"
     assert ws_client.started_filenames == ["hold.docx"]
 
@@ -626,7 +640,7 @@ async def test_attachment_delivery_records_safe_ops_event_and_failed_status(tmp_
     )
 
     assert result.delivered is False
-    assert result.status == "failed"
+    assert result.status == "confirmed_not_delivered"
     assert result.attempts == 2
     assert result.error_code == "upload_failed"
     assert "文件上传失败，已提醒管理员处理" in result.user_message
