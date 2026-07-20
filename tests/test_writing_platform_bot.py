@@ -64,6 +64,28 @@ class FailingUploadWsClient(FakeWsClient):
         )
 
 
+@pytest.mark.anyio
+async def test_active_writing_text_uses_supported_markdown_message_type():
+    ws_client = FakeWsClient()
+
+    outcome = await writing_bot._send_active_writing_text(
+        ws_client,
+        "recipient-1",
+        "简报已经生成",
+    )
+
+    assert outcome.delivered is True
+    assert ws_client.sent_messages == [
+        (
+            "recipient-1",
+            {
+                "msgtype": "markdown",
+                "markdown": {"content": "简报已经生成"},
+            },
+        )
+    ]
+
+
 class FakePlatformApp:
     def __init__(self, result=None, error=None, intent=ConversationIntent.NEW_TASK, skill_id="direct_report"):
         self.calls = []

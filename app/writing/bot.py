@@ -717,7 +717,10 @@ async def _send_active_writing_text(
     if not callable(sender):
         raise RuntimeError("企业微信 SDK 不支持主动文本消息")
     return await capture_wecom_delivery(
-        lambda: sender(recipient, {"msgtype": "text", "text": {"content": text}}),
+        lambda: sender(
+            recipient,
+            {"msgtype": "markdown", "markdown": {"content": text}},
+        ),
         timeout_seconds=timeout_seconds,
     )
 
