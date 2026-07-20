@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 
 from app.review.capabilities import REVIEW_CAPABILITIES, infer_review_capability
+from app.review.task_execution import REVIEW_TASK_TYPES
+from app.writing.task_execution import QUEUEABLE_WRITING_SKILLS
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,8 @@ class CapabilityAdminSummary:
     next_action: str = ""
     runtime_status: str = ""
     runtime_label: str = ""
+    execution_mode: str = ""
+    execution_mode_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -275,6 +279,10 @@ _RUNTIME_STATUS_LABELS = {
     "healthy": "当前在线",
     "stale": "心跳超时",
     "missing": "未运行",
+}
+_EXECUTION_MODE_LABELS = {
+    "persistent": "持久队列",
+    "realtime": "实时执行",
 }
 _ARCHITECTURE_LAYER_SPECS = (
     _ArchitectureLayerSpec(
@@ -1203,6 +1211,7 @@ def _build_capability_summary(
     next_todo = next((todo for todo in related_todos if todo.is_open), related_todos[0] if related_todos else None)
     service = services_by_id.get(spec.runtime_service)
     runtime_status = service.status if service else ""
+    execution_mode = _capability_execution_mode(spec)
     return CapabilityAdminSummary(
         id=spec.id,
         name=spec.name,
@@ -1219,6 +1228,28 @@ def _build_capability_summary(
         next_action=next_todo.next_action if next_todo and next_todo.is_open else "",
         runtime_status=runtime_status,
         runtime_label=_RUNTIME_STATUS_LABELS.get(runtime_status, ""),
+        execution_mode=execution_mode,
+        execution_mode_label=_EXECUTION_MODE_LABELS.get(execution_mode, ""),
+    )
+
+
+def _capability_execution_mode(spec: _CapabilitySpec) -> str:
+    if spec.skill_ids:
+        return (
+            "persistent"
+            if all(skill_id in QUEUEABLE_WRITING_SKILLS for skill_id in spec.skill_ids)
+            else "realtime"
+        )
+    review_capability = next(
+        (item for item in REVIEW_CAPABILITIES if item.id == spec.id),
+        None,
+    )
+    if review_capability is None:
+        return ""
+    return (
+        "persistent"
+        if review_capability.task_type in REVIEW_TASK_TYPES
+        else "realtime"
     )
 
 

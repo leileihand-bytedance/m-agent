@@ -72,6 +72,7 @@ class DeliveryRequest:
     sender_name: str = ""
     skill_id: str = ""
     job_id: str = ""
+    manage_task_status: bool = True
 
 
 @dataclass(frozen=True)
@@ -545,11 +546,12 @@ class AttachmentDelivery:
                 result=result,
                 filename=filename,
             )
-            self._update_task_status(
-                task_dir=task_dir,
-                delivery_status="delivered" if result.delivered else "failed",
-                source=request.source,
-            )
+            if request.manage_task_status:
+                self._update_task_status(
+                    task_dir=task_dir,
+                    delivery_status="delivered" if result.delivered else "failed",
+                    source=request.source,
+                )
         return DeliveryResult(
             delivered=result.delivered,
             status=result.status,

@@ -163,7 +163,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 
 ### 持久任务生产接入验收
 
-持久化执行器按任务类型分批接入。当前已接入纯文字、单个通用 Word、内参、半月报、公文格式、单个静态 HTML 和单份 PPTX 七类单项审核，以及直报、`writer1`、`writer2`；审核和写作使用独立 SQLite。`research_synthesis` 和多文件联合审核仍走旧路径，不能因为共用入口就视为已切流。
+持久化执行器按任务类型分批接入。当前审核八类能力，以及直报、`writer1`、`writer2` 和 `shenyinxie_news` 已分别接入审核、写作专用 SQLite。多文件联合审核与深银协动态必须额外验证多个交付项的检查点：已经确认成功的摘要或附件不能因重启重复发送，处于 `sending` 且无法确认的交付项必须暂停自动重发并告警。`research_synthesis` 和 `internal_weekly` 仍走实时路径，不能因为共用入口就视为已切流。
 
 每个任务类型接入时都必须完成：
 

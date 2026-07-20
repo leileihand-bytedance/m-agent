@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+from app.platform.models import UploadedFile
 from app.platform.task_execution import (
     ClaimLimits,
     PersistentTaskExecutor,
@@ -24,6 +25,9 @@ from app.review.task_execution import (
     REVIEW_FILE_TASK_TYPES,
     REVIEW_TASK_TYPES,
     GeneralReviewTaskService,
+    MULTI_FILE_REVIEW_TASK_TYPE,
+    MultiFileReviewTaskService,
+    PreparedMultiFileReviewDelivery,
     PreparedReviewDelivery,
 )
 from app.review.bot_logging import log_extra, setup_logging
@@ -63,6 +67,249 @@ def _service(
         attachment_sender=attachment_sender or default_attachment_sender,
         failure_notifier=failure_notifier or default_failure_notifier,
     )
+
+
+def _multi_service(
+    *,
+    repository: TaskRepository,
+    reviews_root: Path,
+    processor,
+    text_sender=None,
+    attachment_sender=None,
+    failure_notifier=None,
+) -> MultiFileReviewTaskService:
+    async def default_text_sender(_recipient: str, _text: str) -> bool:
+        return True
+
+    async def default_attachment_sender(
+        _recipient: str,
+        _path: Path,
+        _task_dir: Path,
+    ) -> bool:
+        return True
+
+    async def default_failure_notifier(
+        _recipient: str,
+        _error_code: str,
+        _task_id: str,
+    ) -> None:
+        return None
+
+    return MultiFileReviewTaskService(
+        repository=repository,
+        reviews_root=reviews_root,
+        processor=processor,
+        text_sender=text_sender or default_text_sender,
+        attachment_sender=attachment_sender or default_attachment_sender,
+        failure_notifier=failure_notifier or default_failure_notifier,
+    )
+
+
+def test_multi_file_review_is_registered_as_persistent_task_type():
+    assert MULTI_FILE_REVIEW_TASK_TYPE == "review_multi_file_docx"
+    assert MULTI_FILE_REVIEW_TASK_TYPE in REVIEW_TASK_TYPES
+    assert MULTI_FILE_REVIEW_TASK_TYPE not in REVIEW_FILE_TASK_TYPES
+
+
+def test_multi_file_submission_snapshots_all_inputs_and_is_idempotent(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+
+    async def processor(_workspace):
+        return PreparedMultiFileReviewDelivery(summary_text="完成")
+
+    service = _multi_service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+    )
+    files = (
+        UploadedFile(filename="正文.docx", content=b"main-document"),
+        UploadedFile(filename="附件1.docx", content=b"attachment-document"),
+    )
+
+    first = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="multi-message-001",
+        files=files,
+        primary_file_index=0,
+        instructions=("同时核对附件引用",),
+    )
+    duplicate = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="multi-message-001",
+        files=files,
+        primary_file_index=0,
+        instructions=("同时核对附件引用",),
+    )
+
+    assert first.created is True
+    assert duplicate.created is False
+    assert duplicate.task.task_id == first.task.task_id
+    assert repository.count_tasks() == 1
+    task_dir = Path(str(first.task.payload["task_dir"]))
+    snapshotted = sorted((task_dir / "input").glob("*.docx"))
+    assert [path.read_bytes() for path in snapshotted] == [
+        b"main-document",
+        b"attachment-document",
+    ]
+    assert "main-document" not in json.dumps(first.task.payload, ensure_ascii=False)
+    meta = json.loads((task_dir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["queue_mode"] == "persistent"
+    assert meta["capability_id"] == "multi_file_review"
+
+
+def test_multi_file_delivery_checkpoints_summary_and_each_attachment(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        first = workspace.task_dir / "output" / "marked_正文.docx"
+        second = workspace.task_dir / "output" / "marked_附件1.docx"
+        first.write_bytes(b"marked-main")
+        second.write_bytes(b"marked-attachment")
+        return PreparedMultiFileReviewDelivery(
+            summary_text="联合审核完成。",
+            attachment_paths=(first, second),
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(_recipient: str, path: Path, task_dir: Path) -> bool:
+        assert path.is_relative_to(task_dir / "output")
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _multi_service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="multi-message-002",
+        files=(
+            UploadedFile(filename="正文.docx", content=b"main"),
+            UploadedFile(filename="附件1.docx", content=b"attachment"),
+        ),
+        primary_file_index=0,
+        instructions=(),
+    )
+
+    async def scenario():
+        first = await service.handle(submission.task)
+        second = await service.handle(submission.task)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert first.status == "completed"
+    assert second.status == "completed"
+    assert delivered == [
+        ("text", "联合审核完成。"),
+        ("attachment", "marked_正文.docx"),
+        ("attachment", "marked_附件1.docx"),
+    ]
+    task_dir = Path(str(submission.task.payload["task_dir"]))
+    checkpoint = json.loads((task_dir / "execution.json").read_text(encoding="utf-8"))
+    assert [item["status"] for item in checkpoint["delivery_items"]] == [
+        "delivered",
+        "delivered",
+        "delivered",
+    ]
+
+
+def test_multi_file_restart_stops_after_uncertain_attachment_without_resending_summary(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "review.sqlite3")
+    calls = {"process": 0, "text": 0, "attachment": 0}
+    failures: list[str] = []
+
+    async def processor(workspace):
+        calls["process"] += 1
+        output = workspace.task_dir / "output" / "marked_正文.docx"
+        output.write_bytes(b"marked-main")
+        return PreparedMultiFileReviewDelivery(
+            summary_text="联合审核完成。",
+            attachment_paths=(output,),
+        )
+
+    async def text_sender(_recipient: str, _text: str) -> bool:
+        calls["text"] += 1
+        return True
+
+    async def interrupted_attachment(_recipient: str, _path: Path, _task_dir: Path) -> bool:
+        calls["attachment"] += 1
+        raise asyncio.CancelledError
+
+    async def failure_notifier(_recipient: str, code: str, _task_id: str) -> None:
+        failures.append(code)
+
+    service = _multi_service(
+        repository=repository,
+        reviews_root=tmp_path / "reviews",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=interrupted_attachment,
+        failure_notifier=failure_notifier,
+    )
+    submission = service.submit(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="multi-message-003",
+        files=(
+            UploadedFile(filename="正文.docx", content=b"main"),
+            UploadedFile(filename="附件1.docx", content=b"attachment"),
+        ),
+        primary_file_index=0,
+        instructions=(),
+    )
+
+    async def scenario():
+        with pytest.raises(asyncio.CancelledError):
+            await service.handle(submission.task)
+
+        async def must_not_process(_workspace):
+            raise AssertionError("恢复时不应重新执行联合审核")
+
+        async def must_not_send_text(_recipient: str, _text: str) -> bool:
+            raise AssertionError("已发送摘要不应重复发送")
+
+        async def must_not_send_attachment(
+            _recipient: str,
+            _path: Path,
+            _task_dir: Path,
+        ) -> bool:
+            raise AssertionError("发送状态不确定的附件不应自动重发")
+
+        restarted = _multi_service(
+            repository=repository,
+            reviews_root=tmp_path / "reviews",
+            processor=must_not_process,
+            text_sender=must_not_send_text,
+            attachment_sender=must_not_send_attachment,
+            failure_notifier=failure_notifier,
+        )
+        with pytest.raises(SafeTaskError) as error:
+            await restarted.handle(submission.task)
+        return error.value
+
+    error = asyncio.run(scenario())
+
+    assert error.safe_error_code == "delivery_status_uncertain"
+    assert calls == {"process": 1, "text": 1, "attachment": 1}
+    assert failures == ["delivery_status_uncertain"]
 
 
 def test_general_review_submission_is_persistent_and_idempotent(tmp_path: Path):

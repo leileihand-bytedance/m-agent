@@ -11,7 +11,7 @@ from app.review.capabilities import (
 )
 from app.review.core.metrics import ReviewRunMetrics
 from app.review.observability import write_review_run_observability
-from app.review.task_execution import REVIEW_TASK_TYPES
+from app.review.task_execution import MULTI_FILE_REVIEW_TASK_TYPE, REVIEW_TASK_TYPES
 
 
 def test_review_capability_registry_covers_eight_independent_modules() -> None:
@@ -34,7 +34,10 @@ def test_review_capability_registry_covers_eight_independent_modules() -> None:
         if capability.task_type is not None
     } == set(REVIEW_TASK_TYPES)
     assert get_review_capability("official_format_review").uses_model is False
-    assert get_review_capability("multi_file_review").task_type is None
+    assert (
+        get_review_capability("multi_file_review").task_type
+        == MULTI_FILE_REVIEW_TASK_TYPE
+    )
 
 
 def test_review_capability_can_be_resolved_from_persistent_task_type() -> None:

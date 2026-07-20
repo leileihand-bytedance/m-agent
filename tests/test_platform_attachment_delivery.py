@@ -207,6 +207,34 @@ async def test_attachment_delivery_succeeds_and_writes_metrics_and_status(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_attachment_delivery_can_leave_aggregate_task_status_to_queue_service(tmp_path):
+    allowed_root = tmp_path / "allowed"
+    task_dir = tmp_path / "task"
+    file_path = _write_file(allowed_root / "output" / "result.docx", 9, byte=b"a")
+    write_task_status(task_dir, processing_status="completed", delivery_status="unknown")
+    delivery = AttachmentDelivery(
+        config=AttachmentDeliveryConfig(max_attempts=1, max_file_bytes=1024)
+    )
+    request = DeliveryRequest(
+        file_path=file_path,
+        allowed_root=allowed_root,
+        frame=None,
+        chat_id="user-001",
+        task_dir=task_dir,
+        source="queued_attachment",
+        manage_task_status=False,
+    )
+
+    result = await delivery.deliver(ws_client=FakeWsClient(), request=request)
+
+    assert result.delivered is True
+    status_payload = json.loads((task_dir / "status.json").read_text(encoding="utf-8"))
+    assert status_payload["processing_status"] == "completed"
+    assert status_payload["delivery_status"] == "unknown"
+    assert (task_dir / "delivery.json").is_file()
+
+
+@pytest.mark.anyio
 async def test_attachment_delivery_can_actively_send_to_chat_without_callback_frame(tmp_path):
     allowed_root = tmp_path / "allowed"
     file_path = _write_file(allowed_root / "output" / "result.docx", 5)

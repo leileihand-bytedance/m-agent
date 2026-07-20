@@ -19,6 +19,8 @@ from app.platform.task_execution import (
     TaskRepository,
 )
 from app.writing.task_execution import (
+    QUEUEABLE_WRITING_SKILLS,
+    WRITING_TASK_TYPE_BY_SKILL,
     WRITING_TASK_TYPES,
     WritingTaskService,
 )
@@ -39,6 +41,7 @@ def _service(
     workspace_root: Path,
     processor,
     text_sender=None,
+    attachment_sender=None,
     result_finalizer=None,
     failure_notifier=None,
 ) -> WritingTaskService:
@@ -106,6 +109,13 @@ def _service(
     async def default_sender(_recipient: str, _text: str) -> bool:
         return True
 
+    async def default_attachment_sender(
+        _recipient: str,
+        _path: Path,
+        _task_dir: Path,
+    ) -> bool:
+        return True
+
     async def default_finalizer(_workspace, _result: PlatformResult) -> None:
         return None
 
@@ -119,9 +129,166 @@ def _service(
         structured_preparer=prepare_structured,
         processor=processor,
         text_sender=text_sender or default_sender,
+        attachment_sender=attachment_sender or default_attachment_sender,
         result_finalizer=result_finalizer or default_finalizer,
         failure_notifier=failure_notifier or default_failure,
     )
+
+
+def test_shenyinxie_news_is_registered_as_queueable_writing_skill():
+    assert "shenyinxie_news" in QUEUEABLE_WRITING_SKILLS
+    assert WRITING_TASK_TYPE_BY_SKILL["shenyinxie_news"] == "writing_shenyinxie_news"
+
+
+def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        output_path = workspace.task_dir / "output" / "深银协动态.docx"
+        output_path.write_bytes(b"word-result")
+        return PlatformResult(
+            skill_id="shenyinxie_news",
+            output={"output_file": str(output_path)},
+            needs_clarification=False,
+            message="本期已整理 2 篇报道。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(_recipient: str, path: Path, task_dir: Path) -> bool:
+        assert path == task_dir / "output" / "深银协动态.docx"
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-shenyinxie-001",
+        skill_id="shenyinxie_news",
+        text="生成7月上半月深银协动态",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    async def scenario():
+        first = await service.handle(submission.task)
+        second = await service.handle(submission.task)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert first.status == "completed"
+    assert second.status == "completed"
+    assert delivered == [
+        ("text", "本期已整理 2 篇报道。"),
+        ("attachment", "深银协动态.docx"),
+    ]
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [item["status"] for item in checkpoint["delivery_items"]] == [
+        "delivered",
+        "delivered",
+    ]
+
+
+def test_shenyinxie_restart_does_not_repeat_delivered_text_or_uncertain_attachment(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    calls = {"process": 0, "text": 0, "attachment": 0}
+    failures: list[str] = []
+
+    async def processor(workspace):
+        calls["process"] += 1
+        output_path = workspace.task_dir / "output" / "深银协动态.docx"
+        output_path.write_bytes(b"word-result")
+        return PlatformResult(
+            skill_id="shenyinxie_news",
+            output={"output_file": str(output_path)},
+            needs_clarification=False,
+            message="本期已整理 1 篇报道。",
+        )
+
+    async def text_sender(_recipient: str, _text: str) -> bool:
+        calls["text"] += 1
+        return True
+
+    async def interrupted_attachment(_recipient: str, _path: Path, _task_dir: Path) -> bool:
+        calls["attachment"] += 1
+        raise asyncio.CancelledError
+
+    async def failure_notifier(_recipient: str, code: str, _task_id: str) -> None:
+        failures.append(code)
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=interrupted_attachment,
+        failure_notifier=failure_notifier,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-shenyinxie-002",
+        skill_id="shenyinxie_news",
+        text="生成7月下半月深银协动态",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    async def scenario():
+        with pytest.raises(asyncio.CancelledError):
+            await service.handle(submission.task)
+
+        async def must_not_process(_workspace):
+            raise AssertionError("恢复时不应重新生成深银协动态")
+
+        async def must_not_send_text(_recipient: str, _text: str) -> bool:
+            raise AssertionError("已发送的说明文字不应重复发送")
+
+        async def must_not_send_attachment(
+            _recipient: str,
+            _path: Path,
+            _task_dir: Path,
+        ) -> bool:
+            raise AssertionError("发送状态不确定的附件不应自动重发")
+
+        restarted = _service(
+            repository=repository,
+            workspace_root=tmp_path / "workspaces",
+            processor=must_not_process,
+            text_sender=must_not_send_text,
+            attachment_sender=must_not_send_attachment,
+            failure_notifier=failure_notifier,
+        )
+        with pytest.raises(SafeTaskError) as error:
+            await restarted.handle(submission.task)
+        return error.value
+
+    error = asyncio.run(scenario())
+
+    assert error.safe_error_code == "delivery_status_uncertain"
+    assert calls == {"process": 1, "text": 1, "attachment": 1}
+    assert failures == ["delivery_status_uncertain"]
 
 
 def test_text_submission_is_persistent_idempotent_and_keeps_content_out_of_sqlite_payload(

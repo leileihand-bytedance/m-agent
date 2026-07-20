@@ -62,7 +62,7 @@ REVIEW_CAPABILITIES = (
     ReviewCapability(
         "multi_file_review",
         "多文件联合审核",
-        None,
+        "review_multi_file_docx",
         "multi_file",
     ),
 )

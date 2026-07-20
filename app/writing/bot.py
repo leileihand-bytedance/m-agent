@@ -8,7 +8,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.platform.app import PlatformApp
-from app.platform.attachment_delivery import AttachmentDelivery, DeliveryRequest, DeliveryResult
+from app.platform.attachment_delivery import (
+    AttachmentDelivery,
+    AttachmentDeliveryConfig,
+    DeliveryRequest,
+    DeliveryResult,
+)
 from app.platform.config import PlatformConfig, ROOT
 from app.platform.gateway.wecom import extract_message_id, format_text_reply
 from app.platform.intent import ConversationIntent
@@ -116,7 +121,7 @@ async def handle_text_with_platform(
             ws_client,
             frame,
             stream_id,
-            "你上一项直报或简报初稿还在处理中，完成后会自动发给你。请收到初稿后再继续改稿或提交新材料。",
+            "你上一项写作任务还在处理中，完成后会自动发给你。请收到结果后再继续改稿或提交新材料。",
             True,
         )
         return
@@ -914,6 +919,10 @@ async def run_bot(config) -> None:
     platform_app = PlatformApp.from_config(build_platform_config(config))
     ops_event_logger = OpsEventLogger(config.ops_events_dir) if config.ops_events_dir else None
     attachment_delivery = AttachmentDelivery(ops_event_logger=ops_event_logger)
+    queued_attachment_delivery = AttachmentDelivery(
+        config=AttachmentDeliveryConfig(max_attempts=1),
+        ops_event_logger=ops_event_logger,
+    )
     intake_store = WritingIntakeStore(
         ttl_seconds=config.intake_ttl_seconds,
         storage_dir=config.intake_dir,
@@ -987,6 +996,35 @@ async def run_bot(config) -> None:
             sender_userid=workspace.prepared.sender_userid,
         )
 
+    async def send_queued_writing_attachment(
+        recipient: str,
+        path: Path,
+        task_dir: Path,
+    ) -> bool:
+        resolved_path = path.resolve(strict=True)
+        output_root = (task_dir / "output").resolve(strict=True)
+        if not resolved_path.is_file() or not resolved_path.is_relative_to(output_root):
+            raise ValueError("写作结果附件不属于当前任务输出目录")
+        result = await queued_attachment_delivery.deliver(
+            ws_client=ws_client,
+            request=DeliveryRequest(
+                file_path=resolved_path,
+                allowed_root=task_dir,
+                frame=None,
+                chat_id=recipient,
+                task_dir=task_dir,
+                source="writing_task_delivery",
+                sender_userid=recipient,
+                sender_name=platform_app.resolve_sender_name(recipient),
+                skill_id="shenyinxie_news",
+                job_id=task_dir.name,
+                manage_task_status=False,
+            ),
+        )
+        if not result.delivered and result.error_code in {"reply_timeout", "reply_failed"}:
+            raise RuntimeError("附件发送状态无法确认")
+        return result.delivered
+
     async def notify_queued_writing_failure(
         recipient: str,
         error_code: str,
@@ -1027,6 +1065,7 @@ async def run_bot(config) -> None:
             recipient,
             text,
         ),
+        attachment_sender=send_queued_writing_attachment,
         result_finalizer=finalize_queued_writing,
         failure_finalizer=finalize_failed_writing,
         failure_notifier=notify_queued_writing_failure,

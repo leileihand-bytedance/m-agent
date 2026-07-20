@@ -505,6 +505,28 @@ async def test_new_direct_report_is_accepted_into_persistent_queue():
 
 
 @pytest.mark.anyio
+async def test_shenyinxie_news_is_accepted_into_persistent_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="shenyinxie_news")
+    task_service = FakeWritingTaskService()
+
+    await handle_text_with_platform(
+        frame=_frame("生成7月上半月深银协动态", msgid="message-shenyinxie-001"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        task_service=task_service,
+    )
+
+    assert platform_app.calls == []
+    assert task_service.text_submissions[0]["message_id"] == "message-shenyinxie-001"
+    assert task_service.text_submissions[0]["skill_id"] == "shenyinxie_news"
+    assert ws_client.stream_replies[-1][2] == (
+        "已进入深银协动态队列，完成后会自动发送初稿。"
+    )
+
+
+@pytest.mark.anyio
 async def test_revision_stays_on_existing_realtime_path_when_queue_is_enabled():
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(

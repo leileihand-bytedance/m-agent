@@ -345,6 +345,20 @@ def render_dashboard(
     .runtime-indicator::before {{ content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }}
     .runtime-indicator.healthy {{ color: var(--ok); }}
     .runtime-indicator.stale, .runtime-indicator.missing {{ color: var(--danger); }}
+    .execution-indicator {{
+      display: inline-flex;
+      align-items: center;
+      margin-top: 7px;
+      margin-right: 6px;
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      background: #fff;
+    }}
+    .execution-indicator.persistent {{ color: var(--ok); border-color: #a6d5b5; background: #f2fbf5; }}
+    .execution-indicator.realtime {{ color: #475467; background: #f9fafb; }}
     table {{
       width: 100%;
       border-collapse: collapse;
@@ -532,7 +546,9 @@ def render_dashboard(
 
       const toGraphNode = (record) => ({{
         id: record.id,
-        label: record.name,
+        label: record.execution_mode_label
+          ? record.name + "\\n" + record.execution_mode_label
+          : record.name,
         level: record.level,
         group: record.status,
       }});
@@ -552,6 +568,7 @@ def render_dashboard(
         document.getElementById("architecture-detail-description").textContent = record.description;
         document.getElementById("architecture-detail-status").textContent = record.status_label;
         document.getElementById("architecture-detail-runtime").textContent = record.runtime_label || "不适用";
+        document.getElementById("architecture-detail-execution").textContent = record.execution_mode_label || "不适用";
         document.getElementById("architecture-detail-evidence").textContent = record.evidence;
         const nextText = record.todo_id && record.next_action
           ? record.todo_id + "：" + record.next_action
@@ -826,7 +843,7 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
   <div class="architecture-toolbar">
     <div>
       <h2>项目总览</h2>
-      <p class="hint">建设成熟度来自现有代码、Skill 配置和 TODO；Bot 是否在线另看节点心跳。</p>
+      <p class="hint">建设成熟度、Bot 在线状态和持久队列迁移情况分开显示；迁移标记直接读取真实任务注册。</p>
     </div>
     <div class="architecture-filters" role="group" aria-label="按建设状态筛选功能">
       {filter_html}
@@ -856,6 +873,10 @@ def _render_architecture_section(overview: ProjectOverview) -> str:
         <div class="architecture-detail-row">
           <span class="architecture-detail-label">运行状态</span>
           <div class="architecture-detail-value" id="architecture-detail-runtime">不适用</div>
+        </div>
+        <div class="architecture-detail-row">
+          <span class="architecture-detail-label">执行方式</span>
+          <div class="architecture-detail-value" id="architecture-detail-execution">不适用</div>
         </div>
         <div class="architecture-detail-row">
           <span class="architecture-detail-label">事实依据</span>
@@ -897,6 +918,8 @@ def _architecture_graph_json(overview: ProjectOverview) -> str:
                     "next_action": capability.next_action,
                     "runtime_status": capability.runtime_status,
                     "runtime_label": capability.runtime_label,
+                    "execution_mode": capability.execution_mode,
+                    "execution_mode_label": capability.execution_mode_label,
                 }
             )
     edges = [
@@ -944,6 +967,14 @@ def _render_capability_node(capability: object) -> str:
         runtime_html = (
             f'<div class="runtime-indicator {escape(runtime_status)}">{escape(runtime_label)}</div>'
         )
+    execution_mode = str(getattr(capability, "execution_mode"))
+    execution_mode_label = str(getattr(capability, "execution_mode_label"))
+    execution_html = ""
+    if execution_mode and execution_mode_label:
+        execution_html = (
+            f'<div class="execution-indicator {escape(execution_mode)}">'
+            f'{escape(execution_mode_label)}</div>'
+        )
     todo_id = str(getattr(capability, "todo_id"))
     next_action = str(getattr(capability, "next_action"))
     next_html = ""
@@ -951,13 +982,14 @@ def _render_capability_node(capability: object) -> str:
         next_html = (
             f'<div class="capability-next"><strong>{escape(todo_id)}</strong>：{escape(next_action)}</div>'
         )
-    return f"""<article class="capability-node capability-state-{escape(status)}" data-capability-status="{escape(status)}">
+    return f"""<article class="capability-node capability-state-{escape(status)}" data-capability-status="{escape(status)}" data-execution-mode="{escape(execution_mode)}">
   <div class="capability-node-head">
     <h4>{escape(str(getattr(capability, "name")))}</h4>
     <span class="capability-status {escape(status)}">{escape(str(getattr(capability, "status_label")))}</span>
   </div>
   <p class="capability-description">{escape(str(getattr(capability, "description")))}</p>
   {runtime_html}
+  {execution_html}
   <div class="capability-evidence">依据：{escape(str(getattr(capability, "evidence")))}</div>
   {next_html}
 </article>"""

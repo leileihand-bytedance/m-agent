@@ -242,6 +242,10 @@ def test_render_dashboard_shows_filterable_architecture_and_capability_statuses(
     assert "静态 HTML 审核" in html
     assert "审核共享核心" in html
     assert "单份 PPTX 低级错误审核" in html
+    assert "持久队列" in html
+    assert "实时执行" in html
+    assert 'data-execution-mode="persistent"' in html
+    assert 'data-execution-mode="realtime"' in html
     assert "检查幻灯片文字、逻辑、版式并提供可交付结果" not in html
     assert 'data-capability-status="stable"' in html
     assert 'data-capability-status="building"' in html
@@ -275,6 +279,8 @@ def test_render_dashboard_includes_local_interactive_architecture_graph(tmp_path
     assert '<script src="/static/vendor/vis-network.min.js"></script>' in html
     assert "unpkg.com" not in html
     assert '"source_id":"writing_bot"' in html
+    assert '"execution_mode":"persistent"' in html
+    assert 'record.name + "\\n" + record.execution_mode_label' in html
 
 
 def test_interactive_graph_dependency_is_vendored_with_license_files():

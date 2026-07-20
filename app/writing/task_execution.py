@@ -23,14 +23,18 @@ from app.platform.task_execution import (
 from app.platform.task_status import update_task_status
 
 
-QUEUEABLE_WRITING_SKILLS = frozenset({"direct_report", "writer1", "writer2"})
+QUEUEABLE_WRITING_SKILLS = frozenset(
+    {"direct_report", "writer1", "writer2", "shenyinxie_news"}
+)
 WRITING_TASK_TYPE_BY_SKILL = {
     "direct_report": "writing_direct_report",
     "writer1": "writing_writer1",
     "writer2": "writing_writer2",
+    "shenyinxie_news": "writing_shenyinxie_news",
 }
 WRITING_TASK_TYPES = tuple(WRITING_TASK_TYPE_BY_SKILL.values())
 WRITING_COST_CLASS = "writing_llm"
+_WRITING_OUTPUT_SUFFIX_BY_SKILL = {"shenyinxie_news": ".docx"}
 
 
 @dataclass(frozen=True)
@@ -50,13 +54,14 @@ TextPreparer = Callable[..., PreparedPlatformJob]
 StructuredPreparer = Callable[..., PreparedPlatformJob]
 WritingProcessor = Callable[[WritingTaskWorkspace], Awaitable[PlatformResult]]
 TextSender = Callable[[str, str], Awaitable[bool]]
+AttachmentSender = Callable[[str, Path, Path], Awaitable[bool]]
 ResultFinalizer = Callable[[WritingTaskWorkspace, PlatformResult], Awaitable[None]]
 FailureFinalizer = Callable[[WritingTaskWorkspace], Awaitable[None]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
 
 
 class WritingTaskService:
-    """直报和简报的正式 job 快照、持久执行检查点与主动交付。"""
+    """写作任务的正式 job 快照、持久执行检查点与主动交付。"""
 
     def __init__(
         self,
@@ -69,6 +74,7 @@ class WritingTaskService:
         text_sender: TextSender,
         result_finalizer: ResultFinalizer,
         failure_notifier: FailureNotifier,
+        attachment_sender: AttachmentSender | None = None,
         failure_finalizer: FailureFinalizer | None = None,
     ) -> None:
         self._repository = repository
@@ -77,6 +83,7 @@ class WritingTaskService:
         self._structured_preparer = structured_preparer
         self._processor = processor
         self._text_sender = text_sender
+        self._attachment_sender = attachment_sender
         self._result_finalizer = result_finalizer
         self._failure_notifier = failure_notifier
         self._failure_finalizer = failure_finalizer
@@ -153,7 +160,7 @@ class WritingTaskService:
         if checkpoint["processing_status"] != "completed":
             try:
                 result = await self._processor(workspace)
-                checkpoint = self._processed_checkpoint(result)
+                checkpoint = self._processed_checkpoint(workspace, result)
                 self._write_checkpoint(workspace.task_dir, checkpoint)
             except asyncio.CancelledError:
                 raise
@@ -191,6 +198,10 @@ class WritingTaskService:
                     "writing_finalization_failed",
                     retryable=retryable,
                 ) from exc
+
+        delivery_items = checkpoint.get("delivery_items")
+        if isinstance(delivery_items, list) and delivery_items:
+            return await self._deliver_items(task, workspace, checkpoint, delivery_items)
 
         delivery_status = str(checkpoint["delivery_status"])
         if delivery_status == "delivered":
@@ -242,6 +253,97 @@ class WritingTaskService:
             source="writing_task_delivery",
         )
         return TaskHandlerResult.completed()
+
+    async def _deliver_items(
+        self,
+        task: TaskRecord,
+        workspace: WritingTaskWorkspace,
+        checkpoint: dict[str, object],
+        delivery_items: list[object],
+    ) -> TaskHandlerResult:
+        for raw_item in delivery_items:
+            if not isinstance(raw_item, dict):
+                raise SafeTaskError("invalid_task_payload", retryable=False)
+            status = str(raw_item.get("status", ""))
+            if status == "delivered":
+                continue
+            if status == "sending":
+                await self._notify_failure(
+                    task.user_id,
+                    "delivery_status_uncertain",
+                    task.task_id,
+                )
+                raise SafeTaskError("delivery_status_uncertain", retryable=False)
+            if status == "failed":
+                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
+                raise SafeTaskError("delivery_failed", retryable=False)
+
+            raw_item["status"] = "sending"
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+            try:
+                delivered = await self._deliver_item(workspace, raw_item)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self._notify_failure(
+                    task.user_id,
+                    "delivery_status_uncertain",
+                    task.task_id,
+                )
+                raise SafeTaskError(
+                    "delivery_status_uncertain",
+                    retryable=False,
+                ) from exc
+
+            if not delivered:
+                raw_item["status"] = "failed"
+                checkpoint["delivery_status"] = "failed"
+                self._write_checkpoint(workspace.task_dir, checkpoint)
+                update_task_status(
+                    workspace.task_dir,
+                    delivery_status="failed",
+                    source="writing_task_delivery",
+                )
+                await self._notify_failure(task.user_id, "delivery_failed", task.task_id)
+                raise SafeTaskError("delivery_failed", retryable=False)
+
+            raw_item["status"] = "delivered"
+            self._write_checkpoint(workspace.task_dir, checkpoint)
+
+        checkpoint["delivery_status"] = "delivered"
+        self._write_checkpoint(workspace.task_dir, checkpoint)
+        update_task_status(
+            workspace.task_dir,
+            delivery_status="delivered",
+            source="writing_task_delivery",
+        )
+        return TaskHandlerResult.completed()
+
+    async def _deliver_item(
+        self,
+        workspace: WritingTaskWorkspace,
+        item: dict[str, object],
+    ) -> bool:
+        kind = str(item.get("kind", ""))
+        if kind == "text":
+            return await self._text_sender(
+                workspace.prepared.sender_userid,
+                str(item.get("text", "")),
+            )
+        if kind != "attachment" or self._attachment_sender is None:
+            raise ValueError("写作任务交付项类型无效")
+        relative_path = Path(str(item.get("file", "")))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError("写作结果附件引用不安全")
+        result_path = (workspace.task_dir / relative_path).resolve(strict=True)
+        output_root = (workspace.task_dir / "output").resolve(strict=True)
+        if not result_path.is_file() or not result_path.is_relative_to(output_root):
+            raise ValueError("写作结果附件超出任务输出目录")
+        return await self._attachment_sender(
+            workspace.prepared.sender_userid,
+            result_path,
+            workspace.task_dir,
+        )
 
     def _submit_prepared(
         self,
@@ -421,13 +523,18 @@ class WritingTaskService:
             ack_message=str(payload.get("ack_message", "")),
         )
 
-    @staticmethod
-    def _processed_checkpoint(result: PlatformResult) -> dict[str, object]:
+    def _processed_checkpoint(
+        self,
+        workspace: WritingTaskWorkspace,
+        result: PlatformResult,
+    ) -> dict[str, object]:
+        delivery_items = self._build_delivery_items(workspace, result)
         return {
             "schema_version": 1,
             "processing_status": "completed",
             "finalization_status": "pending",
             "delivery_status": "pending",
+            "delivery_items": delivery_items,
             "result": {
                 "skill_id": result.skill_id,
                 "output": result.output,
@@ -435,6 +542,65 @@ class WritingTaskService:
                 "message": result.message,
             },
         }
+
+    def _build_delivery_items(
+        self,
+        workspace: WritingTaskWorkspace,
+        result: PlatformResult,
+    ) -> list[dict[str, object]]:
+        output_file = self._result_output_file(workspace, result)
+        if output_file is None:
+            return [
+                {
+                    "kind": "text",
+                    "text": format_text_reply(result),
+                    "file": "",
+                    "status": "pending",
+                }
+            ]
+        if self._attachment_sender is None:
+            raise ValueError("带附件的写作任务未配置附件发送器")
+        message = (result.message or "结果文件已生成。").strip()
+        return [
+            {
+                "kind": "text",
+                "text": message,
+                "file": "",
+                "status": "pending",
+            },
+            {
+                "kind": "attachment",
+                "text": "",
+                "file": str(output_file.relative_to(workspace.task_dir)),
+                "status": "pending",
+            },
+        ]
+
+    @staticmethod
+    def _result_output_file(
+        workspace: WritingTaskWorkspace,
+        result: PlatformResult,
+    ) -> Path | None:
+        suffix = _WRITING_OUTPUT_SUFFIX_BY_SKILL.get(str(result.skill_id or ""))
+        if suffix is None or result.needs_clarification:
+            return None
+        raw_path = str(result.output.get("output_file", "") or "").strip()
+        if not raw_path:
+            return None
+        try:
+            path = Path(raw_path).resolve(strict=True)
+            output_root = (workspace.task_dir / "output").resolve(strict=True)
+            size = path.stat().st_size
+        except OSError:
+            return None
+        if (
+            not path.is_file()
+            or path.suffix.lower() != suffix
+            or not path.is_relative_to(output_root)
+            or size <= 0
+        ):
+            return None
+        return path
 
     @staticmethod
     def _result_from_checkpoint(checkpoint: dict[str, object]) -> PlatformResult:
@@ -460,6 +626,7 @@ class WritingTaskService:
                 "processing_status": "pending",
                 "finalization_status": "pending",
                 "delivery_status": "pending",
+                "delivery_items": [],
                 "result": {},
             }
         payload = _read_json(path, label="写作任务执行状态")
@@ -476,6 +643,23 @@ class WritingTaskService:
             "failed",
         }:
             raise ValueError("写作任务交付状态无效")
+        delivery_items = payload.get("delivery_items", [])
+        if not isinstance(delivery_items, list):
+            raise ValueError("写作任务交付清单无效")
+        for item in delivery_items:
+            if not isinstance(item, dict):
+                raise ValueError("写作任务交付项无效")
+            kind = item.get("kind")
+            if kind not in {"text", "attachment"}:
+                raise ValueError("写作任务交付项类型无效")
+            if item.get("status") not in {"pending", "sending", "delivered", "failed"}:
+                raise ValueError("写作任务交付项状态无效")
+            if kind == "text" and not str(item.get("text", "")).strip():
+                raise ValueError("写作任务交付文字为空")
+            if kind == "attachment":
+                relative_path = Path(str(item.get("file", "")))
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    raise ValueError("写作任务交付附件引用无效")
         WritingTaskService._result_from_checkpoint(payload)
         return payload
 
