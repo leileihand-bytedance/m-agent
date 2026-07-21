@@ -12,6 +12,7 @@ class DirectReportResult(BaseModel):
     title: str
     body: str
     sources: list[str] = Field(default_factory=list)
+    output_file: str = ""
     needs_clarification: bool = False
     message: str = ""
 

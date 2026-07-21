@@ -156,6 +156,61 @@ def test_writer2_is_not_registered_as_queueable_writing_skill():
     assert "writing_writer2" not in WRITING_TASK_TYPES
 
 
+def test_direct_report_word_delivery_keeps_chat_draft_and_sends_attachment(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        output_path = workspace.task_dir / "output" / "直报正式文档.docx"
+        output_path.write_bytes(b"word-result")
+        return PlatformResult(
+            skill_id="direct_report",
+            output={
+                "title": "直报标题",
+                "body": "直报正文",
+                "sources": [],
+                "output_file": str(output_path),
+            },
+            needs_clarification=False,
+            message="已生成直报 Word 文档。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(_recipient: str, path: Path, task_dir: Path) -> bool:
+        assert path == task_dir / "output" / "直报正式文档.docx"
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit_text(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-direct-report-word-001",
+        skill_id="direct_report",
+        text="请写直报并输出Word",
+    )
+
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    assert delivered == [
+        ("text", "直报标题\n\n直报正文"),
+        ("attachment", "直报正式文档.docx"),
+    ]
+
+
 def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path):
     repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
     delivered: list[tuple[str, str]] = []

@@ -183,7 +183,7 @@ uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_
 直报和 `writer1` 接入写作持久任务后，还要运行：
 
 ```bash
-uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
 重点验证重复消息幂等、全局/单用户/成本并发、租约和 fencing token、心跳失效、重复取消、进程恢复、状态版本防乱序、凭据和文字正文不入库、任务目录和符号链接校验、动态超时、完整重试、约 50MB SDK 上限、“处理编号”兜底和运维事件脱敏；审核专项还要覆盖七类单项任务分派、处理与发送检查点、已完成任务不重复审核、单段/多段队列结果只发送一次、发送状态不确定时停止重发、worker 异常告警与自恢复、Word 单文件后追加格式审核，以及损坏检查点的安全失败。HTML 专项还要覆盖静态可见文字、显式及原生隐藏内容、表格顺序、真实 `meta` 编码声明、可见/隐藏/嵌套/未闭合 slide 页码映射、普通 HTML 段落兜底、消息与报告定位、短文数据一致性、正文不进 SQLite 和不生成标记文件。PPT 专项按上文命令覆盖独立规则、双边证据、无建议格式、名称单边猜测与相同脚注拦截、同名异写保留、反向双边去重、模型输出超限识别、按对象拆半合并、单对象停止条件和多段交付。执行器内核测试通过不代表其他具体 Bot 已切流，真实启用前仍需逐个验证 handler 可恢复性和外部发送幂等。
@@ -221,7 +221,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 验证具体业务能力：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+uv run --locked pytest tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
 ```
 
 深银协动态还要重点验证：明确指定月份及上/下半月时使用对应发布日期范围；未明确时在任何搜索调用前追问；后台恢复追问后仍保持 `shenyinxie_news` 意图并合并用户回答；查询包含精确日期和成果主题；最终入选仍以原文页面发布日期、白名单和正文核验为准。人民日报旧版页面回归必须覆盖固定错误 `publishdate`，只有页面内期号路径双重印证时才采用真实期号日期；同稿去重必须忽略媒体站点追加的短标题尾缀。
@@ -306,7 +306,7 @@ docs/capabilities/direct-report/production-test.md
 自动化测试至少运行：
 
 ```bash
-uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_writing_platform_bot.py tests/test_writing_portal.py tests/test_platform_document_service.py tests/test_platform_app.py tests/test_platform_wecom_gateway.py tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 uv run --locked python tests/test_review_bot.py
 ```
 
@@ -341,7 +341,7 @@ uv run --locked pytest tests/test_ops_events.py tests/test_ops_report.py tests/t
 至少跑：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_platform_pydantic_runtime.py -v
+uv run --locked pytest tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_writer_prompt_rules.py tests/test_brief_writer_workflows.py tests/test_platform_pydantic_runtime.py -v
 ```
 
 如果影响真实效果，再跑 demo。
@@ -371,7 +371,7 @@ uv run --locked pytest tests/test_brief_docx_output.py tests/test_platform_task_
 至少跑：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_direct_report_workflow.py -v
+uv run --locked pytest tests/test_direct_report_docx_output.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_direct_report_workflow.py -v
 ```
 
 如果是为了评估真实成稿质量，还要按 `docs/capabilities/direct-report/quality-regression.md` 跑固定样本。真实任务编号和逐篇观察只保存在 `M-Agent-Files/evaluations/` 或任务目录，当前文档只保留可泛化规则。
@@ -408,7 +408,7 @@ uv run --locked pytest tests/test_platform_router.py tests/test_platform_runtime
 至少跑：
 
 ```bash
-uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_router.py tests/test_writing_platform_bot.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_router.py tests/test_writing_platform_bot.py tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
 ```
 
 重点确认：

@@ -81,6 +81,11 @@ REVISION_MARKERS = (
     "Word文档",
     "word文档",
     "正式文档",
+    "转成Word",
+    "转成word",
+    "期号",
+    "总第",
+    "落款日期",
 )
 CRITIQUE_MARKERS = (
     "新闻稿",
@@ -193,7 +198,24 @@ def select_draft_version(text: str, *, current_version: int) -> int | None:
 def _looks_like_revision_request(text: str) -> bool:
     if URL_RE.search(text):
         return False
+    if _looks_like_document_followup(text):
+        return True
     return any(marker in text for marker in (*REVISION_MARKERS, *CRITIQUE_MARKERS))
+
+
+def _looks_like_document_followup(text: str) -> bool:
+    normalized = re.sub(r"\s+", "", text)
+    word_export = re.search(
+        r"(?:导出|输出|生成|转成|转为|做成)(?:为|成)?(?:一份|一个)?(?:正式)?"
+        r"(?:word|docx|文档)(?:文档|文件)?",
+        normalized,
+        re.I,
+    )
+    header_date = re.search(
+        r"(?:落款日期|日期)(?:填(?:写)?|为|用|[:：])?(?:20\d{2}年|今天|今日)",
+        normalized,
+    )
+    return bool(word_export or header_date)
 
 
 def _looks_like_explicit_new_task_request(text: str) -> bool:

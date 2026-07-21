@@ -50,6 +50,75 @@ def test_direct_report_workflow_reads_url_and_returns_draft():
     assert "小微企业" in result.body
     assert result.sources == ["https://example.com/news"]
     assert result.needs_clarification is False
+    assert result.output_file == ""
+
+
+def test_direct_report_workflow_generates_word_when_user_explicitly_requests_it(
+    tmp_path: Path,
+):
+    gateway = ToolGateway(
+        allowed_tools=("web_reader", "llm_writer"),
+        tools={
+            "web_reader": lambda url: {
+                "title": "微众银行服务科技型企业",
+                "text": "微众银行持续完善科技型企业金融服务机制。",
+                "url": url,
+            },
+            "llm_writer": lambda payload: {
+                "title": "微众银行完善科技金融服务机制",
+                "body": "第一段。\n\n第二段。\n\n第三段。",
+            },
+        },
+    )
+
+    result = run(
+        inputs={
+            "text": (
+                "根据这个链接写直报并输出Word，2026年第3期（总第28期），"
+                "日期2026年7月21日：https://example.com/news"
+            ),
+            "urls": ["https://example.com/news"],
+            "output_dir": str(tmp_path),
+        },
+        tools=gateway,
+    )
+
+    assert result.needs_clarification is False
+    assert Path(result.output_file).is_file()
+    assert Path(result.output_file).parent == tmp_path
+
+
+def test_direct_report_export_only_revision_does_not_rewrite_previous_draft(
+    tmp_path: Path,
+):
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: (_ for _ in ()).throw(
+                AssertionError("export-only request must not call the model")
+            )
+        },
+    )
+
+    result = run(
+        inputs={
+            "revision": True,
+            "revision_request": (
+                "导出Word，2026年第3期（总第28期），日期2026年7月21日"
+            ),
+            "previous_title": "上一稿标题",
+            "previous_body": "上一稿第一段。\n\n上一稿第二段。",
+            "previous_sources": ["https://example.com/news"],
+            "output_dir": str(tmp_path),
+        },
+        tools=gateway,
+    )
+
+    assert result.title == "上一稿标题"
+    assert result.body == "上一稿第一段。\n\n上一稿第二段。"
+    assert result.sources == ["https://example.com/news"]
+    assert Path(result.output_file).is_file()
+    assert "Word" in result.message
 
 
 def test_direct_report_continues_with_readable_material_after_user_confirms():

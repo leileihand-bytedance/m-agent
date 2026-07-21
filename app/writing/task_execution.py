@@ -48,6 +48,7 @@ WRITING_TASK_TYPE_BY_SKILL = {
 WRITING_TASK_TYPES = tuple(WRITING_TASK_TYPE_BY_SKILL.values())
 WRITING_COST_CLASS = "writing_llm"
 _WRITING_OUTPUT_SUFFIX_BY_SKILL = {
+    "direct_report": ".docx",
     "writer1": ".docx",
     "shenyinxie_news": ".docx",
 }

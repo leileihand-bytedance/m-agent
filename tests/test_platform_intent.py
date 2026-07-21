@@ -41,6 +41,26 @@ def test_classifies_local_section_reduction_as_revision():
     assert intent == ConversationIntent.REVISE_PREVIOUS
 
 
+def test_classifies_word_export_and_direct_report_header_fields_as_revision():
+    examples = [
+        "导出word",
+        "输出 Word，期号第3期",
+        "做成Word",
+        "日期填写2026年7月21日",
+        "总第28期，落款日期2026年7月21日",
+    ]
+
+    for text in examples:
+        intent = classify_conversation_intent(
+            text=text,
+            has_active_conversation=True,
+            route_skill_id=None,
+            route_needs_clarification=True,
+        )
+
+        assert intent == ConversationIntent.REVISE_PREVIOUS
+
+
 def test_classifies_explicit_new_material_as_new_task():
     intent = classify_conversation_intent(
         text="根据这篇材料写简报：微众银行持续完善小微企业服务能力。",

@@ -93,6 +93,28 @@ def _create_completed_task(
     )
 
 
+def test_word_export_request_continues_selected_direct_report(tmp_path: Path):
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    _create_completed_task(
+        repository,
+        task_id="report-task",
+        skill_id="direct_report",
+        title="科技金融直报",
+        body="直报正文",
+    )
+
+    decision = TaskRelationService(repository).resolve_text(
+        channel="wecom",
+        user_id="user-001",
+        text="导出Word，期号第3期，总第28期，日期2026年7月21日",
+        route_skill_id=None,
+    )
+
+    assert decision.relation is TaskRelation.CONTINUE
+    assert decision.target_task_id == "report-task"
+    assert decision.action is RelationAction.EXECUTE
+
+
 @pytest.mark.parametrize(
     "case",
     json.loads(

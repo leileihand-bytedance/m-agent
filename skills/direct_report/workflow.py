@@ -2,9 +2,14 @@ import re
 from pathlib import Path
 
 from app.platform.tools import ToolGateway, ToolNotAllowedError
-from skills.direct_report.policy_research import research_direct_report_policy
 from skills.direct_report.critic import critic_check
+from skills.direct_report.docx_output import (
+    generate_direct_report_docx,
+    is_direct_report_export_only_request,
+    should_generate_direct_report_docx,
+)
 from skills.direct_report.guardrails import validate_deterministic
+from skills.direct_report.policy_research import research_direct_report_policy
 from skills.direct_report.schema import DirectReportResult
 from skills.revision_support import build_revision_payload, previous_sources
 from skills.writing_planner import build_direct_report_plan
@@ -64,7 +69,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> DirectReportResult:
         planning_note=planning_note,
     )
 
-    return draft
+    return _add_word_output_if_requested(draft, inputs)
 
 
 def _generate_and_validate(
@@ -175,6 +180,20 @@ def _truncate_material_texts(materials: list[dict[str, object]], max_length: int
 
 
 def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> DirectReportResult:
+    revision_request = str(inputs.get("revision_request", "") or "").strip()
+    if (
+        not inputs.get("supplement_materials")
+        and is_direct_report_export_only_request(revision_request)
+    ):
+        result = DirectReportResult(
+            title=str(inputs.get("previous_title", "") or "").strip(),
+            body=str(inputs.get("previous_body", "") or "").strip(),
+            sources=previous_sources(inputs),
+            needs_clarification=False,
+            message="已按要求生成直报 Word 文档。",
+        )
+        return _add_word_output_if_requested(result, inputs)
+
     payload = build_revision_payload(inputs, skill_id="direct_report")
     sources = previous_sources(inputs)
     if inputs.get("supplement_materials"):
@@ -195,13 +214,32 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Dir
             if str(item.get("url", "")).strip()
         )
     draft = tools.call("llm_writer", payload)
-    return DirectReportResult(
+    result = DirectReportResult(
         title=str(draft.get("title", "")),
         body=str(draft.get("body", "")),
         sources=list(dict.fromkeys(sources)),
         needs_clarification=False,
         message=str(draft.get("message", "已根据上一稿完成修改。") or "已根据上一稿完成修改。"),
     )
+    return _add_word_output_if_requested(result, inputs)
+
+
+def _add_word_output_if_requested(
+    result: DirectReportResult,
+    inputs: dict[str, object],
+) -> DirectReportResult:
+    request_text = str(
+        inputs.get("revision_request", "") if inputs.get("revision") else inputs.get("text", "")
+    ).strip()
+    if result.needs_clarification or not should_generate_direct_report_docx(request_text):
+        return result
+    output_path = generate_direct_report_docx(
+        title=result.title,
+        body=result.body,
+        request_text=request_text,
+        output_dir=str(inputs.get("output_dir", "") or ""),
+    )
+    return result.model_copy(update={"output_file": str(output_path)})
 
 
 def _apply_material_role(materials: list[dict[str, object]], inputs: dict[str, object]) -> None:

@@ -25,4 +25,5 @@ outputs:
   - title
   - body
   - sources
+  - output_file
 supports_revision: true
