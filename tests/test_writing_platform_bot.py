@@ -699,6 +699,32 @@ async def test_shenyinxie_news_is_accepted_into_persistent_queue():
 
 
 @pytest.mark.anyio
+async def test_internal_weekly_is_accepted_into_persistent_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="internal_weekly")
+    intake_store = WritingIntakeStore()
+    task_service = FakeWritingTaskService()
+
+    await handle_text_with_platform(
+        frame=_frame("生成本周内参周报", msgid="message-internal-weekly-001"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+
+    assert platform_app.structured_calls == []
+    assert task_service.structured_submissions[0]["message_id"] == (
+        "message-internal-weekly-001"
+    )
+    assert task_service.structured_submissions[0]["skill_id"] == "internal_weekly"
+    assert ws_client.stream_replies[-1][2] == (
+        "已进入内参周报内容核对稿队列，完成后会自动发送核对稿。"
+    )
+
+
+@pytest.mark.anyio
 async def test_revision_uses_persistent_queue_when_queue_is_enabled():
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(

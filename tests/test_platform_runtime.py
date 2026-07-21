@@ -8,6 +8,7 @@ from app.platform.registry import SkillRegistry
 from app.platform.models import RoutedRequest
 from app.platform.router import route_message
 from app.platform.runtime import PlatformRuntime
+from skills.internal_weekly.schema import InternalWeeklyResult
 from skills.research_synthesis.schema import ResearchSynthesisResult
 
 
@@ -75,6 +76,45 @@ def test_runtime_preserves_generated_output_file(monkeypatch, tmp_path):
     )
 
     assert result.output["output_file"] == str(output_path)
+
+
+def test_runtime_preserves_internal_weekly_review_and_manifest_files(
+    monkeypatch,
+    tmp_path,
+):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    review_path = output_dir / "内参周报-2026-07-20-内容核对稿.md"
+    manifest_path = output_dir / "内参周报-2026-07-20-溯源清单.json"
+    review_path.write_text("# 内参周报", encoding="utf-8")
+    manifest_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "skills.internal_weekly.workflow.run",
+        lambda inputs, tools: InternalWeeklyResult(
+            title="内参周报（2026-07-20）",
+            body="# 内参周报",
+            message="已生成内容核对稿和溯源清单。",
+            output_file=str(review_path),
+            manifest_file=str(manifest_path),
+        ),
+    )
+    runtime = PlatformRuntime(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={},
+    )
+
+    result = runtime.run(
+        RoutedRequest(
+            skill_id="internal_weekly",
+            confidence=1.0,
+            needs_clarification=False,
+            message="",
+            inputs={"output_dir": str(output_dir)},
+        )
+    )
+
+    assert result.output["output_file"] == str(review_path)
+    assert result.output["manifest_file"] == str(manifest_path)
 
 
 def test_runtime_rejects_generated_output_file_outside_job_output(monkeypatch, tmp_path):

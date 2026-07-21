@@ -38,19 +38,24 @@ from app.platform.task_status import update_task_status
 
 
 QUEUEABLE_WRITING_SKILLS = frozenset(
-    {"direct_report", "writer1", "shenyinxie_news"}
+    {"direct_report", "writer1", "shenyinxie_news", "internal_weekly"}
 )
 WRITING_TASK_TYPE_BY_SKILL = {
     "direct_report": "writing_direct_report",
     "writer1": "writing_writer1",
     "shenyinxie_news": "writing_shenyinxie_news",
+    "internal_weekly": "writing_internal_weekly",
 }
 WRITING_TASK_TYPES = tuple(WRITING_TASK_TYPE_BY_SKILL.values())
 WRITING_COST_CLASS = "writing_llm"
-_WRITING_OUTPUT_SUFFIX_BY_SKILL = {
-    "direct_report": ".docx",
-    "writer1": ".docx",
-    "shenyinxie_news": ".docx",
+_WRITING_OUTPUT_FIELDS_BY_SKILL = {
+    "direct_report": (("output_file", ".docx"),),
+    "writer1": (("output_file", ".docx"),),
+    "shenyinxie_news": (("output_file", ".docx"),),
+    "internal_weekly": (
+        ("output_file", ".md"),
+        ("manifest_file", ".json"),
+    ),
 }
 
 
@@ -71,7 +76,10 @@ TextPreparer = Callable[..., PreparedPlatformJob]
 StructuredPreparer = Callable[..., PreparedPlatformJob]
 WritingProcessor = Callable[[WritingTaskWorkspace], Awaitable[PlatformResult]]
 TextSender = Callable[[str, str], Awaitable[DeliveryOutcome | bool]]
-AttachmentSender = Callable[[str, Path, Path], Awaitable[DeliveryOutcome | bool]]
+AttachmentSender = Callable[
+    [str, Path, Path, str],
+    Awaitable[DeliveryOutcome | bool],
+]
 ResultFinalizer = Callable[[WritingTaskWorkspace, PlatformResult], Awaitable[None]]
 FailureFinalizer = Callable[[WritingTaskWorkspace], Awaitable[None]]
 FailureNotifier = Callable[[str, str, str], Awaitable[None]]
@@ -500,6 +508,7 @@ class WritingTaskService:
             workspace.prepared.sender_userid,
             result_path,
             workspace.task_dir,
+            str(workspace.prepared.route.skill_id or ""),
         )
 
     def _submit_prepared(
@@ -729,8 +738,8 @@ class WritingTaskService:
         workspace: WritingTaskWorkspace,
         result: PlatformResult,
     ) -> list[dict[str, object]]:
-        output_file = self._result_output_file(workspace, result)
-        if output_file is None:
+        output_files = self._result_output_files(workspace, result)
+        if not output_files:
             return [
                 {
                     "kind": "text",
@@ -746,7 +755,7 @@ class WritingTaskService:
             message = format_text_reply(result)
         else:
             message = (result.message or "结果文件已生成。").strip()
-        return [
+        delivery_items: list[dict[str, object]] = [
             {
                 "kind": "text",
                 "item_id": "text-1",
@@ -754,40 +763,55 @@ class WritingTaskService:
                 "file": "",
                 "status": "pending",
             },
+        ]
+        delivery_items.extend(
             {
                 "kind": "attachment",
-                "item_id": "attachment-1",
+                "item_id": f"attachment-{index}",
                 "text": "",
                 "file": str(output_file.relative_to(workspace.task_dir)),
                 "status": "pending",
-            },
-        ]
+            }
+            for index, output_file in enumerate(output_files, start=1)
+        )
+        return delivery_items
 
     @staticmethod
-    def _result_output_file(
+    def _result_output_files(
         workspace: WritingTaskWorkspace,
         result: PlatformResult,
-    ) -> Path | None:
-        suffix = _WRITING_OUTPUT_SUFFIX_BY_SKILL.get(str(result.skill_id or ""))
-        if suffix is None or result.needs_clarification:
-            return None
-        raw_path = str(result.output.get("output_file", "") or "").strip()
-        if not raw_path:
-            return None
-        try:
-            path = Path(raw_path).resolve(strict=True)
-            output_root = (workspace.task_dir / "output").resolve(strict=True)
-            size = path.stat().st_size
-        except OSError:
-            return None
-        if (
-            not path.is_file()
-            or path.suffix.lower() != suffix
-            or not path.is_relative_to(output_root)
-            or size <= 0
-        ):
-            return None
-        return path
+    ) -> list[Path]:
+        field_specs = _WRITING_OUTPUT_FIELDS_BY_SKILL.get(
+            str(result.skill_id or "")
+        )
+        if field_specs is None or result.needs_clarification:
+            return []
+        output_root = (workspace.task_dir / "output").resolve(strict=True)
+        output_files: list[Path] = []
+        for field_name, suffix in field_specs:
+            raw_path = str(result.output.get(field_name, "") or "").strip()
+            if not raw_path:
+                if result.skill_id == "internal_weekly":
+                    raise ValueError("内参周报结果缺少核对稿或溯源清单")
+                return []
+            try:
+                path = Path(raw_path).resolve(strict=True)
+                size = path.stat().st_size
+            except OSError:
+                if result.skill_id == "internal_weekly":
+                    raise ValueError("内参周报结果文件不存在或不可读取")
+                return []
+            if (
+                not path.is_file()
+                or path.suffix.lower() != suffix
+                or not path.is_relative_to(output_root)
+                or size <= 0
+            ):
+                if result.skill_id == "internal_weekly":
+                    raise ValueError("内参周报结果文件无效")
+                return []
+            output_files.append(path)
+        return output_files
 
     @staticmethod
     def _result_from_checkpoint(checkpoint: dict[str, object]) -> PlatformResult:

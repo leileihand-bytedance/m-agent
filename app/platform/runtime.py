@@ -45,12 +45,13 @@ class PlatformRuntime:
             output["revision_note"] = revision_note.strip()
         if bool(getattr(result, "message_only", False)):
             output["message_only"] = True
-        output_file = getattr(result, "output_file", "")
-        if isinstance(output_file, str) and output_file.strip():
-            output["output_file"] = _validated_output_file(
-                output_file,
-                output_dir=str(route.inputs.get("output_dir", "") or ""),
-            )
+        for field_name in ("output_file", "manifest_file"):
+            output_file = getattr(result, field_name, "")
+            if isinstance(output_file, str) and output_file.strip():
+                output[field_name] = _validated_output_file(
+                    output_file,
+                    output_dir=str(route.inputs.get("output_dir", "") or ""),
+                )
         return PlatformResult(
             skill_id=skill.id,
             output=output,

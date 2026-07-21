@@ -1035,7 +1035,11 @@ def _looks_like_material_relation_command(content: str) -> bool:
 
 def _queued_acceptance_message(*, skill_id: str, created: bool, revision: bool = False) -> str:
     label = _ack_label_for_skill(skill_id)
-    result_label = "修改稿" if revision else "初稿"
+    result_label = (
+        "核对稿"
+        if skill_id == "internal_weekly"
+        else ("修改稿" if revision else "初稿")
+    )
     if created:
         return f"已进入{label}队列，完成后会自动发送{result_label}。"
     return f"这项{label}任务已经在处理中，无需重复提交。完成后会自动发送{result_label}。"
@@ -1229,6 +1233,7 @@ async def run_bot(config) -> None:
         recipient: str,
         path: Path,
         task_dir: Path,
+        skill_id: str,
     ) -> DeliveryOutcome:
         resolved_path = path.resolve(strict=True)
         output_root = (task_dir / "output").resolve(strict=True)
@@ -1245,7 +1250,7 @@ async def run_bot(config) -> None:
                 source="writing_task_delivery",
                 sender_userid=recipient,
                 sender_name=platform_app.resolve_sender_name(recipient),
-                skill_id="shenyinxie_news",
+                skill_id=skill_id,
                 job_id=task_dir.name,
                 manage_task_status=False,
             ),

@@ -123,6 +123,7 @@ def _service(
         _recipient: str,
         _path: Path,
         _task_dir: Path,
+        _skill_id: str,
     ) -> bool:
         return True
 
@@ -148,6 +149,11 @@ def _service(
 def test_shenyinxie_news_is_registered_as_queueable_writing_skill():
     assert "shenyinxie_news" in QUEUEABLE_WRITING_SKILLS
     assert WRITING_TASK_TYPE_BY_SKILL["shenyinxie_news"] == "writing_shenyinxie_news"
+
+
+def test_internal_weekly_is_registered_as_queueable_writing_skill():
+    assert "internal_weekly" in QUEUEABLE_WRITING_SKILLS
+    assert WRITING_TASK_TYPE_BY_SKILL["internal_weekly"] == "writing_internal_weekly"
 
 
 def test_writer2_is_not_registered_as_queueable_writing_skill():
@@ -181,8 +187,14 @@ def test_direct_report_word_delivery_keeps_chat_draft_and_sends_attachment(
         delivered.append(("text", text))
         return True
 
-    async def attachment_sender(_recipient: str, path: Path, task_dir: Path) -> bool:
+    async def attachment_sender(
+        _recipient: str,
+        path: Path,
+        task_dir: Path,
+        skill_id: str,
+    ) -> bool:
         assert path == task_dir / "output" / "直报正式文档.docx"
+        assert skill_id == "direct_report"
         delivered.append(("attachment", path.name))
         return True
 
@@ -229,8 +241,14 @@ def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path
         delivered.append(("text", text))
         return True
 
-    async def attachment_sender(_recipient: str, path: Path, task_dir: Path) -> bool:
+    async def attachment_sender(
+        _recipient: str,
+        path: Path,
+        task_dir: Path,
+        skill_id: str,
+    ) -> bool:
         assert path == task_dir / "output" / "深银协动态.docx"
+        assert skill_id == "shenyinxie_news"
         delivered.append(("attachment", path.name))
         return True
 
@@ -277,6 +295,185 @@ def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path
     ]
 
 
+def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        review_path = workspace.task_dir / "output" / "内参周报-内容核对稿.md"
+        manifest_path = workspace.task_dir / "output" / "内参周报-溯源清单.json"
+        review_path.write_text("# 内参周报", encoding="utf-8")
+        manifest_path.write_text("{}", encoding="utf-8")
+        return PlatformResult(
+            skill_id="internal_weekly",
+            output={
+                "output_file": str(review_path),
+                "manifest_file": str(manifest_path),
+            },
+            needs_clarification=False,
+            message="已生成内容核对稿和溯源清单，请完成人工核对。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(
+        _recipient: str,
+        path: Path,
+        task_dir: Path,
+        skill_id: str,
+    ) -> bool:
+        assert path.parent == task_dir / "output"
+        assert skill_id == "internal_weekly"
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-internal-weekly-001",
+        skill_id="internal_weekly",
+        text="生成本周内参周报",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    assert delivered == [
+        ("text", "已生成内容核对稿和溯源清单，请完成人工核对。"),
+        ("attachment", "内参周报-内容核对稿.md"),
+        ("attachment", "内参周报-溯源清单.json"),
+    ]
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [item["item_id"] for item in checkpoint["delivery_items"]] == [
+        "text-1",
+        "attachment-1",
+        "attachment-2",
+    ]
+    assert [item["status"] for item in checkpoint["delivery_items"]] == [
+        "confirmed_delivered",
+        "confirmed_delivered",
+        "confirmed_delivered",
+    ]
+
+
+def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(
+    tmp_path: Path,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    calls = {"process": 0, "text": 0, "attachments": []}
+    failures: list[str] = []
+
+    async def processor(workspace):
+        calls["process"] += 1
+        review_path = workspace.task_dir / "output" / "内参周报-内容核对稿.md"
+        manifest_path = workspace.task_dir / "output" / "内参周报-溯源清单.json"
+        review_path.write_text("# 内参周报", encoding="utf-8")
+        manifest_path.write_text("{}", encoding="utf-8")
+        return PlatformResult(
+            skill_id="internal_weekly",
+            output={
+                "output_file": str(review_path),
+                "manifest_file": str(manifest_path),
+            },
+            needs_clarification=False,
+            message="已生成内容核对稿和溯源清单。",
+        )
+
+    async def text_sender(_recipient: str, _text: str) -> bool:
+        calls["text"] += 1
+        return True
+
+    async def interrupted_attachment(
+        _recipient: str,
+        path: Path,
+        _task_dir: Path,
+        skill_id: str,
+    ) -> bool:
+        assert skill_id == "internal_weekly"
+        calls["attachments"].append(path.suffix)
+        if path.suffix == ".json":
+            raise asyncio.CancelledError
+        return True
+
+    async def failure_notifier(_recipient: str, code: str, _task_id: str) -> None:
+        failures.append(code)
+
+    first_service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=interrupted_attachment,
+        failure_notifier=failure_notifier,
+    )
+    submission = first_service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-internal-weekly-002",
+        skill_id="internal_weekly",
+        text="生成本周内参周报",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    async def scenario():
+        with pytest.raises(asyncio.CancelledError):
+            await first_service.handle(submission.task)
+
+        async def must_not_process(_workspace):
+            raise AssertionError("恢复交付时不应重新生成内参周报")
+
+        async def must_not_send_text(_recipient: str, _text: str) -> bool:
+            raise AssertionError("已确认发送的说明文字不应重复发送")
+
+        async def must_not_send_attachment(
+            _recipient: str,
+            _path: Path,
+            _task_dir: Path,
+            _skill_id: str,
+        ) -> bool:
+            raise AssertionError("发送状态不确定的附件不应自动重发")
+
+        restarted = _service(
+            repository=repository,
+            workspace_root=tmp_path / "workspaces",
+            processor=must_not_process,
+            text_sender=must_not_send_text,
+            attachment_sender=must_not_send_attachment,
+            failure_notifier=failure_notifier,
+        )
+        with pytest.raises(SafeTaskError) as error:
+            await restarted.handle(submission.task)
+        return error.value
+
+    error = asyncio.run(scenario())
+
+    assert error.safe_error_code == "delivery_status_uncertain"
+    assert calls == {"process": 1, "text": 1, "attachments": [".md", ".json"]}
+    assert failures == ["delivery_status_uncertain"]
+
+
 def test_shenyinxie_restart_does_not_repeat_delivered_text_or_uncertain_attachment(
     tmp_path: Path,
 ):
@@ -299,7 +496,12 @@ def test_shenyinxie_restart_does_not_repeat_delivered_text_or_uncertain_attachme
         calls["text"] += 1
         return True
 
-    async def interrupted_attachment(_recipient: str, _path: Path, _task_dir: Path) -> bool:
+    async def interrupted_attachment(
+        _recipient: str,
+        _path: Path,
+        _task_dir: Path,
+        _skill_id: str,
+    ) -> bool:
         calls["attachment"] += 1
         raise asyncio.CancelledError
 
@@ -340,6 +542,7 @@ def test_shenyinxie_restart_does_not_repeat_delivered_text_or_uncertain_attachme
             _recipient: str,
             _path: Path,
             _task_dir: Path,
+            _skill_id: str,
         ) -> bool:
             raise AssertionError("发送状态不确定的附件不应自动重发")
 
