@@ -156,6 +156,14 @@ def test_internal_weekly_is_registered_as_queueable_writing_skill():
     assert WRITING_TASK_TYPE_BY_SKILL["internal_weekly"] == "writing_internal_weekly"
 
 
+def test_research_synthesis_is_registered_as_queueable_writing_skill():
+    assert "research_synthesis" in QUEUEABLE_WRITING_SKILLS
+    assert (
+        WRITING_TASK_TYPE_BY_SKILL["research_synthesis"]
+        == "writing_research_synthesis"
+    )
+
+
 def test_writer2_is_not_registered_as_queueable_writing_skill():
     assert "writer2" not in QUEUEABLE_WRITING_SKILLS
     assert "writer2" not in WRITING_TASK_TYPE_BY_SKILL
@@ -373,6 +381,127 @@ def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
         "confirmed_delivered",
         "confirmed_delivered",
     ]
+
+
+def test_research_synthesis_checkpoints_completion_and_word_separately(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        output_path = workspace.task_dir / "output" / "综合调研初稿.docx"
+        output_path.write_bytes(b"word-result")
+        return PlatformResult(
+            skill_id="research_synthesis",
+            output={"output_file": str(output_path)},
+            needs_clarification=False,
+            message="综合调研初稿已生成。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(
+        _recipient: str,
+        path: Path,
+        task_dir: Path,
+        skill_id: str,
+    ) -> bool:
+        assert path == task_dir / "output" / "综合调研初稿.docx"
+        assert skill_id == "research_synthesis"
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-research-synthesis-001",
+        skill_id="research_synthesis",
+        text="开始写综合调研",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    assert delivered == [
+        ("text", "综合调研初稿已生成。"),
+        ("attachment", "综合调研初稿.docx"),
+    ]
+    checkpoint = json.loads(
+        (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [item["status"] for item in checkpoint["delivery_items"]] == [
+        "confirmed_delivered",
+        "confirmed_delivered",
+    ]
+    delivery_log = capsys.readouterr().out
+    assert "item_id=text-1 kind=text status=confirmed_delivered" in delivery_log
+    assert (
+        "item_id=attachment-1 kind=attachment status=confirmed_delivered"
+        in delivery_log
+    )
+    assert "综合调研初稿.docx" not in delivery_log
+
+
+@pytest.mark.parametrize("skill_id", ["research_synthesis", "shenyinxie_news"])
+def test_attachment_only_writing_skills_do_not_report_success_without_output(
+    tmp_path: Path,
+    skill_id: str,
+):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[str] = []
+
+    async def processor(_workspace):
+        return PlatformResult(
+            skill_id=skill_id,
+            output={"output_file": ""},
+            needs_clarification=False,
+            message="结果已经生成。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(text)
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id=f"message-{skill_id}-missing-output",
+        skill_id=skill_id,
+        text="开始生成",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    with pytest.raises(SafeTaskError) as error:
+        asyncio.run(service.handle(submission.task))
+
+    assert error.value.safe_error_code == "writing_processing_failed"
+    assert delivered == []
 
 
 def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(

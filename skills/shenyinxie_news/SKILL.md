@@ -126,7 +126,7 @@
 - `issue_number`：期次
 - `articles[]`：入选报道，每项含 `title`、`media_name`、`publish_date`、`body`、`original_url`、`content_mode`、`source_title` 和 `editor_note`
 - `sources[]`：原文链接列表
-- `output_file`：生成的 Word 文件路径；当调用方未提供 `output_dir` 或生成失败时为空
+- `output_file`：生成的 Word 文件路径；未提供 `output_dir` 或生成失败时工作流可返回为空，但生产写作持久队列会将空结果视为处理失败并触发重试和运维告警，不会只发完成提示后标记成功
 - `needs_clarification`：是否需要用户补充
 - `message`：面向用户的说明
 

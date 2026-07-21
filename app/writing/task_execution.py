@@ -38,11 +38,18 @@ from app.platform.task_status import update_task_status
 
 
 QUEUEABLE_WRITING_SKILLS = frozenset(
-    {"direct_report", "writer1", "shenyinxie_news", "internal_weekly"}
+    {
+        "direct_report",
+        "writer1",
+        "research_synthesis",
+        "shenyinxie_news",
+        "internal_weekly",
+    }
 )
 WRITING_TASK_TYPE_BY_SKILL = {
     "direct_report": "writing_direct_report",
     "writer1": "writing_writer1",
+    "research_synthesis": "writing_research_synthesis",
     "shenyinxie_news": "writing_shenyinxie_news",
     "internal_weekly": "writing_internal_weekly",
 }
@@ -51,12 +58,16 @@ WRITING_COST_CLASS = "writing_llm"
 _WRITING_OUTPUT_FIELDS_BY_SKILL = {
     "direct_report": (("output_file", ".docx"),),
     "writer1": (("output_file", ".docx"),),
+    "research_synthesis": (("output_file", ".docx"),),
     "shenyinxie_news": (("output_file", ".docx"),),
     "internal_weekly": (
         ("output_file", ".md"),
         ("manifest_file", ".json"),
     ),
 }
+_REQUIRED_OUTPUT_SKILLS = frozenset(
+    {"research_synthesis", "shenyinxie_news", "internal_weekly"}
+)
 
 
 @dataclass(frozen=True)
@@ -451,6 +462,14 @@ class WritingTaskService:
             apply_delivery_outcome(raw_item, outcome)
             checkpoint["delivery_status"] = aggregate_delivery_status(delivery_items)
             self._write_checkpoint(workspace.task_dir, checkpoint)
+            print(
+                "写作任务交付状态: "
+                f"task_id={task.task_id} "
+                f"item_id={raw_item.get('item_id', '')} "
+                f"kind={raw_item.get('kind', '')} "
+                f"status={outcome.status}",
+                flush=True,
+            )
             if outcome.status == DELIVERY_UNKNOWN:
                 update_task_status(
                     workspace.task_dir,
@@ -788,18 +807,19 @@ class WritingTaskService:
             return []
         output_root = (workspace.task_dir / "output").resolve(strict=True)
         output_files: list[Path] = []
+        requires_output = result.skill_id in _REQUIRED_OUTPUT_SKILLS
         for field_name, suffix in field_specs:
             raw_path = str(result.output.get(field_name, "") or "").strip()
             if not raw_path:
-                if result.skill_id == "internal_weekly":
-                    raise ValueError("内参周报结果缺少核对稿或溯源清单")
+                if requires_output:
+                    raise ValueError("写作结果缺少必需附件")
                 return []
             try:
                 path = Path(raw_path).resolve(strict=True)
                 size = path.stat().st_size
             except OSError:
-                if result.skill_id == "internal_weekly":
-                    raise ValueError("内参周报结果文件不存在或不可读取")
+                if requires_output:
+                    raise ValueError("写作结果附件不存在或不可读取")
                 return []
             if (
                 not path.is_file()
@@ -807,8 +827,8 @@ class WritingTaskService:
                 or not path.is_relative_to(output_root)
                 or size <= 0
             ):
-                if result.skill_id == "internal_weekly":
-                    raise ValueError("内参周报结果文件无效")
+                if requires_output:
+                    raise ValueError("写作结果附件无效")
                 return []
             output_files.append(path)
         return output_files

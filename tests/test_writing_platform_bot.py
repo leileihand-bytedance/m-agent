@@ -720,7 +720,52 @@ async def test_internal_weekly_is_accepted_into_persistent_queue():
     )
     assert task_service.structured_submissions[0]["skill_id"] == "internal_weekly"
     assert ws_client.stream_replies[-1][2] == (
-        "已进入内参周报内容核对稿队列，完成后会自动发送核对稿。"
+        "已受理内参周报内容核对稿任务。需要检索并核验多类来源，"
+        "耗时会明显长于普通稿件；完成后会自动发送核对稿。"
+    )
+
+
+@pytest.mark.anyio
+async def test_research_synthesis_is_accepted_into_persistent_queue():
+    ws_client = FakeWsClient()
+    platform_app = FakePlatformApp(skill_id="research_synthesis")
+    intake_store = WritingIntakeStore()
+    task_service = FakeWritingTaskService()
+
+    intake_store.handle_text(
+        channel="wecom",
+        sender_userid="user-001",
+        text="帮我做综合调研材料整合",
+    )
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="调研提纲.docx", content=b"outline"),
+    )
+    intake_store.add_file(
+        channel="wecom",
+        sender_userid="user-001",
+        file=UploadedFile(filename="部门素材.docx", content=b"material"),
+    )
+
+    await handle_text_with_platform(
+        frame=_frame("开始写综合调研", msgid="message-research-synthesis-001"),
+        ws_client=ws_client,
+        platform_app=platform_app,
+        req_id_factory=lambda prefix: f"{prefix}-001",
+        intake_store=intake_store,
+        task_service=task_service,
+    )
+
+    assert platform_app.structured_calls == []
+    assert task_service.structured_submissions[0]["message_id"] == (
+        "message-research-synthesis-001"
+    )
+    assert task_service.structured_submissions[0]["skill_id"] == (
+        "research_synthesis"
+    )
+    assert ws_client.stream_replies[-1][2] == (
+        "已进入综合调研整合队列，完成后会自动发送初稿。"
     )
 
 

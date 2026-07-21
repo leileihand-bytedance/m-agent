@@ -586,7 +586,7 @@ def test_project_overview_builds_layered_capability_map_from_real_status_sources
     assert capabilities["brief_writing"].execution_mode == "persistent"
     assert capabilities["shenyinxie_news"].execution_mode == "persistent"
     assert capabilities["multi_file_review"].execution_mode == "persistent"
-    assert capabilities["research_synthesis"].execution_mode == "realtime"
+    assert capabilities["research_synthesis"].execution_mode == "persistent"
     assert capabilities["internal_weekly"].execution_mode == "persistent"
     assert capabilities["rewrite"].execution_mode == "realtime"
     assert capabilities["html_review"].status == "stable"

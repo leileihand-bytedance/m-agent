@@ -1041,6 +1041,11 @@ def _queued_acceptance_message(*, skill_id: str, created: bool, revision: bool =
         else ("修改稿" if revision else "初稿")
     )
     if created:
+        if skill_id == "internal_weekly":
+            return (
+                "已受理内参周报内容核对稿任务。需要检索并核验多类来源，"
+                "耗时会明显长于普通稿件；完成后会自动发送核对稿。"
+            )
         return f"已进入{label}队列，完成后会自动发送{result_label}。"
     return f"这项{label}任务已经在处理中，无需重复提交。完成后会自动发送{result_label}。"
 
