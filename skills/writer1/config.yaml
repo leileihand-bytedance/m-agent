@@ -31,4 +31,6 @@ outputs:
   - title
   - body
   - sources
+  - document_metadata
   - output_file
+  - message_only

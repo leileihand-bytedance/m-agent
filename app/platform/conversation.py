@@ -18,6 +18,7 @@ class DraftVersion:
     title: str
     body: str
     sources: tuple[str, ...]
+    document_metadata: dict[str, str]
     created_at: str
 
 
@@ -81,6 +82,9 @@ class ConversationStore:
             for item in list(result.output.get("sources") or [])
             if str(item).strip()
         )
+        document_metadata = _clean_document_metadata(
+            result.output.get("document_metadata")
+        )
         path = self._conversation_path(channel=channel, sender_userid=sender_userid)
         existing = _conversation_from_payload(_read_json(path))
         if existing and any(item.job_id == job_id for item in existing.draft_versions):
@@ -104,6 +108,7 @@ class ConversationStore:
                 title=title,
                 body=body,
                 sources=sources,
+                document_metadata=document_metadata,
                 created_at=now,
             )
         )
@@ -165,6 +170,7 @@ def _conversation_to_payload(state: ConversationState) -> dict[str, object]:
                 "title": item.title,
                 "body": item.body,
                 "sources": list(item.sources),
+                "document_metadata": item.document_metadata,
                 "created_at": item.created_at,
             }
             for item in state.draft_versions
@@ -198,6 +204,9 @@ def _conversation_from_payload(payload: dict[str, object]) -> ConversationState 
                 title=str(raw.get("title", "")),
                 body=str(raw.get("body", "")),
                 sources=tuple(str(item) for item in list(raw.get("sources") or []) if str(item).strip()),
+                document_metadata=_clean_document_metadata(
+                    raw.get("document_metadata")
+                ),
                 created_at=str(raw.get("created_at", "")),
             )
         )
@@ -232,3 +241,13 @@ def _conversation_from_payload(payload: dict[str, object]) -> ConversationState 
         revision_requests=tuple(revisions),
         last_updated_at=str(payload.get("last_updated_at", "")),
     )
+
+
+def _clean_document_metadata(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key)[:80]: str(item or "").strip()[:300]
+        for key, item in value.items()
+        if str(key).strip() and str(item or "").strip()
+    }

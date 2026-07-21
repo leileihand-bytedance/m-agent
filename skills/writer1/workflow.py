@@ -18,6 +18,13 @@ from app.policy_research import candidate_to_material
 from app.platform.tools import ToolGateway, ToolNotAllowedError
 from skills.material_priority import source_materials_have_quantitative_data
 from skills.revision_support import build_revision_payload, previous_sources
+from skills.writer1.document_metadata import (
+    extract_brief_document_metadata,
+    is_brief_document_metadata_only,
+    merge_brief_document_metadata,
+    requests_brief_signer_change,
+    strip_brief_document_metadata_instructions,
+)
 from skills.writer1.docx_output import (
     generate_brief_docx,
     is_brief_docx_export_only,
@@ -64,8 +71,10 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
     if not source_materials_have_quantitative_data(source_materials):
         materials.extend(_bank_materials(inputs=inputs, materials=list(source_materials), tools=tools))
     materials.extend(_policy_research_materials(inputs=inputs, materials=list(source_materials), tools=tools))
+    request_text = str(inputs.get("text", "") or "")
+    writing_instruction = strip_brief_document_metadata_instructions(request_text)
     planning_note = build_brief_plan(
-        str(inputs.get("text", "") or ""),
+        writing_instruction,
         materials,
         multi_source=multi_source,
         tools=tools,
@@ -75,7 +84,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
         payload={
             "skill_id": "writer1",
             "task": "writer1",
-            "instruction": inputs.get("text", ""),
+            "instruction": writing_instruction,
             "materials": materials,
             "planning_note": planning_note,
         },
@@ -83,9 +92,16 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
         sources=[str(item.get("url", "")) for item in materials if item.get("url")],
         default_message="已生成简报初稿。",
     )
+    result = result.model_copy(
+        update={
+            "document_metadata": extract_brief_document_metadata(
+                request_text
+            )
+        }
+    )
     return _with_docx_if_requested(
         result,
-        request_text=str(inputs.get("text", "") or ""),
+        request_text=request_text,
         output_dir=str(inputs.get("output_dir", "") or ""),
     )
 
@@ -94,12 +110,44 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
     previous_title = str(inputs.get("previous_title", "") or "")
     previous_body = str(inputs.get("previous_body", "") or "")
     revision_request = str(inputs.get("revision_request") or inputs.get("text") or "").strip()
+    previous_metadata = merge_brief_document_metadata(
+        inputs.get("previous_document_metadata")
+    )
+    metadata_updates = extract_brief_document_metadata(revision_request)
+    document_metadata = merge_brief_document_metadata(
+        previous_metadata,
+        metadata_updates,
+    )
+    if is_brief_document_metadata_only(revision_request):
+        signer_requested = requests_brief_signer_change(revision_request)
+        result = BriefResult(
+            title=previous_title,
+            body=previous_body,
+            sources=previous_sources(inputs),
+            document_metadata=document_metadata,
+            needs_clarification=not bool(previous_title.strip() and previous_body.strip()),
+            message=(
+                "签发人为模板固定项，未作修改。"
+                if signer_requested and not metadata_updates
+                else "已更新简报文档信息并生成正式 Word 文档。"
+            ),
+            message_only=signer_requested and not metadata_updates,
+        )
+        if signer_requested and not metadata_updates:
+            return result
+        return _with_docx_if_requested(
+            result,
+            request_text=revision_request,
+            output_dir=str(inputs.get("output_dir", "") or ""),
+            force=True,
+        )
     if is_brief_docx_export_only(revision_request):
         return _with_docx_if_requested(
             BriefResult(
                 title=previous_title,
                 body=previous_body,
                 sources=previous_sources(inputs),
+                document_metadata=document_metadata,
                 needs_clarification=not bool(previous_title.strip() and previous_body.strip()),
                 message=(
                     "已按上一稿生成简报正式 Word 文档。"
@@ -110,14 +158,22 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
             request_text=revision_request,
             output_dir=str(inputs.get("output_dir", "") or ""),
         )
+    content_revision_request = strip_brief_document_metadata_instructions(
+        revision_request
+    )
     revision_plan = build_revision_plan(
-        revision_request,
+        content_revision_request,
         previous_title=previous_title,
         previous_body=previous_body,
         tools=tools,
         skill_id="writer1",
     )
-    payload = build_revision_payload(inputs, skill_id="writer1")
+    content_inputs = dict(inputs)
+    content_inputs["text"] = strip_brief_document_metadata_instructions(
+        str(inputs.get("text", "") or "")
+    )
+    content_inputs["revision_request"] = content_revision_request
+    payload = build_revision_payload(content_inputs, skill_id="writer1")
     sources = previous_sources(inputs)
     if inputs.get("supplement_materials"):
         supplemental = _source_materials(inputs=inputs, tools=tools)
@@ -158,6 +214,7 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
         previous_title=previous_title,
         previous_body=previous_body,
     )
+    result = result.model_copy(update={"document_metadata": document_metadata})
     return _with_docx_if_requested(
         result,
         request_text=revision_request,
@@ -170,8 +227,11 @@ def _with_docx_if_requested(
     *,
     request_text: str,
     output_dir: str,
+    force: bool = False,
 ) -> BriefResult:
-    if result.needs_clarification or not should_generate_brief_docx(request_text):
+    if result.needs_clarification or (
+        not force and not should_generate_brief_docx(request_text)
+    ):
         return result
     if not output_dir.strip():
         raise ValueError("生成简报 Word 缺少当前任务输出目录")
@@ -179,6 +239,7 @@ def _with_docx_if_requested(
         title=result.title,
         body=result.body,
         output_dir=output_dir,
+        document_metadata=result.document_metadata,
     )
     return result.model_copy(update={"output_file": str(output_file)})
 

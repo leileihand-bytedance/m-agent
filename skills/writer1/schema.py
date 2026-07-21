@@ -20,7 +20,9 @@ class BriefResult(BaseModel):
     title: str
     body: str
     sources: list[str] = Field(default_factory=list)
+    document_metadata: dict[str, str] = Field(default_factory=dict)
     output_file: str = ""
+    message_only: bool = False
     needs_clarification: bool = False
     message: str = ""
 

@@ -935,6 +935,9 @@ class PlatformApp:
                 "previous_title": title,
                 "previous_body": body,
                 "previous_sources": list(previous["sources"]),
+                "previous_document_metadata": dict(
+                    previous.get("document_metadata", {})
+                ),
                 "urls": list(extra_inputs.get("urls") or []),
                 "files": list(extra_inputs.get("files") or []),
                 "material_text": str(extra_inputs.get("material_text", "") or ""),
@@ -1021,6 +1024,9 @@ class PlatformApp:
                 for item in list(previous.output.get("sources") or [])
                 if str(item).strip()
             ],
+            "document_metadata": _clean_document_metadata(
+                previous.output.get("document_metadata")
+            ),
         }
 
     def _record_task_card_result(
@@ -1122,6 +1128,9 @@ class PlatformApp:
                 "previous_title": title,
                 "previous_body": body,
                 "previous_sources": list(previous["sources"]),
+                "previous_document_metadata": dict(
+                    previous.get("document_metadata", {})
+                ),
                 "urls": [],
                 "files": [],
                 "material_text": "",
@@ -1190,6 +1199,7 @@ class PlatformApp:
                     "title": draft.title,
                     "body": draft.body,
                     "sources": list(draft.sources),
+                    "document_metadata": dict(draft.document_metadata),
                 }
 
         previous = self._job_store.find_latest_result_for_user(
@@ -1209,6 +1219,9 @@ class PlatformApp:
                 for item in list(previous.output.get("sources") or [])
                 if str(item).strip()
             ],
+            "document_metadata": _clean_document_metadata(
+                previous.output.get("document_metadata")
+            ),
         }
 
 
@@ -1379,6 +1392,7 @@ def _resume_context(route: RoutedRequest) -> dict[str, object]:
         "previous_title",
         "previous_body",
         "previous_sources",
+        "previous_document_metadata",
         "task_relation",
         "target_task_id",
         "parent_task_id",
@@ -1387,6 +1401,16 @@ def _resume_context(route: RoutedRequest) -> dict[str, object]:
         if key in route.inputs:
             allowed[key] = route.inputs[key]
     return allowed
+
+
+def _clean_document_metadata(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key)[:80]: str(item or "").strip()[:300]
+        for key, item in value.items()
+        if str(key).strip() and str(item or "").strip()
+    }
 
 
 def _extract_structure(body: str) -> str:
@@ -1424,6 +1448,8 @@ def _parse_material_role(value: str, *, relation: TaskRelation) -> MaterialRole:
 
 
 def _format_result_for_log(result: PlatformResult) -> str:
+    if result.output.get("message_only") is True:
+        return result.message
     title = str(result.output.get("title", "") or "").strip()
     body = str(result.output.get("body", "") or "").strip()
     revision_note = str(result.output.get("revision_note", "") or "").strip()

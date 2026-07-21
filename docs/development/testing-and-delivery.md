@@ -361,10 +361,10 @@ uv run --locked pytest tests/test_brief_quality.py tests/test_brief_quality_regr
 修改简报 Word 模板或正式文档交付时，额外运行：
 
 ```bash
-uv run --locked pytest tests/test_brief_docx_output.py tests/test_platform_task_relations.py tests/test_platform_runtime.py tests/test_writing_task_execution.py -v
+uv run --locked pytest tests/test_brief_docx_output.py tests/test_brief_docx_metadata.py tests/test_platform_conversation.py tests/test_platform_task_relations.py tests/test_platform_runtime.py tests/test_writing_task_execution.py -v
 ```
 
-模板测试必须确认只替换唯一的标题和正文占位区，正文按自然段写入，除 `word/document.xml` 外的包部件逐字节保持不变；只导出上一稿时不得调用模型。自动化通过后还要生成一份接近 1000 字的样稿，逐页渲染，并复核 A4 页面、边距、红线、期号/日期/签发人/责任编辑、连续页码、无异常空页及文本完整性。项目母版必须与用户确认的参考模板哈希一致，生产运行不得读取桌面文件。
+模板测试必须确认只替换唯一的标题、正文和允许修改的文档字段，正文按自然段写入，签发人保持母版值，除 `word/document.xml` 外的包部件逐字节保持不变；只导出上一稿或只改期号、日期、责任编辑、联系电话时不得调用模型。还要验证文档字段跨任务结果、会话版本和待确认恢复持续保存，正文与字段同时修改时版式指令不进入模型。自动化通过后生成样稿逐页渲染，并复核 A4 页面、边距、红线、期号/日期/固定签发人/责任编辑、连续页码、无异常空页及文本完整性。项目母版必须与用户确认的参考模板哈希一致，生产运行不得读取桌面文件。
 
 ### 修改直报质量规则或回归样本
 

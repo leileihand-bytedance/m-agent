@@ -43,6 +43,8 @@ def extract_text_message(frame: dict[str, object]) -> WeComTextMessage:
 def format_text_reply(result: PlatformResult) -> str:
     if result.needs_clarification:
         return result.message
+    if result.output.get("message_only") is True:
+        return result.message or "处理完成。"
 
     title = str(result.output.get("title", "") or "").strip()
     body = str(result.output.get("body", "") or "").strip()

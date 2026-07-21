@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from importlib import import_module
 from pathlib import Path
 
@@ -31,9 +31,20 @@ class PlatformRuntime:
             "body": result.body,
             "sources": result.sources,
         }
+        document_metadata = getattr(result, "document_metadata", None)
+        if isinstance(document_metadata, Mapping):
+            clean_metadata = {
+                str(key)[:80]: str(value or "").strip()[:300]
+                for key, value in document_metadata.items()
+                if str(key).strip() and str(value or "").strip()
+            }
+            if clean_metadata:
+                output["document_metadata"] = clean_metadata
         revision_note = getattr(result, "revision_note", "")
         if isinstance(revision_note, str) and revision_note.strip():
             output["revision_note"] = revision_note.strip()
+        if bool(getattr(result, "message_only", False)):
+            output["message_only"] = True
         output_file = getattr(result, "output_file", "")
         if isinstance(output_file, str) and output_file.strip():
             output["output_file"] = _validated_output_file(
