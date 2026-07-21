@@ -358,6 +358,14 @@ uv run --locked pytest tests/test_brief_quality.py tests/test_brief_quality_regr
 
 简报统一实现还必须验证：`writer1` 能根据材料关系自动进入单素材、多素材整合或建议拆分；单素材和多素材的新任务、续改、权限及持久队列都只使用一个 ID；历史持久化结果中的退役 ID 读取后能继续续改；用户提示不区分单素材版和多素材版。
 
+修改简报 Word 模板或正式文档交付时，额外运行：
+
+```bash
+uv run --locked pytest tests/test_brief_docx_output.py tests/test_platform_task_relations.py tests/test_platform_runtime.py tests/test_writing_task_execution.py -v
+```
+
+模板测试必须确认只替换唯一的标题和正文占位区，正文按自然段写入，除 `word/document.xml` 外的包部件逐字节保持不变；只导出上一稿时不得调用模型。自动化通过后还要生成一份接近 1000 字的样稿，逐页渲染，并复核 A4 页面、边距、红线、期号/日期/签发人/责任编辑、连续页码、无异常空页及文本完整性。项目母版必须与用户确认的参考模板哈希一致，生产运行不得读取桌面文件。
+
 ### 修改直报质量规则或回归样本
 
 至少跑：

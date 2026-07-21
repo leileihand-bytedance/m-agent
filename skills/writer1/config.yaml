@@ -31,3 +31,4 @@ outputs:
   - title
   - body
   - sources
+  - output_file

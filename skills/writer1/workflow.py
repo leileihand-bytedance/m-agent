@@ -18,6 +18,11 @@ from app.policy_research import candidate_to_material
 from app.platform.tools import ToolGateway, ToolNotAllowedError
 from skills.material_priority import source_materials_have_quantitative_data
 from skills.revision_support import build_revision_payload, previous_sources
+from skills.writer1.docx_output import (
+    generate_brief_docx,
+    is_brief_docx_export_only,
+    should_generate_brief_docx,
+)
 from skills.writer1.schema import BriefResult, BriefRevisionPlanResult
 
 
@@ -66,7 +71,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
         tools=tools,
         skill_id="writer1",
     )
-    return _generate_and_validate(
+    result = _generate_and_validate(
         payload={
             "skill_id": "writer1",
             "task": "writer1",
@@ -78,12 +83,33 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
         sources=[str(item.get("url", "")) for item in materials if item.get("url")],
         default_message="已生成简报初稿。",
     )
+    return _with_docx_if_requested(
+        result,
+        request_text=str(inputs.get("text", "") or ""),
+        output_dir=str(inputs.get("output_dir", "") or ""),
+    )
 
 
 def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
     previous_title = str(inputs.get("previous_title", "") or "")
     previous_body = str(inputs.get("previous_body", "") or "")
     revision_request = str(inputs.get("revision_request") or inputs.get("text") or "").strip()
+    if is_brief_docx_export_only(revision_request):
+        return _with_docx_if_requested(
+            BriefResult(
+                title=previous_title,
+                body=previous_body,
+                sources=previous_sources(inputs),
+                needs_clarification=not bool(previous_title.strip() and previous_body.strip()),
+                message=(
+                    "已按上一稿生成简报正式 Word 文档。"
+                    if previous_title.strip() and previous_body.strip()
+                    else "没有找到可导出的上一稿，请先完成简报写作。"
+                ),
+            ),
+            request_text=revision_request,
+            output_dir=str(inputs.get("output_dir", "") or ""),
+        )
     revision_plan = build_revision_plan(
         revision_request,
         previous_title=previous_title,
@@ -123,7 +149,7 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
         + "\n\n"
         + render_revision_plan(revision_plan)
     )
-    return _generate_and_validate(
+    result = _generate_and_validate(
         payload=payload,
         tools=tools,
         sources=list(dict.fromkeys(sources)),
@@ -132,6 +158,29 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
         previous_title=previous_title,
         previous_body=previous_body,
     )
+    return _with_docx_if_requested(
+        result,
+        request_text=revision_request,
+        output_dir=str(inputs.get("output_dir", "") or ""),
+    )
+
+
+def _with_docx_if_requested(
+    result: BriefResult,
+    *,
+    request_text: str,
+    output_dir: str,
+) -> BriefResult:
+    if result.needs_clarification or not should_generate_brief_docx(request_text):
+        return result
+    if not output_dir.strip():
+        raise ValueError("生成简报 Word 缺少当前任务输出目录")
+    output_file = generate_brief_docx(
+        title=result.title,
+        body=result.body,
+        output_dir=output_dir,
+    )
+    return result.model_copy(update={"output_file": str(output_file)})
 
 
 def _apply_material_role(materials: list[dict[str, object]], inputs: dict[str, object]) -> None:

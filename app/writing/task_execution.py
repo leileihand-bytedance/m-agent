@@ -47,7 +47,10 @@ WRITING_TASK_TYPE_BY_SKILL = {
 }
 WRITING_TASK_TYPES = tuple(WRITING_TASK_TYPE_BY_SKILL.values())
 WRITING_COST_CLASS = "writing_llm"
-_WRITING_OUTPUT_SUFFIX_BY_SKILL = {"shenyinxie_news": ".docx"}
+_WRITING_OUTPUT_SUFFIX_BY_SKILL = {
+    "writer1": ".docx",
+    "shenyinxie_news": ".docx",
+}
 
 
 @dataclass(frozen=True)
@@ -738,7 +741,10 @@ class WritingTaskService:
             ]
         if self._attachment_sender is None:
             raise ValueError("带附件的写作任务未配置附件发送器")
-        message = (result.message or "结果文件已生成。").strip()
+        if result.skill_id in {"direct_report", "writer1"}:
+            message = format_text_reply(result)
+        else:
+            message = (result.message or "结果文件已生成。").strip()
         return [
             {
                 "kind": "text",

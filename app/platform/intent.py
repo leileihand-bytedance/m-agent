@@ -74,6 +74,13 @@ REVISION_MARKERS = (
     "篇幅",
     "控制一下",
     "作为正文",
+    "输出Word",
+    "输出word",
+    "导出Word",
+    "导出word",
+    "Word文档",
+    "word文档",
+    "正式文档",
 )
 CRITIQUE_MARKERS = (
     "新闻稿",
