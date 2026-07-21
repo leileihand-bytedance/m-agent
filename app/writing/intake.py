@@ -21,6 +21,7 @@ from app.platform.intake import (
 )
 from app.platform.models import UploadedFile
 from app.platform.router import URL_RE
+from app.platform.skill_ids import canonical_skill_id
 
 
 BRIEF_INTENT = "brief"
@@ -90,7 +91,7 @@ class IntakeDecision:
             IntakeTaskSubmission(
                 channel=channel,
                 sender_userid=sender_userid,
-                task_type=self.skill_id,
+                task_type=canonical_skill_id(self.skill_id) or self.skill_id,
                 instructions=instructions,
                 materials=tuple(materials),
             metadata={
@@ -642,8 +643,7 @@ def resolve_skill_id(session: WritingIntakeSession) -> str:
         return "direct_report"
     if session.intent == REWRITE_INTENT:
         return "rewrite"
-    material_count = len(session.materials)
-    return "writer2" if material_count >= 2 else "writer1"
+    return "writer1"
 
 
 def _add_text_materials(session: WritingIntakeSession, text: str, urls: tuple[str, ...]) -> int:
@@ -705,7 +705,6 @@ def _skill_label(skill_id: str) -> str:
     labels = {
         "direct_report": "直报写作",
         "writer1": "简报写作",
-        "writer2": "简报写作",
         "rewrite": "材料润色",
         "research_synthesis": "综合调研整合",
         "shenyinxie_news": "深银协动态",

@@ -26,15 +26,6 @@ def route_message(message: str, registry: SkillRegistry) -> RoutedRequest:
     normalized = message.strip()
     urls = URL_RE.findall(normalized)
 
-    if "简报" in normalized and len(urls) >= 2 and registry.get("writer2").enabled:
-        return RoutedRequest(
-            skill_id="writer2",
-            confidence=0.9,
-            needs_clarification=False,
-            message="已识别为简报写作。",
-            inputs={"text": normalized, "urls": urls},
-        )
-
     if _looks_like_inline_rewrite_task(normalized, registry):
         return RoutedRequest(
             skill_id="rewrite",

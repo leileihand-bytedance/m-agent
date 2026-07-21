@@ -8,7 +8,6 @@ from app.platform.registry import SkillRegistry  # noqa: E402
 
 def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     writer1 = Path("skills/writer1")
-    writer2 = Path("skills/writer2")
     rewrite = Path("skills/rewrite")
     research_synthesis = Path("skills/research_synthesis")
     internal_weekly = Path("skills/internal_weekly")
@@ -17,10 +16,8 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     assert (writer1 / "config.yaml").exists()
     assert not list((writer1 / "knowledge").glob("*.json"))
 
-    assert (writer2 / "SKILL.md").exists()
-    assert (writer2 / "config.yaml").exists()
     assert (writer1 / "workflow.py").exists()
-    assert (writer2 / "workflow.py").exists()
+    assert not Path("skills/writer2").exists()
     assert (rewrite / "SKILL.md").exists()
     assert (rewrite / "config.yaml").exists()
     assert (rewrite / "workflow.py").exists()
@@ -36,7 +33,7 @@ def test_writer_skills_are_installed_and_enabled_for_brief_flow():
     registry = SkillRegistry.from_directory(Path("skills"))
     enabled_skill_ids = {skill.id for skill in registry.list_enabled()}
     assert "writer1" in enabled_skill_ids
-    assert "writer2" in enabled_skill_ids
+    assert "writer2" not in enabled_skill_ids
     assert "direct_report" in enabled_skill_ids
     assert "rewrite" in enabled_skill_ids
     assert "research_synthesis" in enabled_skill_ids

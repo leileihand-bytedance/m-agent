@@ -75,7 +75,7 @@ def test_writing_decision_exposes_common_submission_protocol(tmp_path: Path):
     stored.write_bytes(b"pdf")
     decision = IntakeDecision(
         action="run",
-        skill_id="writer2",
+        skill_id="writer1",
         text="突出政策背景",
         material_text="第一份文字材料",
         urls=("https://example.com/one",),
@@ -86,7 +86,7 @@ def test_writing_decision_exposes_common_submission_protocol(tmp_path: Path):
 
     assert outcome.action is IntakeAction.SUBMIT
     assert outcome.submission is not None
-    assert outcome.submission.task_type == "writer2"
+    assert outcome.submission.task_type == "writer1"
     assert [item.kind.value for item in outcome.submission.materials] == ["text", "url", "file"]
 
 

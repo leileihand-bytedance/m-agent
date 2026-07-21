@@ -1708,7 +1708,7 @@ def test_repository_reports_active_tasks_for_selected_user_and_types(tmp_path: P
 
     assert store.has_active_task(
         user_id="user-001",
-        task_types={"writing_writer1", "writing_writer2"},
+        task_types={"writing_writer1"},
     ) is True
     assert store.has_active_task(
         user_id="other-user",

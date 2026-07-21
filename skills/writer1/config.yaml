@@ -6,6 +6,9 @@ triggers:
   - 简报
   - 写简报
   - 单素材简报
+  - 多素材简报
+  - 整合简报
+  - 多个素材写简报
 allowed_tools:
   - web_reader
   - bank_materials

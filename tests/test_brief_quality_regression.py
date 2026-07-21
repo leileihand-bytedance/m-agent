@@ -90,7 +90,7 @@ def test_semantic_planner_selects_facts_and_sections_from_the_ledger():
         ],
         multi_source=True,
         tools=gateway,
-        skill_id="writer2",
+        skill_id="writer1",
     )
 
     assert "语义策划：已完成" in plan
@@ -99,7 +99,7 @@ def test_semantic_planner_selects_facts_and_sections_from_the_ledger():
     assert "语义类型卡必须覆盖：外部趋势或业务需求、已有基础、能力建设路径和应用成效" in plan
     assert "F1" in plan and "F2" in plan
     assert seen_payloads[0]["output_type"] is BriefPlanResult
-    assert seen_payloads[0]["task"] == "writer2_plan"
+    assert seen_payloads[0]["task"] == "writer1_plan"
 
 
 def test_brief_length_over_1200_chars_is_a_hard_violation():

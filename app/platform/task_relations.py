@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.platform.intent import ConversationIntent, classify_conversation_intent
 from app.platform.router import URL_RE
+from app.platform.skill_ids import canonical_skill_id
 
 
 class TaskRelation(str, Enum):
@@ -214,6 +215,7 @@ class TaskRelationRepository:
         execution_task_id: str = "",
     ) -> TaskCard:
         _require_identity(task_id=task_id, channel=channel, user_id=user_id)
+        skill_id = canonical_skill_id(skill_id) or skill_id
         timestamp = _timestamp()
         clean_title = _safe_title(title, skill_id=skill_id)
         with closing(self._connect()) as conn:
@@ -516,6 +518,7 @@ class TaskRelationRepository:
         question: str,
     ) -> None:
         timestamp = _timestamp()
+        route_skill_id = canonical_skill_id(route_skill_id) or route_skill_id
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -559,7 +562,7 @@ class TaskRelationRepository:
             user_id=str(row["user_id"]),
             original_text=str(row["original_text"]),
             candidate_task_ids=tuple(str(item) for item in raw_candidates if str(item).strip()),
-            route_skill_id=str(row["route_skill_id"]),
+            route_skill_id=canonical_skill_id(str(row["route_skill_id"])) or "",
             has_new_material=bool(row["has_new_material"]),
             question=str(row["question"]),
             created_at=str(row["created_at"]),
@@ -777,13 +780,15 @@ class TaskRelationRepository:
         context = _json_loads(str(row["resume_context_json"]), default={})
         if not isinstance(context, dict):
             context = {}
+        if context.get("skill_id"):
+            context["skill_id"] = canonical_skill_id(str(context["skill_id"]))
         return TaskCard(
             task_id=str(row["task_id"]),
             channel=str(row["channel"]),
             user_id=str(row["user_id"]),
             display_order=int(row["display_order"]),
             title=str(row["title"]),
-            skill_id=str(row["skill_id"]),
+            skill_id=canonical_skill_id(str(row["skill_id"])) or "",
             status=TaskCardStatus(str(row["status"])),
             current_job_id=str(row["current_job_id"]),
             current_version=int(row["current_version"]),
@@ -1283,8 +1288,7 @@ def _task_match_score(text: str, card: TaskCard) -> float:
             score += len(title_parts & _ngrams(normalized_text, size)) * weight
     skill_markers = {
         "direct_report": ("直报", "报送"),
-        "writer1": ("简报", "单素材"),
-        "writer2": ("简报", "多素材", "整合"),
+        "writer1": ("简报", "单素材", "多素材", "整合"),
         "rewrite": ("润色", "改写"),
         "research_synthesis": ("调研", "整合"),
         "shenyinxie_news": ("深银协", "协会动态"),
@@ -1415,7 +1419,6 @@ def _safe_title(title: str, *, skill_id: str) -> str:
     labels = {
         "direct_report": "直报写作任务",
         "writer1": "简报写作任务",
-        "writer2": "简报写作任务",
         "rewrite": "材料润色任务",
         "research_synthesis": "综合调研整合任务",
         "shenyinxie_news": "深银协动态任务",

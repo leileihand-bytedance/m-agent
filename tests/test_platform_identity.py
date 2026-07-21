@@ -45,3 +45,18 @@ def test_access_policy_can_allow_unknown_users_for_local_development():
 
     assert policy.can_use_skill("unknown-user", "direct_report") is True
     assert policy.can_use_skill("unknown-user", "review") is False
+
+
+def test_access_policy_normalizes_legacy_brief_permission():
+    policy = AccessPolicy.from_dict(
+        {
+            "allow_unknown_users": True,
+            "default_allowed_skills": ["writer2"],
+            "users": {"user-001": {"allowed_skills": ["writer2", "writer1"]}},
+        }
+    )
+
+    assert policy.default_allowed_skills == ("writer1",)
+    assert policy.user_allowed_skills["user-001"] == ("writer1",)
+    assert policy.can_use_skill("user-001", "writer1") is True
+    assert policy.can_use_skill("unknown-user", "writer1") is True

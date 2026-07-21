@@ -138,7 +138,7 @@ def test_portal_service_submits_multiple_files_and_returns_reply():
         def handle_structured_request(self, **kwargs):
             self.calls.append(kwargs)
             return PlatformResult(
-                skill_id="writer2",
+                skill_id="writer1",
                 output={"title": "简报标题", "body": "简报正文", "sources": ["https://example.com/a"]},
                 needs_clarification=False,
                 message="",

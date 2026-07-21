@@ -33,6 +33,7 @@ from app.platform.registry import SkillRegistry
 from app.platform.router import URL_RE, route_message
 from app.platform.runtime import PlatformRuntime
 from app.platform.storage import JobContext, JobStore
+from app.platform.skill_ids import canonical_skill_id
 from app.platform.task_status import update_task_status
 from app.platform.task_relations import (
     MaterialRole,
@@ -1330,7 +1331,6 @@ def _initial_task_title(*, text: str, skill_id: str) -> str:
     labels = {
         "direct_report": "直报写作任务",
         "writer1": "简报写作任务",
-        "writer2": "简报写作任务",
         "rewrite": "材料润色任务",
         "research_synthesis": "综合调研整合任务",
         "shenyinxie_news": "深银协动态任务",
@@ -1491,31 +1491,7 @@ def _resolve_structured_skill_id(
     files: list[str],
     material_text: str,
 ) -> str:
+    requested_skill_id = canonical_skill_id(requested_skill_id) or requested_skill_id
     if requested_skill_id != "brief":
         return requested_skill_id
-    source_count = len(urls) + len(files)
-    stripped_material_text = material_text.strip()
-    if stripped_material_text:
-        split_count = len(_split_inline_materials(stripped_material_text))
-        source_count += split_count if split_count >= 2 else 1
-    return "writer2" if source_count >= 2 else "writer1"
-
-
-def _split_inline_materials(text: str) -> list[str]:
-    markers = ("素材一", "素材二", "素材三", "素材四", "材料一", "材料二", "材料三", "材料四")
-    pattern = "|".join(markers)
-    pieces: list[str] = []
-    current = ""
-    for chunk in re.split(f"({pattern})[，,:：、\\s]*", text):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        if chunk in markers:
-            if current.strip():
-                pieces.append(current.strip())
-            current = ""
-            continue
-        current = f"{current}\n{chunk}".strip() if current else chunk
-    if current.strip():
-        pieces.append(current.strip())
-    return [piece for piece in pieces if len(piece) >= 8]
+    return "writer1"

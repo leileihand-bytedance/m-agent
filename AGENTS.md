@@ -59,7 +59,6 @@ skills/<skill_id>/workflow.py
 
 - `direct_report`
 - `writer1`
-- `writer2`
 - `rewrite`
 - `research_synthesis`
 - `shenyinxie_news`

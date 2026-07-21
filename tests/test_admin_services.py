@@ -153,11 +153,11 @@ def test_policy_users_can_be_listed_and_updated(tmp_path):
     assert users == {"test-user": ["direct_report"]}
 
     set_user_skills(policy_path, "test-user", ["direct_report", "writer1"])
-    set_user_skills(policy_path, "new-user", ["writer2"])
+    set_user_skills(policy_path, "new-user", ["writer1"])
 
     users = list_policy_users(policy_path)
     assert users["test-user"] == ["direct_report", "writer1"]
-    assert users["new-user"] == ["writer2"]
+    assert users["new-user"] == ["writer1"]
 
 
 def test_list_jobs_reads_recent_job_meta_and_result(tmp_path):

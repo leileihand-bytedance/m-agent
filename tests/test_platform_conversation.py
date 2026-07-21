@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -107,3 +108,32 @@ def test_conversation_store_does_not_duplicate_same_job_after_worker_restart(tmp
 
     assert conversation is not None
     assert [item.job_id for item in conversation.draft_versions] == ["job-001"]
+
+
+def test_conversation_store_normalizes_legacy_brief_skill_id(tmp_path):
+    root = tmp_path / "conversations"
+    store = ConversationStore(root)
+    store.record_result(
+        channel="wecom",
+        sender_userid="user-001",
+        job_id="job-001",
+        result=PlatformResult(
+            skill_id="writer2",
+            output={"title": "简报", "body": "正文"},
+            needs_clarification=False,
+            message="",
+        ),
+    )
+    state_path = next(root.glob("*.json"))
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["active_skill_id"] == "writer1"
+    assert payload["draft_versions"][0]["skill_id"] == "writer1"
+    payload["active_skill_id"] = "writer2"
+    payload["draft_versions"][0]["skill_id"] = "writer2"
+    state_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    state = store.get_active_conversation(channel="wecom", sender_userid="user-001")
+
+    assert state is not None
+    assert state.active_skill_id == "writer1"
+    assert state.current_draft.skill_id == "writer1"

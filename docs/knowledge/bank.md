@@ -132,7 +132,6 @@ uv run --locked python -m app.bank_knowledge.cli import-folder "/path/to/authori
 ```text
 skills/direct_report/
 skills/writer1/
-skills/writer2/
 skills/rewrite/
 ```
 

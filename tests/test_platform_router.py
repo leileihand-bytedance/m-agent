@@ -36,21 +36,21 @@ def test_router_matches_writer1_for_normal_brief():
     assert route.inputs["urls"] == ["https://example.com/a"]
 
 
-def test_router_prefers_writer2_for_multi_material_brief():
+def test_router_uses_writer1_for_explicit_multi_material_brief():
     registry = SkillRegistry.from_directory(Path("skills"))
 
     route = route_message("帮我把这几个链接写成多素材简报：https://example.com/a https://example.com/b", registry)
 
-    assert route.skill_id == "writer2"
+    assert route.skill_id == "writer1"
     assert route.needs_clarification is False
 
 
-def test_router_uses_writer2_for_brief_with_multiple_links_even_without_explicit_keyword():
+def test_router_uses_writer1_for_brief_with_multiple_links():
     registry = SkillRegistry.from_directory(Path("skills"))
 
     route = route_message("请根据这两个链接写简报：https://example.com/a https://example.com/b", registry)
 
-    assert route.skill_id == "writer2"
+    assert route.skill_id == "writer1"
     assert route.needs_clarification is False
 
 

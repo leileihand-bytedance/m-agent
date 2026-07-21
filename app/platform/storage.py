@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.platform.models import PlatformResult
+from app.platform.skill_ids import canonical_skill_id
 from app.platform.task_status import classify_writing_result, write_task_status
 
 
@@ -98,7 +99,9 @@ class JobStore:
         if not isinstance(output, dict):
             raise ValueError(f"写作任务结果格式错误：{job.job_id}")
         return PlatformResult(
-            skill_id=str(payload["skill_id"]) if payload.get("skill_id") is not None else None,
+            skill_id=canonical_skill_id(
+                str(payload["skill_id"]) if payload.get("skill_id") is not None else None
+            ),
             output=output,
             needs_clarification=bool(payload.get("needs_clarification", False)),
             message=str(payload.get("message", "")),
@@ -109,7 +112,7 @@ class JobStore:
         result_path.write_text(
             json.dumps(
                 {
-                    "skill_id": result.skill_id,
+                    "skill_id": canonical_skill_id(result.skill_id),
                     "needs_clarification": result.needs_clarification,
                     "message": result.message,
                     "output": result.output,
@@ -170,7 +173,9 @@ class JobStore:
                 sender_userid=str(meta.get("sender_userid", "")),
                 sender_name=str(meta.get("sender_name", meta.get("sender_userid", ""))),
                 created_at=str(meta.get("created_at", "")),
-                skill_id=str(result["skill_id"]) if result.get("skill_id") is not None else None,
+                skill_id=canonical_skill_id(
+                    str(result["skill_id"]) if result.get("skill_id") is not None else None
+                ),
                 needs_clarification=bool(result.get("needs_clarification", False)),
                 message=str(result.get("message", "")),
                 output=result.get("output", {}) if isinstance(result.get("output", {}), dict) else {},
@@ -216,7 +221,9 @@ class JobStore:
                 sender_userid=sender_userid,
                 sender_name=str(meta.get("sender_name", sender_userid)),
                 created_at=str(meta.get("created_at", "")),
-                skill_id=str(result["skill_id"]) if result.get("skill_id") is not None else None,
+                skill_id=canonical_skill_id(
+                    str(result["skill_id"]) if result.get("skill_id") is not None else None
+                ),
                 needs_clarification=bool(result.get("needs_clarification", False)),
                 message=str(result.get("message", "")),
                 output=output if isinstance(output, dict) else {},

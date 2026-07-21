@@ -7,7 +7,7 @@
 | 能力 | Skill / 模块 | 说明 |
 |---|---|---|
 | 直报写作 | `skills/direct_report/` | 根据链接、文字或文件生成直报，并支持基于上一稿继续修改 |
-| 简报写作 | `skills/writer1/` | 自动处理单素材、多素材整合和弱关联拆分；`writer2` 仅保留兼容 ID |
+| 简报写作 | `skills/writer1/` | 单一 Skill 自动处理单素材、多素材整合和弱关联拆分 |
 | 材料润色 | `skills/rewrite/` | 对用户粘贴文字做保守润色并继续改稿 |
 | 综合调研整合 | `skills/research_synthesis/` | 按现成提纲整合多部门 Word/PDF/PPTX 材料并输出 Word |
 | 深银协动态 | `skills/shenyinxie_news/` | 按指定半月搜索、筛选微众银行正面报道并生成 Word |

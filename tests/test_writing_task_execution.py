@@ -150,6 +150,12 @@ def test_shenyinxie_news_is_registered_as_queueable_writing_skill():
     assert WRITING_TASK_TYPE_BY_SKILL["shenyinxie_news"] == "writing_shenyinxie_news"
 
 
+def test_writer2_is_not_registered_as_queueable_writing_skill():
+    assert "writer2" not in QUEUEABLE_WRITING_SKILLS
+    assert "writer2" not in WRITING_TASK_TYPE_BY_SKILL
+    assert "writing_writer2" not in WRITING_TASK_TYPES
+
+
 def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path):
     repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
     delivered: list[tuple[str, str]] = []

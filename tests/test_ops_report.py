@@ -79,7 +79,7 @@ def test_build_daily_report_summarizes_chat_logs_and_ops_events(tmp_path):
     assert "成功完成：1" in report
     assert "需用户补充：1" in report
     assert "失败：1" in report
-    assert "writer1：1" in report
-    assert "writer2：1" in report
+    assert "writer1：2" in report
+    assert "writer2" not in report
     assert "direct_report：1" in report
     assert "写作处理失败：1" in report

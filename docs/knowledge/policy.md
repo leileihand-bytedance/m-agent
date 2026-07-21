@@ -68,7 +68,7 @@
   -> app.policy_knowledge.store
   -> ../M-Agent-Files/knowledge/policy/policies.sqlite3
   -> platform 工具 policy_research / policy_materials / policy_search
-  -> direct_report / writer1 / writer2
+  -> direct_report / writer1
 ```
 
 ## 本地更新
@@ -123,7 +123,7 @@ policy_materials
 policy_search
 ```
 
-`policy_research` 是第一阶段统一政策挂靠判断入口，当前给 `direct_report`、`writer1`、`writer2` 使用。它只回答四件事：
+`policy_research` 是第一阶段统一政策挂靠判断入口，当前给 `direct_report`、`writer1` 使用。它只回答四件事：
 
 - 能不能挂
 - 挂哪条政策
@@ -132,7 +132,7 @@ policy_search
 
 如有必要，它还会返回 1-2 条备选政策。写作怎么开头、怎么自然转入微众、怎么结尾抬升，仍由各自 skill 决定。
 
-`policy_materials` 是 SQLite 政策库材料包入口，当前主要给 `writer1` / `writer2` 使用。它会：
+`policy_materials` 是 SQLite 政策库材料包入口，当前主要给 `writer1` 使用。它会：
 
 - 根据用户材料识别政策主题。
 - 构造短检索词，而不是直接用全文搜索。
@@ -168,7 +168,7 @@ direct_report：
   -> 共享 policy_research（direct_report profile）
   -> 命中时只补 1 条主政策材料
 
-writer1 / writer2：
+writer1：
 用户素材
   -> bank_materials
   -> 共享 policy_research（brief profile）
@@ -177,9 +177,9 @@ writer1 / writer2：
 
 其中：
 
-1. `direct_report`、`writer1`、`writer2` 现在都优先走共享 `policy_research`，统一回答“能不能挂、挂哪条、为什么、摘哪一句”。
+1. `direct_report`、`writer1` 现在都优先走共享 `policy_research`，统一回答“能不能挂、挂哪条、为什么、摘哪一句”。
 2. `direct_report` 仍然更保守：案件、活动、获奖、直播、判决等时间节点稿件会被 profile 直接挡掉，默认直入主题。
-3. `writer1` / `writer2` 的 profile 更宽，会在命中时返回主推荐和备选，但仍不把弱相关政策塞进上下文。
+3. `writer1` 的 profile 更宽，会在命中时返回主推荐和备选，但仍不把弱相关政策塞进上下文。
 4. `policy_materials` 仍保留，作为兼容材料包工具和低层调试入口。
 5. 如果本地政策库里没有贴切政策，系统默认不挂，不为了正式感硬补政策。
 
@@ -187,7 +187,6 @@ writer1 / writer2：
 
 - `direct_report`
 - `writer1`
-- `writer2`
 
 `direct_report` 当前执行顺序是：
 

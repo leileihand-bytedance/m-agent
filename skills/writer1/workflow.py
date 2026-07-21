@@ -144,8 +144,6 @@ def _uses_multi_source_mode(
     inputs: dict[str, object],
     materials: list[object],
 ) -> bool:
-    if str(inputs.get("_brief_mode", "") or "").strip() == "multi":
-        return True
     source_materials = [
         item
         for item in materials

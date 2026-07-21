@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from app.platform.skill_ids import canonical_skill_id
+
 
 @dataclass(frozen=True)
 class AccessPolicy:
@@ -20,17 +22,13 @@ class AccessPolicy:
             for userid, value in users_raw.items():
                 if not isinstance(value, dict):
                     continue
-                users[str(userid)] = tuple(
-                    str(item) for item in value.get("allowed_skills", []) if str(item).strip()
+                users[str(userid)] = _canonical_skill_ids(
+                    value.get("allowed_skills", [])
                 )
 
         return cls(
             allow_unknown_users=bool(raw.get("allow_unknown_users", False)),
-            default_allowed_skills=tuple(
-                str(item)
-                for item in raw.get("default_allowed_skills", [])
-                if str(item).strip()
-            ),
+            default_allowed_skills=_canonical_skill_ids(raw.get("default_allowed_skills", [])),
             user_allowed_skills=users,
         )
 
@@ -45,7 +43,7 @@ class AccessPolicy:
     def allow_all_for_skills(cls, skills: list[str] | tuple[str, ...]) -> "AccessPolicy":
         return cls(
             allow_unknown_users=True,
-            default_allowed_skills=tuple(skills),
+            default_allowed_skills=_canonical_skill_ids(skills),
             user_allowed_skills={},
         )
 
@@ -55,3 +53,10 @@ class AccessPolicy:
         if not self.allow_unknown_users:
             return False
         return skill_id in self.default_allowed_skills
+
+
+def _canonical_skill_ids(values: object) -> tuple[str, ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+    normalized = [canonical_skill_id(str(item)) for item in values if str(item).strip()]
+    return tuple(dict.fromkeys(item for item in normalized if item))

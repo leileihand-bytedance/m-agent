@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from app.platform.models import PlatformResult
+from app.platform.skill_ids import canonical_skill_id
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class ConversationStore:
     ) -> None:
         if result.needs_clarification or not result.skill_id:
             return
+        skill_id = canonical_skill_id(result.skill_id) or result.skill_id
 
         title = str(result.output.get("title", "") or "").strip()
         body = str(result.output.get("body", "") or "").strip()
@@ -86,7 +88,7 @@ class ConversationStore:
         effective_sender_name = sender_name or (existing.sender_name if existing else sender_userid)
 
         is_revision = bool(str(revision_request or "").strip())
-        if existing and is_revision and existing.active_skill_id == result.skill_id:
+        if existing and is_revision and existing.active_skill_id == skill_id:
             draft_versions = list(existing.draft_versions)
             revision_requests = list(existing.revision_requests)
         else:
@@ -98,7 +100,7 @@ class ConversationStore:
             DraftVersion(
                 version=version,
                 job_id=job_id,
-                skill_id=result.skill_id,
+                skill_id=skill_id,
                 title=title,
                 body=body,
                 sources=sources,
@@ -120,7 +122,7 @@ class ConversationStore:
             channel=channel,
             sender_userid=sender_userid,
             sender_name=effective_sender_name,
-            active_skill_id=result.skill_id,
+            active_skill_id=skill_id,
             draft_versions=tuple(draft_versions),
             revision_requests=tuple(revision_requests),
             last_updated_at=now,
@@ -192,7 +194,7 @@ def _conversation_from_payload(payload: dict[str, object]) -> ConversationState 
             DraftVersion(
                 version=int(raw.get("version", len(drafts) + 1) or len(drafts) + 1),
                 job_id=str(raw.get("job_id", "")),
-                skill_id=str(raw.get("skill_id", "")),
+                skill_id=canonical_skill_id(str(raw.get("skill_id", ""))) or "",
                 title=str(raw.get("title", "")),
                 body=str(raw.get("body", "")),
                 sources=tuple(str(item) for item in list(raw.get("sources") or []) if str(item).strip()),
@@ -222,7 +224,10 @@ def _conversation_from_payload(payload: dict[str, object]) -> ConversationState 
         channel=str(payload.get("channel", "")),
         sender_userid=str(payload.get("sender_userid", "")),
         sender_name=str(payload.get("sender_name", payload.get("sender_userid", ""))),
-        active_skill_id=str(payload.get("active_skill_id", drafts[-1].skill_id)),
+        active_skill_id=(
+            canonical_skill_id(str(payload.get("active_skill_id", drafts[-1].skill_id)))
+            or drafts[-1].skill_id
+        ),
         draft_versions=tuple(drafts),
         revision_requests=tuple(revisions),
         last_updated_at=str(payload.get("last_updated_at", "")),

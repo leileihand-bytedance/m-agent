@@ -634,9 +634,9 @@ async def test_handle_text_with_platform_uses_brief_ack_for_writer1():
 
 
 @pytest.mark.anyio
-async def test_handle_text_with_platform_uses_unified_brief_ack_for_writer2():
+async def test_handle_text_with_platform_uses_unified_brief_ack_for_multiple_materials():
     ws_client = FakeWsClient()
-    platform_app = FakePlatformApp(skill_id="writer2")
+    platform_app = FakePlatformApp(skill_id="writer1")
 
     await handle_text_with_platform(
         frame=_frame("写简报：https://example.com/a https://example.com/b"),
@@ -1209,9 +1209,9 @@ def test_rewrite_session_treats_long_text_with_intent_words_as_material():
 
 
 @pytest.mark.anyio
-async def test_handle_text_with_platform_uses_writer2_for_collected_multi_materials():
+async def test_handle_text_with_platform_uses_writer1_for_collected_multi_materials():
     ws_client = FakeWsClient()
-    platform_app = FakePlatformApp(skill_id="writer2")
+    platform_app = FakePlatformApp(skill_id="writer1")
     intake_store = WritingIntakeStore()
 
     await handle_text_with_platform(
@@ -1245,7 +1245,7 @@ async def test_handle_text_with_platform_uses_writer2_for_collected_multi_materi
 
     assert len(platform_app.structured_calls) == 1
     structured_call = platform_app.structured_calls[0]
-    assert structured_call["skill_id"] == "writer2"
+    assert structured_call["skill_id"] == "writer1"
     assert structured_call["urls"] == ["https://example.com/a", "https://example.com/b"]
     assert ws_client.stream_replies[-2][2] == "收到，正在按简报写作流程处理，请稍后……"
 
@@ -1768,12 +1768,12 @@ async def test_handle_text_with_platform_records_ops_event_on_link_read_clarific
     ws_client = FakeWsClient()
     platform_app = FakePlatformApp(
         result=PlatformResult(
-            skill_id="writer2",
+            skill_id="writer1",
             output={},
             needs_clarification=True,
             message="有链接读取失败，请确认是否继续使用已读取素材。",
         ),
-        skill_id="writer2",
+        skill_id="writer1",
     )
     ops_logger = OpsEventLogger(tmp_path / "ops_events")
 
@@ -1789,7 +1789,7 @@ async def test_handle_text_with_platform_records_ops_event_on_link_read_clarific
     assert len(events) == 1
     assert events[0].severity == "warning"
     assert events[0].subject == "链接读取失败待用户确认"
-    assert events[0].skill_id == "writer2"
+    assert events[0].skill_id == "writer1"
 
 
 @pytest.mark.anyio

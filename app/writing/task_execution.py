@@ -26,6 +26,7 @@ from app.platform.gateway.wecom import format_text_reply
 from app.platform.models import PlatformResult, RoutedRequest, UploadedFile
 from app.platform.model_reliability import ModelCallError
 from app.platform.storage import JobContext
+from app.platform.skill_ids import canonical_skill_id
 from app.platform.task_execution import (
     SafeTaskError,
     TaskHandlerResult,
@@ -37,12 +38,11 @@ from app.platform.task_status import update_task_status
 
 
 QUEUEABLE_WRITING_SKILLS = frozenset(
-    {"direct_report", "writer1", "writer2", "shenyinxie_news"}
+    {"direct_report", "writer1", "shenyinxie_news"}
 )
 WRITING_TASK_TYPE_BY_SKILL = {
     "direct_report": "writing_direct_report",
     "writer1": "writing_writer1",
-    "writer2": "writing_writer2",
     "shenyinxie_news": "writing_shenyinxie_news",
 }
 WRITING_TASK_TYPES = tuple(WRITING_TASK_TYPE_BY_SKILL.values())
@@ -115,6 +115,7 @@ class WritingTaskService:
         text: str,
         ack_message: str = "",
     ) -> WritingTaskSubmission:
+        skill_id = canonical_skill_id(skill_id) or skill_id
         self._validate_submission(skill_id=skill_id, message_id=message_id)
         existing = self._existing_submission(
             channel=channel,
@@ -154,6 +155,7 @@ class WritingTaskService:
         parent_task_id: str = "",
         material_role: str = "",
     ) -> WritingTaskSubmission:
+        skill_id = canonical_skill_id(skill_id) or skill_id
         self._validate_submission(skill_id=skill_id, message_id=message_id)
         existing = self._existing_submission(
             channel=channel,

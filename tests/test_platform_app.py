@@ -54,7 +54,7 @@ def _relation_app(tmp_path, *, tools=None):
         conversation_store=ConversationStore(tmp_path / "conversations"),
         task_relation_service=_relation_service(tmp_path),
         access_policy=AccessPolicy.allow_all_for_skills(
-            ["direct_report", "writer1", "writer2", "rewrite"]
+            ["direct_report", "writer1", "rewrite"]
         ),
     )
 
@@ -1023,7 +1023,7 @@ def test_platform_app_runs_writer1_end_to_end_with_policy_materials(tmp_path):
             or {"title": "微众银行提升小微企业金融服务质效", "body": "简报正文"},
         },
         job_store=JobStore(tmp_path),
-        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1", "writer2"]),
+        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1"]),
     )
 
     result = app.handle_text_message(
@@ -1044,7 +1044,7 @@ def test_platform_app_runs_writer1_end_to_end_with_policy_materials(tmp_path):
     assert recorded["skill_id"] == "writer1"
 
 
-def test_platform_app_runs_writer2_when_trigger_is_specific(tmp_path):
+def test_platform_app_runs_writer1_for_multi_material_brief(tmp_path):
     app = PlatformApp(
         registry=SkillRegistry.from_directory(Path("skills")),
         tools={
@@ -1054,7 +1054,7 @@ def test_platform_app_runs_writer2_when_trigger_is_specific(tmp_path):
             "llm_writer": lambda payload: {"title": "微众银行多素材简报标题", "body": "多素材正文"},
         },
         job_store=JobStore(tmp_path),
-        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1", "writer2"]),
+        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1"]),
     )
 
     result = app.handle_text_message(
@@ -1063,7 +1063,7 @@ def test_platform_app_runs_writer2_when_trigger_is_specific(tmp_path):
         text="帮我写多素材简报：https://example.com/a https://example.com/b",
     )
 
-    assert result.skill_id == "writer2"
+    assert result.skill_id == "writer1"
     assert result.output["title"] == "微众银行多素材简报标题"
 
 
@@ -1089,7 +1089,7 @@ def test_platform_app_handles_structured_brief_submission_with_uploaded_files(tm
             or {"title": "微众银行多素材简报标题", "body": "多素材正文"},
         },
         job_store=JobStore(tmp_path),
-        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1", "writer2"]),
+        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1"]),
     )
 
     result = app.handle_structured_request(
@@ -1104,7 +1104,7 @@ def test_platform_app_handles_structured_brief_submission_with_uploaded_files(tm
         ],
     )
 
-    assert result.skill_id == "writer2"
+    assert result.skill_id == "writer1"
     assert result.output["title"] == "微众银行多素材简报标题"
     assert len(seen_payloads[0]["materials"]) == 3
     assert [item["title"] for item in seen_payloads[0]["materials"]] == [
@@ -1122,7 +1122,7 @@ def test_platform_app_rejects_unsupported_uploaded_files(tmp_path):
         registry=SkillRegistry.from_directory(Path("skills")),
         tools={},
         job_store=JobStore(tmp_path),
-        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1", "writer2"]),
+        access_policy=AccessPolicy.allow_all_for_skills(["direct_report", "writer1"]),
     )
 
     try:

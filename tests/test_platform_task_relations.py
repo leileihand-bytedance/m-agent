@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -179,6 +180,35 @@ def test_repository_keeps_multiple_cards_and_versions_isolated_by_user(tmp_path:
     assert "工作成效" in card_a.content_summary
     assert repository.version_job_id("task-a", 1) == "task-a-job-1"
     assert repository.version_job_id("task-a", 2) == "task-a-job-2"
+
+
+def test_repository_normalizes_legacy_brief_skill_id(tmp_path: Path):
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    _create_completed_task(
+        repository,
+        task_id="legacy-brief",
+        skill_id="writer2",
+        title="历史简报",
+        body="历史正文",
+    )
+    with sqlite3.connect(tmp_path / "relations.sqlite3") as conn:
+        stored_skill_id = conn.execute(
+            "SELECT skill_id FROM task_cards WHERE task_id = ?",
+            ("legacy-brief",),
+        ).fetchone()[0]
+        assert stored_skill_id == "writer1"
+        conn.execute(
+            "UPDATE task_cards SET skill_id = ? WHERE task_id = ?",
+            ("writer2", "legacy-brief"),
+        )
+
+    card = repository.get_task(
+        "legacy-brief",
+        channel="wecom",
+        user_id="user-001",
+    )
+
+    assert card.skill_id == "writer1"
 
 
 def test_background_completion_does_not_steal_the_users_selected_task(tmp_path: Path):

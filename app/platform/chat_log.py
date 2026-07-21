@@ -8,6 +8,7 @@ from typing import Any
 
 from app.platform.intent import ConversationIntent
 from app.platform.models import PlatformResult
+from app.platform.skill_ids import canonical_skill_id
 
 
 class ChatLogStore:
@@ -57,8 +58,8 @@ class ChatLogStore:
             "ack_message": _truncate(ack_message, self._max_reply_chars),
             "final_reply": _truncate(final_reply, self._max_reply_chars),
             "intent": intent.value,
-            "route_skill_id": route_skill_id,
-            "result_skill_id": result.skill_id,
+            "route_skill_id": canonical_skill_id(route_skill_id),
+            "result_skill_id": canonical_skill_id(result.skill_id),
             "needs_clarification": result.needs_clarification,
             "result_message": result.message,
             "draft_version": draft_version,

@@ -5,7 +5,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.platform.tools import ToolGateway
 from skills.writer1.workflow import run as run_writer1
-from skills.writer2.workflow import run as run_writer2
 
 
 def test_writer1_workflow_uses_policy_materials_and_skill_specific_writer():
@@ -132,7 +131,7 @@ def test_writer1_workflow_asks_for_readable_copy_when_document_has_no_text():
     assert "未读到有效正文" in result.message
 
 
-def test_writer2_workflow_asks_user_when_one_url_read_fails():
+def test_multi_source_workflow_asks_user_when_one_url_read_fails():
     gateway = ToolGateway(
         allowed_tools=("web_reader", "llm_writer"),
         tools={
@@ -152,7 +151,7 @@ def test_writer2_workflow_asks_user_when_one_url_read_fails():
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": "基于两个素材写简报",
             "urls": ["https://example.com/readable", "https://example.com/timeout"],
@@ -166,7 +165,7 @@ def test_writer2_workflow_asks_user_when_one_url_read_fails():
     assert "粘贴读取失败链接的正文" in result.message
 
 
-def test_writer2_continues_with_readable_material_after_user_confirms():
+def test_multi_source_workflow_continues_with_readable_material_after_user_confirms():
     gateway = ToolGateway(
         allowed_tools=("web_reader", "llm_writer"),
         tools={
@@ -187,7 +186,7 @@ def test_writer2_continues_with_readable_material_after_user_confirms():
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": "继续使用已读取素材写",
             "urls": ["https://example.com/readable", "https://example.com/timeout"],
@@ -199,7 +198,7 @@ def test_writer2_continues_with_readable_material_after_user_confirms():
     assert result.title == "微众银行提升小微企业融资服务效率"
 
 
-def test_writer2_workflow_revises_previous_draft_without_requiring_multiple_sources():
+def test_multi_source_workflow_revises_previous_draft_without_requiring_multiple_sources():
     seen_payloads = []
     gateway = ToolGateway(
         allowed_tools=("llm_writer",),
@@ -209,7 +208,7 @@ def test_writer2_workflow_revises_previous_draft_without_requiring_multiple_sour
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "revision": True,
             "revision_request": "补一段面向监管的意义",
@@ -318,7 +317,7 @@ def test_writer1_workflow_skips_bank_materials_when_user_material_already_has_da
     assert [item.get("source", "") for item in seen_payloads[0]["materials"]] == [""]
 
 
-def test_writer2_workflow_skips_bank_materials_when_user_materials_already_have_data():
+def test_multi_source_workflow_skips_bank_materials_when_user_materials_already_have_data():
     seen_payloads = []
     calls = []
     gateway = ToolGateway(
@@ -349,7 +348,7 @@ def test_writer2_workflow_skips_bank_materials_when_user_materials_already_have_
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": "请根据两个链接整合写简报",
             "urls": ["https://example.com/a", "https://example.com/b"],
@@ -414,7 +413,7 @@ def test_writer1_workflow_asks_for_material_when_input_is_too_short():
     assert "素材" in result.message
 
 
-def test_writer2_compatibility_workflow_uses_canonical_brief_rules():
+def test_multi_source_workflow_uses_canonical_brief_rules():
     seen_payloads = []
     gateway = ToolGateway(
         allowed_tools=("web_reader", "policy_materials", "llm_writer"),
@@ -426,7 +425,7 @@ def test_writer2_compatibility_workflow_uses_canonical_brief_rules():
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": "请写多素材简报：https://example.com/a https://example.com/b",
             "urls": ["https://example.com/a", "https://example.com/b"],
@@ -507,7 +506,7 @@ def test_writer1_unified_workflow_asks_to_split_weakly_related_sources():
     assert "不适合整合成一篇简报" in result.message
 
 
-def test_writer2_workflow_splits_inline_materials():
+def test_multi_source_workflow_splits_inline_materials():
     seen_payloads = []
     gateway = ToolGateway(
         allowed_tools=("policy_materials", "llm_writer"),
@@ -518,7 +517,7 @@ def test_writer2_workflow_splits_inline_materials():
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": (
                 "请写多素材简报：素材一，微众银行通过数字化方式提升小微企业融资服务效率。"
@@ -637,7 +636,7 @@ def test_writer1_workflow_passes_planning_note_and_rewrites_after_news_style_cri
     assert "新闻稿" in writer_calls[1]["revision_feedback"]
 
 
-def test_writer2_workflow_asks_to_split_when_sources_are_weakly_related():
+def test_multi_source_workflow_asks_to_split_when_sources_are_weakly_related():
     gateway = ToolGateway(
         allowed_tools=("web_reader", "policy_materials", "llm_writer"),
         tools={
@@ -659,7 +658,7 @@ def test_writer2_workflow_asks_to_split_when_sources_are_weakly_related():
         },
     )
 
-    result = run_writer2(
+    result = run_writer1(
         inputs={
             "text": "请整合两个链接写简报",
             "urls": ["https://example.com/a", "https://example.com/b"],

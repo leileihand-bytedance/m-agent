@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.platform.ops.events import read_ops_events
+from app.platform.skill_ids import canonical_skill_id
 
 
 def previous_workday(today: date) -> date:
@@ -29,7 +30,10 @@ def build_daily_report(*, target_day: date, chat_log_dir: Path, ops_events_dir: 
         if not item.get("error") and not item.get("needs_clarification")
     )
     skill_counter: Counter[str] = Counter(
-        str(item.get("result_skill_id") or item.get("route_skill_id") or "未识别")
+        canonical_skill_id(
+            str(item.get("result_skill_id") or item.get("route_skill_id") or "未识别")
+        )
+        or "未识别"
         for item in chat_entries
     )
     user_counter: Counter[str] = Counter(
@@ -63,7 +67,9 @@ def build_daily_report(*, target_day: date, chat_log_dir: Path, ops_events_dir: 
     if error_samples:
         lines.extend(["", "五、失败样例"])
         for item in error_samples:
-            skill = item.get("result_skill_id") or item.get("route_skill_id") or "未识别"
+            skill = canonical_skill_id(
+                str(item.get("result_skill_id") or item.get("route_skill_id") or "未识别")
+            ) or "未识别"
             user = item.get("sender_name") or item.get("sender_userid") or "unknown"
             error = str(item.get("error") or "").strip()
             lines.append(f"- {user} / {skill}：{error[:160]}")

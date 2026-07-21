@@ -165,3 +165,46 @@ def test_job_store_finds_latest_result_for_user_and_channel(tmp_path):
     assert latest.job_id == newer.job_id
     assert latest.skill_id == "direct_report"
     assert latest.output["title"] == "新标题"
+
+
+def test_job_store_normalizes_legacy_brief_skill_id(tmp_path):
+    store = JobStore(tmp_path)
+    job = store.create_job(
+        channel="wecom",
+        sender_userid="user-001",
+        message="历史简报",
+    )
+    store.write_result(
+        job,
+        PlatformResult(
+            skill_id="writer2",
+            output={"title": "新写入简报", "body": "正文"},
+            needs_clarification=False,
+            message="",
+        ),
+    )
+    written = json.loads((job.output_dir / "result.json").read_text(encoding="utf-8"))
+    assert written["skill_id"] == "writer1"
+
+    (job.output_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "skill_id": "writer2",
+                "needs_clarification": False,
+                "message": "",
+                "output": {"title": "历史简报", "body": "历史正文"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = store.read_result(job)
+    latest = store.find_latest_result_for_user(
+        sender_userid="user-001",
+        channel="wecom",
+    )
+
+    assert result.skill_id == "writer1"
+    assert latest is not None
+    assert latest.skill_id == "writer1"

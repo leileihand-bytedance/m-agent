@@ -180,7 +180,7 @@ uv run --locked pytest tests/test_review_ppt_extractor.py tests/test_review_ppt_
 
 重点验证：只提取任务目录内 `.pptx` 的可编辑文本框、表格和可读图表内容；图片文字和备注不进入审核；序号按对象、段落层级和连续列表分组，小数不当作序号；模型伪造页码、对象或原文会被丢弃；即使模型声称同口径，明确不同年份、时间范围、单位或目标/实际状态也不报跨页矛盾；同一首侧证据与不同第二侧证据不会被错误合并；PPT 包不导入其他业务审核引擎；用户可见问题说明不透传任何模型自由描述，“建议修改、推荐改成、最好写成、宜改成、需要改成、可考虑”等表达均不能进入结果；图表读取失败会显示页码提示；长结果按编号分段；常规语言批次不超过约 3000 字符（单个超长对象除外），`stop_reason=max_tokens` 会触发按对象拆半和结果合并，单对象仍超限时必须停止；普通网络或 JSON 错误不能误进拆分分支；处理中断后已完成顶层模型批次不重复调用，发送完成后不重复发送。首份经授权真实 PPT 已完成端到端实测；后续每轮仍要人工核对误报、漏报、页码、图表读取和企业微信展示，不能只依据自动化通过下结论。
 
-直报、`writer1`、`writer2` 接入写作持久任务后，还要运行：
+直报和 `writer1` 接入写作持久任务后，还要运行：
 
 ```bash
 uv run --locked pytest tests/test_writing_task_execution.py tests/test_writing_platform_bot.py tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_conversation.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
@@ -199,7 +199,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 
 ### 持久任务生产接入验收
 
-持久化执行器按任务类型分批接入。当前审核八类能力，以及直报、`writer1`、`writer2` 和 `shenyinxie_news` 已分别接入审核、写作专用 SQLite。多文件联合审核与深银协动态必须额外验证多个交付项的检查点：已经确认成功的摘要或附件不能因重启重复发送；进程在 `sending` 中断，或发送已发起但没有取得可判断回执时，必须转为 `delivery_unknown`、暂停自动重发并告警。`research_synthesis` 和 `internal_weekly` 仍走实时路径，不能因为共用入口就视为已切流。
+持久化执行器按任务类型分批接入。当前审核八类能力，以及直报、`writer1` 和 `shenyinxie_news` 已分别接入审核、写作专用 SQLite。多文件联合审核与深银协动态必须额外验证多个交付项的检查点：已经确认成功的摘要或附件不能因重启重复发送；进程在 `sending` 中断，或发送已发起但没有取得可判断回执时，必须转为 `delivery_unknown`、暂停自动重发并告警。`research_synthesis` 和 `internal_weekly` 仍走实时路径，不能因为共用入口就视为已切流。
 
 每个任务类型接入时都必须完成：
 
@@ -356,7 +356,7 @@ uv run --locked pytest tests/test_brief_quality.py tests/test_brief_quality_regr
 
 真实案例人工评测按 `docs/capabilities/brief-quality-regression.md` 执行。真实材料未获得明确数据传输授权时，只做本地阅读和离线规则测试，不调用外部模型。
 
-简报统一实现还必须验证：`writer1` 能根据材料关系自动进入单素材、多素材整合或建议拆分；`writer2` 兼容入口调用 `writer1` 的规则和提示词；两个 ID 的历史任务仍可续改和从持久队列恢复；用户提示不再区分单素材版和多素材版。
+简报统一实现还必须验证：`writer1` 能根据材料关系自动进入单素材、多素材整合或建议拆分；单素材和多素材的新任务、续改、权限及持久队列都只使用一个 ID；历史持久化结果中的退役 ID 读取后能继续续改；用户提示不区分单素材版和多素材版。
 
 ### 修改直报质量规则或回归样本
 
@@ -383,7 +383,7 @@ uv run --locked pytest tests/test_direct_report_guardrails.py tests/test_direct_
 uv run --locked pytest tests/test_research_synthesis_workflow.py tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_app.py tests/test_writing_platform_bot.py tests/test_platform_document_service.py -v
 ```
 
-重点确认：自然的“调研材料汇总”说法能进入正确流程；明确总提纲文件名和正文答复特征能排除部门反馈；证据不足时不按上传顺序猜提纲；追问期间原文件保留，用户回答后无需重新上传或再次发送“开始写”即可续跑；只有提纲而没有部门素材时追问；提纲和部门素材角色、规范化来源标签明确进入模型上下文；文件读取失败时不静默生成；第一阶段同时生成提纲类型、覆盖方式和证据台账，第二阶段只按验证后的台账成稿；问卷型逐项覆盖并补回遗漏必答主题，政策目录型只保留有可用证据的选定主题并过滤未选主题；`derived` 必须保留明确算式，`image_candidate`、`external_missing` 和无法匹配本次材料的来源必须不可用；台账外数字和缺失来源会标记人工核对；一级、二级标题统一为“一、”“（一）”，明确三级短标题允许保留 `1.`；来源长文件名被清理且多个来源合并到事实段末；图片提醒按部门核对总数并合并连续重复项；Word 不嵌入源图片，含开头结尾待补备注并通过现有公文格式检查；企业微信成功回传文件；现有 `writer1` / `writer2` 路由和多文件组装不受影响。真实上线前还要继续用经授权案例人工检查提纲分类、选材合理性、跨部门归并、安全合计、缺口和冲突标记，并逐页渲染检查 Word 版式；真实案例原文和数据不得进入自动化测试仓库。
+重点确认：自然的“调研材料汇总”说法能进入正确流程；明确总提纲文件名和正文答复特征能排除部门反馈；证据不足时不按上传顺序猜提纲；追问期间原文件保留，用户回答后无需重新上传或再次发送“开始写”即可续跑；只有提纲而没有部门素材时追问；提纲和部门素材角色、规范化来源标签明确进入模型上下文；文件读取失败时不静默生成；第一阶段同时生成提纲类型、覆盖方式和证据台账，第二阶段只按验证后的台账成稿；问卷型逐项覆盖并补回遗漏必答主题，政策目录型只保留有可用证据的选定主题并过滤未选主题；`derived` 必须保留明确算式，`image_candidate`、`external_missing` 和无法匹配本次材料的来源必须不可用；台账外数字和缺失来源会标记人工核对；一级、二级标题统一为“一、”“（一）”，明确三级短标题允许保留 `1.`；来源长文件名被清理且多个来源合并到事实段末；图片提醒按部门核对总数并合并连续重复项；Word 不嵌入源图片，含开头结尾待补备注并通过现有公文格式检查；企业微信成功回传文件；统一简报路由和多文件组装不受影响。真实上线前还要继续用经授权案例人工检查提纲分类、选材合理性、跨部门归并、安全合计、缺口和冲突标记，并逐页渲染检查 Word 版式；真实案例原文和数据不得进入自动化测试仓库。
 
 写作入口文件数量上限当前为 10 份，总大小上限仍为 20MB。测试必须覆盖前 10 份可接收、第 11 份被拒绝，以及自定义更小上限仍生效。
 
@@ -405,7 +405,7 @@ uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_i
 
 重点确认：
 
-- 直报和简报共用底座会话能力；简报的 `writer1`、`writer2` 兼容 ID 必须落入同一规则和 workflow。
+- 直报和简报共用底座会话能力；简报的单素材、多素材和历史续改必须落入 `writer1` 同一规则和 workflow。
 - 用户换说法仍能改当前稿。
 - 中间一次追问或失败不会覆盖当前稿。
 - 用户发新链接、新文件或明确要求新写时，不会误入改稿。

@@ -75,21 +75,9 @@ def test_canonical_brief_prompt_covers_multi_source_writing():
     assert "多素材" in prompt + skill + critic
 
 
-def test_writer2_keeps_only_a_compatibility_adapter():
-    writer2 = ROOT / "skills/writer2"
-    skill = (writer2 / "SKILL.md").read_text(encoding="utf-8")
-    workflow = (writer2 / "workflow.py").read_text(encoding="utf-8")
-
-    assert not list((writer2 / "prompts").glob("*.md"))
-    assert "兼容" in skill
-    assert "skills.writer1.workflow" in workflow
-    assert len(workflow.splitlines()) <= 15
-
-
 def test_brief_skills_do_not_keep_stale_or_exaggerated_guidance():
     writer1 = (ROOT / "skills/writer1/SKILL.md").read_text(encoding="utf-8")
-    writer2 = (ROOT / "skills/writer2/SKILL.md").read_text(encoding="utf-8")
-    combined = writer1 + writer2
+    combined = writer1
 
     assert "topic-selector" not in combined
     assert "knowledge/写作素材库.json" not in combined
