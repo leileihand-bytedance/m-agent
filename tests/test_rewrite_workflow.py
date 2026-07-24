@@ -106,6 +106,33 @@ def test_rewrite_workflow_revises_previous_result():
     assert "第一版润色正文" in seen_payloads[0]["materials"][0]["text"]
 
 
+def test_rewrite_paragraph_revision_preserves_unmentioned_paragraphs():
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda _payload: {
+                "title": "",
+                "body": "模型改了第一段。\n\n新的第二段。\n\n模型改了第三段。",
+                "revision_note": "调整了第二段。",
+            }
+        },
+    )
+
+    result = run(
+        inputs={
+            "revision": True,
+            "revision_request": "只改第二段，其他不变",
+            "previous_title": "",
+            "previous_body": "原第一段。\n\n原第二段。\n\n原第三段。",
+        },
+        tools=gateway,
+    )
+
+    assert result.body == "原第一段。\n\n新的第二段。\n\n原第三段。"
+    assert result.revision_plan["scope"] == "paragraph"
+    assert result.revision_plan["target_paragraphs"] == [2]
+
+
 def test_rewrite_workflow_rejects_links_and_files_in_v1():
     gateway = ToolGateway(allowed_tools=("llm_writer",), tools={})
 

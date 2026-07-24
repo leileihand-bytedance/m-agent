@@ -1,10 +1,9 @@
-from app.platform.tools import ToolGateway
-from skills.brief_revision import (
-    apply_revision_constraints,
-    build_revision_plan,
-    validate_revision_result,
+from app.platform.revision import (
+    RevisionEngine,
+    RevisionPlan,
+    RevisionPolicy,
 )
-from skills.writer1.schema import BriefRevisionPlanResult
+from app.platform.tools import ToolGateway
 
 
 PREVIOUS_TITLE = "微众银行持续提升科技管理效能"
@@ -16,10 +15,13 @@ PREVIOUS_BODY = (
 
 
 def test_explicit_second_paragraph_revision_preserves_title_and_other_paragraphs():
-    plan = build_revision_plan(
-        "第二段要先讲外部AI发展趋势，再讲我行结合技术积累打造工程化平台，其他不变",
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    prepared = RevisionEngine().prepare(
+        {
+            "revision_request": "第二段要先讲外部AI发展趋势，再讲我行结合技术积累打造工程化平台，其他不变",
+            "previous_title": PREVIOUS_TITLE,
+            "previous_body": PREVIOUS_BODY,
+        },
+        skill_id="writer1",
     )
     generated_body = (
         "模型改写了第一段。\n\n"
@@ -27,10 +29,7 @@ def test_explicit_second_paragraph_revision_preserves_title_and_other_paragraphs
         "模型也改写了第三段。"
     )
 
-    title, body = apply_revision_constraints(
-        plan,
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    title, body = prepared.apply(
         generated_title="模型擅自修改的标题",
         generated_body=generated_body,
     )
@@ -44,16 +43,16 @@ def test_explicit_second_paragraph_revision_preserves_title_and_other_paragraphs
 
 
 def test_title_only_revision_keeps_body_byte_for_byte():
-    plan = build_revision_plan(
-        "只改标题，正文不要动",
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    prepared = RevisionEngine().prepare(
+        {
+            "revision_request": "只改标题，正文不要动",
+            "previous_title": PREVIOUS_TITLE,
+            "previous_body": PREVIOUS_BODY,
+        },
+        skill_id="writer1",
     )
 
-    title, body = apply_revision_constraints(
-        plan,
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    title, body = prepared.apply(
         generated_title="微众银行依托AI工程化平台提升科技管理效能",
         generated_body="模型重写了全文。",
     )
@@ -81,32 +80,36 @@ def test_semantic_revision_planner_is_used_for_natural_language_actions():
         },
     )
 
-    plan = build_revision_plan(
-        "把技术积累和外部趋势的关系讲清楚，别动其他部分",
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
-        tools=gateway,
+    prepared = RevisionEngine().prepare(
+        {
+            "revision_request": "把技术积累和外部趋势的关系讲清楚，别动其他部分",
+            "previous_title": PREVIOUS_TITLE,
+            "previous_body": PREVIOUS_BODY,
+        },
         skill_id="writer1",
+        tools=gateway,
     )
 
-    assert plan.scope == "paragraph"
-    assert plan.target_paragraphs == [2]
-    assert seen_payloads[0]["output_type"] is BriefRevisionPlanResult
+    assert prepared.plan.scope == "paragraph"
+    assert prepared.plan.target_paragraphs == [2]
+    assert seen_payloads[0]["output_type"] is RevisionPlan
     assert seen_payloads[0]["task"] == "writer1_revision_plan"
 
 
 def test_revision_target_length_and_number_preservation_are_checked():
-    plan = build_revision_plan(
-        "全文压缩到700字左右，但不要改变事实和数据",
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    prepared = RevisionEngine(
+        policy=RevisionPolicy(min_target_length=100, max_target_length=1200)
+    ).prepare(
+        {
+            "revision_request": "全文压缩到700字左右，但不要改变事实和数据",
+            "previous_title": PREVIOUS_TITLE,
+            "previous_body": PREVIOUS_BODY,
+        },
+        skill_id="writer1",
     )
     revised_body = "深圳前海微众银行（以下简称“我行”）服务已覆盖150个场景。" + "继续推进相关工作。" * 80
 
-    violations = validate_revision_result(
-        plan,
-        previous_title=PREVIOUS_TITLE,
-        previous_body=PREVIOUS_BODY,
+    violations = prepared.validate(
         revised_title=PREVIOUS_TITLE,
         revised_body=revised_body,
     )

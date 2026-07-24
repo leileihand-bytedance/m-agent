@@ -1,6 +1,12 @@
 import re
 from pathlib import Path
 
+from app.platform.revision import (
+    PreparedRevision,
+    RevisionEngine,
+    RevisionPolicy,
+    format_revision_violations,
+)
 from app.platform.tools import ToolGateway, ToolNotAllowedError
 from skills.direct_report.critic import critic_check
 from skills.direct_report.docx_output import (
@@ -11,7 +17,6 @@ from skills.direct_report.docx_output import (
 from skills.direct_report.guardrails import validate_deterministic
 from skills.direct_report.policy_research import research_direct_report_policy
 from skills.direct_report.schema import DirectReportResult
-from skills.revision_support import build_revision_payload, previous_sources
 from skills.writing_planner import build_direct_report_plan
 
 
@@ -188,14 +193,25 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Dir
         result = DirectReportResult(
             title=str(inputs.get("previous_title", "") or "").strip(),
             body=str(inputs.get("previous_body", "") or "").strip(),
-            sources=previous_sources(inputs),
+            sources=[
+                str(item).strip()
+                for item in list(inputs.get("previous_sources") or [])
+                if str(item).strip()
+            ],
             needs_clarification=False,
             message="已按要求生成直报 Word 文档。",
         )
         return _add_word_output_if_requested(result, inputs)
 
-    payload = build_revision_payload(inputs, skill_id="direct_report")
-    sources = previous_sources(inputs)
+    revision = RevisionEngine(
+        policy=RevisionPolicy(min_target_length=100, max_target_length=5000)
+    ).prepare(
+        inputs,
+        skill_id="direct_report",
+        tools=tools,
+    )
+    payload = revision.payload
+    sources = list(revision.sources)
     if inputs.get("supplement_materials"):
         supplemental, read_errors = _source_materials(inputs=inputs, tools=tools)
         if read_errors:
@@ -213,15 +229,54 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Dir
             for item in supplemental
             if str(item.get("url", "")).strip()
         )
-    draft = tools.call("llm_writer", payload)
-    result = DirectReportResult(
-        title=str(draft.get("title", "")),
-        body=str(draft.get("body", "")),
+    result = _generate_revised_direct_report(
+        revision=revision,
+        payload=payload,
+        tools=tools,
         sources=list(dict.fromkeys(sources)),
-        needs_clarification=False,
-        message=str(draft.get("message", "已根据上一稿完成修改。") or "已根据上一稿完成修改。"),
     )
     return _add_word_output_if_requested(result, inputs)
+
+
+def _generate_revised_direct_report(
+    *,
+    revision: PreparedRevision,
+    payload: dict[str, object],
+    tools: ToolGateway,
+    sources: list[str],
+    feedback: str | None = None,
+) -> DirectReportResult:
+    draft_payload = dict(payload)
+    if feedback:
+        draft_payload["revision_feedback"] = feedback
+    draft = tools.call("llm_writer", draft_payload)
+    title, body = revision.apply(
+        generated_title=str(draft.get("title", "")),
+        generated_body=str(draft.get("body", "")),
+    )
+    violations = revision.validate(revised_title=title, revised_body=body)
+    if violations and feedback is None:
+        return _generate_revised_direct_report(
+            revision=revision,
+            payload=payload,
+            tools=tools,
+            sources=sources,
+            feedback=format_revision_violations(violations),
+        )
+    message = str(
+        draft.get("message", "已根据上一稿完成修改。")
+        or "已根据上一稿完成修改。"
+    )
+    if violations:
+        message = "已完成修改，但部分改稿要求仍需人工复核。"
+    return DirectReportResult(
+        title=title,
+        body=body,
+        sources=sources,
+        revision_plan=revision.plan.model_dump(mode="json"),
+        needs_clarification=False,
+        message=message,
+    )
 
 
 def _add_word_output_if_requested(

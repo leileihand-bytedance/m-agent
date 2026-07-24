@@ -67,7 +67,7 @@ def test_writer1_workflow_revises_previous_draft_without_refreshing_materials():
     result = run_writer1(
         inputs={
             "revision": True,
-            "revision_request": "把标题改得更正式",
+            "revision_request": "只改标题，正文不要动",
             "previous_title": "原简报标题",
             "previous_body": "原简报正文，包含事实与政策背景。",
             "previous_sources": ["https://example.com/news"],
@@ -78,6 +78,8 @@ def test_writer1_workflow_revises_previous_draft_without_refreshing_materials():
 
     assert result.needs_clarification is False
     assert result.title == "修改后简报标题"
+    assert result.body == "原简报正文，包含事实与政策背景。"
+    assert result.revision_plan["scope"] == "title"
     assert result.sources == ["https://example.com/news"]
     assert seen_payloads[0]["revision"] is True
     assert seen_payloads[0]["materials"][0]["source"] == "previous_draft"

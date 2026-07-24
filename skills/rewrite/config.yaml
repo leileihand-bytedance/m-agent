@@ -10,6 +10,7 @@ triggers:
   - 优化这段文字
 allowed_tools:
   - bank_materials
+  - llm_planner
   - llm_writer
 workflow: skills.rewrite.workflow:run
 supports_revision: true
@@ -19,3 +20,4 @@ inputs:
 outputs:
   - body
   - revision_note
+  - revision_plan

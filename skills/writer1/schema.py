@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 BriefType = Literal[
@@ -20,6 +21,10 @@ class BriefResult(BaseModel):
     title: str
     body: str
     sources: list[str] = Field(default_factory=list)
+    revision_plan: SkipJsonSchema[dict[str, object]] = Field(
+        default_factory=dict,
+        exclude=True,
+    )
     document_metadata: dict[str, str] = Field(default_factory=dict)
     output_file: str = ""
     message_only: bool = False
@@ -48,14 +53,3 @@ class BriefPlanResult(BaseModel):
     selected_fact_ids: list[str] = Field(default_factory=list)
     selected_data_ids: list[str] = Field(default_factory=list)
     excluded_details: list[str] = Field(default_factory=list)
-
-
-class BriefRevisionPlanResult(BaseModel):
-    scope: Literal["title", "paragraph", "whole"] = "whole"
-    target_paragraphs: list[int] = Field(default_factory=list)
-    preserve_title: bool = False
-    preserve_other_paragraphs: bool = False
-    target_length: int | None = Field(default=None, ge=100, le=1200)
-    preserve_facts_and_numbers: bool = False
-    required_changes: list[str] = Field(default_factory=list)
-    must_remove: list[str] = Field(default_factory=list)

@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class DirectReportViolation(BaseModel):
@@ -12,6 +13,10 @@ class DirectReportResult(BaseModel):
     title: str
     body: str
     sources: list[str] = Field(default_factory=list)
+    revision_plan: SkipJsonSchema[dict[str, object]] = Field(
+        default_factory=dict,
+        exclude=True,
+    )
     output_file: str = ""
     needs_clarification: bool = False
     message: str = ""

@@ -3,8 +3,13 @@ from __future__ import annotations
 import re
 import sqlite3
 
+from app.platform.revision import (
+    PreparedRevision,
+    RevisionEngine,
+    RevisionPolicy,
+    format_revision_violations,
+)
 from app.platform.tools import ToolGateway, ToolNotAllowedError
-from skills.revision_support import build_revision_payload
 from skills.rewrite.schema import RewriteResult
 
 
@@ -82,7 +87,18 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
 
 
 def _revise_previous_text(inputs: dict[str, object], tools: ToolGateway) -> RewriteResult:
-    payload = build_revision_payload(inputs, skill_id="rewrite")
+    revision = RevisionEngine(
+        policy=RevisionPolicy(
+            supports_title=False,
+            min_target_length=1,
+            max_target_length=20_000,
+        )
+    ).prepare(
+        inputs,
+        skill_id="rewrite",
+        tools=tools,
+    )
+    payload = revision.payload
     previous_body = str(inputs.get("previous_body", "") or "").strip()
     revision_request = str(inputs.get("revision_request", "") or inputs.get("text", "")).strip()
     materials = [item for item in list(payload.get("materials") or []) if isinstance(item, dict)]
@@ -98,9 +114,47 @@ def _revise_previous_text(inputs: dict[str, object], tools: ToolGateway) -> Rewr
             str(payload.get("instruction", "") or ""),
             has_references=True,
         )
-    payload["output_type"] = RewriteResult
-    draft = tools.call("llm_writer", payload)
-    return _normalize_result(draft)
+    return _generate_revised_text(
+        revision=revision,
+        payload=payload,
+        tools=tools,
+    )
+
+
+def _generate_revised_text(
+    *,
+    revision: PreparedRevision,
+    payload: dict[str, object],
+    tools: ToolGateway,
+    feedback: str | None = None,
+) -> RewriteResult:
+    draft_payload = dict(payload)
+    draft_payload["output_type"] = RewriteResult
+    if feedback:
+        draft_payload["revision_feedback"] = feedback
+    result = _normalize_result(tools.call("llm_writer", draft_payload))
+    _title, body = revision.apply(
+        generated_title="",
+        generated_body=result.body,
+    )
+    violations = revision.validate(revised_title="", revised_body=body)
+    if violations and feedback is None:
+        return _generate_revised_text(
+            revision=revision,
+            payload=payload,
+            tools=tools,
+            feedback=format_revision_violations(violations),
+        )
+    message = result.message
+    if violations:
+        message = "已完成修改，但部分改稿要求仍需人工复核。"
+    return result.model_copy(
+        update={
+            "body": body,
+            "message": message,
+            "revision_plan": revision.plan.model_dump(mode="json"),
+        }
+    )
 
 
 def _source_material(source_text: str) -> dict[str, object]:

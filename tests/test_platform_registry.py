@@ -28,7 +28,11 @@ def test_registry_loads_enabled_rewrite_skill():
     assert skill.id == "rewrite"
     assert skill.name == "材料润色"
     assert skill.enabled is True
-    assert skill.allowed_tools == ("bank_materials", "llm_writer")
+    assert skill.allowed_tools == (
+        "bank_materials",
+        "llm_planner",
+        "llm_writer",
+    )
     assert skill.workflow == "skills.rewrite.workflow:run"
     assert skill.supports_revision is True
 

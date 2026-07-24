@@ -5,6 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.platform.pydantic_runtime import PydanticAIWriter
+from app.platform.revision import RevisionPlan
 from skills.direct_report.schema import DirectReportResult
 from skills.rewrite.schema import RewriteResult
 from skills.writer1.schema import BriefPlanResult
@@ -60,6 +61,20 @@ def test_pydantic_writer_schema_hint_lists_generic_output_fields():
     assert "brief_type" in hint
     assert "selected_fact_ids" in hint
     assert "excluded_details" in hint
+
+
+def test_internal_revision_plan_is_not_exposed_to_writing_model_schema():
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=lambda *args: None,
+    )
+
+    assert "revision_plan" not in RewriteResult.model_json_schema()["properties"]
+    assert "revision_plan" not in DirectReportResult.model_json_schema()["properties"]
+    assert "revision_plan" not in writer._schema_hint(RewriteResult)
 
 
 def test_pydantic_writer_uses_shared_timeout_and_bounded_retry():
@@ -259,6 +274,67 @@ def test_pydantic_writer_loads_skill_rules_from_payload_skill_id():
     assert "素材关系与写作模式" in calls["instructions"]
     assert "直报写作 Skill" not in calls["instructions"]
     assert "素材正文" in fake_agent.last_prompt
+
+
+def test_pydantic_writer_uses_whitelisted_platform_revision_prompt():
+    fake_agent = _FakeAgent(
+        RevisionPlan(
+            scope="paragraph",
+            target_paragraphs=[2],
+            preserve_title=True,
+            preserve_other_paragraphs=True,
+        )
+    )
+    calls = {}
+
+    def agent_factory(model, output_type, instructions, model_settings=None):
+        calls["instructions"] = instructions
+        return fake_agent
+
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=agent_factory,
+    )
+
+    result = writer.write(
+        {
+            "skill_id": "direct_report",
+            "task": "direct_report_revision_plan",
+            "platform_prompt": "revision-plan",
+            "output_type": RevisionPlan,
+            "instruction": "只改第二段",
+            "materials": [
+                {"title": "上一稿", "text": "第一段。\n\n第二段。", "source": "previous_draft"}
+            ],
+        }
+    )
+
+    assert result["scope"] == "paragraph"
+    assert "# 公共改稿动作解析" in calls["instructions"]
+    assert "# 直报初稿提示词" not in calls["instructions"]
+    assert "直报写作 Skill" in calls["instructions"]
+
+
+def test_pydantic_writer_rejects_unknown_platform_prompt():
+    writer = PydanticAIWriter(
+        api_key="test-key",
+        base_url="https://example.com/anthropic",
+        model_name="test-model",
+        skill_dir=Path("skills"),
+        agent_factory=lambda *args: None,
+    )
+
+    with pytest.raises(ValueError, match="不支持的底座公共提示词"):
+        writer._build_instructions(
+            {
+                "skill_id": "direct_report",
+                "platform_prompt": "../unexpected",
+            },
+            RevisionPlan,
+        )
 
 
 def test_pydantic_writer_includes_planning_note_in_prompt():

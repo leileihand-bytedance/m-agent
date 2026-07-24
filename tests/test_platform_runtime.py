@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 
 import pytest
@@ -47,6 +48,50 @@ def test_runtime_returns_clarification_for_unknown_route():
     assert result.skill_id is None
     assert result.needs_clarification is True
     assert "写直报" in result.message
+
+
+def test_runtime_preserves_bounded_revision_plan(monkeypatch):
+    monkeypatch.setattr(
+        "skills.direct_report.workflow.run",
+        lambda inputs, tools: SimpleNamespace(
+            title="修改后的标题",
+            body="未被点名的正文保持不变。",
+            sources=[],
+            revision_plan={
+                "scope": "title",
+                "target_paragraphs": [],
+                "preserve_title": False,
+                "preserve_other_paragraphs": True,
+                "target_length": None,
+                "preserve_facts_and_numbers": False,
+                "required_changes": ["只改标题，正文不要动"],
+                "must_remove": [],
+                "untrusted_extra": "不能进入持久任务结果",
+            },
+            needs_clarification=False,
+            message="已完成修改。",
+        ),
+    )
+    runtime = PlatformRuntime(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={},
+    )
+
+    result = runtime.run(
+        RoutedRequest(
+            skill_id="direct_report",
+            confidence=1.0,
+            needs_clarification=False,
+            message="",
+            inputs={},
+        )
+    )
+
+    assert result.output["revision_plan"]["scope"] == "title"
+    assert result.output["revision_plan"]["required_changes"] == [
+        "只改标题，正文不要动"
+    ]
+    assert "untrusted_extra" not in result.output["revision_plan"]
 
 
 def test_runtime_preserves_generated_output_file(monkeypatch, tmp_path):

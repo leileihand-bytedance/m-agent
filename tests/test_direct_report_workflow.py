@@ -187,6 +187,32 @@ def test_direct_report_workflow_revises_previous_draft_without_refetching_source
     assert "原直报正文" in seen_payloads[0]["materials"][0]["text"]
 
 
+def test_direct_report_title_only_revision_preserves_previous_body():
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda _payload: {
+                "title": "修改后的直报标题",
+                "body": "模型擅自重写的正文。",
+            }
+        },
+    )
+
+    result = run(
+        inputs={
+            "revision": True,
+            "revision_request": "只改标题，正文不要动",
+            "previous_title": "原直报标题",
+            "previous_body": "原直报第一段。\n\n原直报第二段。",
+        },
+        tools=gateway,
+    )
+
+    assert result.title == "修改后的直报标题"
+    assert result.body == "原直报第一段。\n\n原直报第二段。"
+    assert result.revision_plan["scope"] == "title"
+
+
 def test_direct_report_revision_can_replace_facts_with_new_material():
     seen_payloads = []
     gateway = ToolGateway(

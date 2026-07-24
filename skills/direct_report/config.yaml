@@ -15,6 +15,7 @@ allowed_tools:
   - word_reader
   - pdf_reader
   - document_reader
+  - llm_planner
   - llm_writer
 workflow: skills.direct_report.workflow:run
 inputs:
@@ -25,5 +26,6 @@ outputs:
   - title
   - body
   - sources
+  - revision_plan
   - output_file
 supports_revision: true

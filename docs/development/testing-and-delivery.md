@@ -125,7 +125,7 @@ uv run --locked python scripts/project_docs.py check
 验证底座区：
 
 ```bash
-uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_delivery_recovery.py tests/test_platform_model_reliability.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_platform_readiness.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
+uv run --locked pytest tests/test_platform_registry.py tests/test_platform_router.py tests/test_platform_tools.py tests/test_platform_builtin_tools.py tests/test_platform_file_readers.py tests/test_platform_document_service.py tests/test_platform_document_enrichment.py tests/test_platform_data_paths.py tests/test_platform_intake.py tests/test_platform_intake_protocol.py tests/test_platform_task_relations.py tests/test_platform_task_execution.py tests/test_platform_task_status.py tests/test_platform_attachment_delivery.py tests/test_platform_delivery_recovery.py tests/test_platform_model_reliability.py tests/test_platform_revision.py tests/test_platform_pydantic_runtime.py tests/test_platform_runtime.py tests/test_platform_demo.py tests/test_platform_wecom_gateway.py tests/test_platform_storage.py tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_identity.py tests/test_platform_app.py tests/test_platform_cli.py tests/test_platform_readiness.py tests/test_user_registry.py tests/test_ops_events.py tests/test_ops_report.py tests/test_ops_notifier.py tests/test_ops_config.py tests/test_ops_bot_state.py tests/test_ops_heartbeat.py -v
 ```
 
 修改模型调用、结构化输出或联网搜索适配时，至少运行：
@@ -147,7 +147,7 @@ uv run --locked pytest tests/test_platform_intake.py tests/test_platform_intake_
 修改任务关系、多任务卡片或连续改稿时，至少额外运行：
 
 ```bash
-uv run --locked pytest tests/test_platform_task_relations.py tests/test_platform_app.py tests/test_platform_pydantic_runtime.py tests/test_writing_platform_bot.py tests/test_writing_task_execution.py tests/test_rewrite_bot.py -v
+uv run --locked pytest tests/test_platform_task_relations.py tests/test_platform_revision.py tests/test_platform_app.py tests/test_platform_pydantic_runtime.py tests/test_writing_platform_bot.py tests/test_writing_task_execution.py tests/test_rewrite_bot.py tests/test_direct_report_workflow.py tests/test_brief_revision.py tests/test_rewrite_workflow.py -v
 ```
 
 重点验证七类关系、补充/替换/参考/新任务四类材料角色、任务标题和序号定位、低置信度追问、追问后不重传材料、目标稿运行中等待、派生稿不覆盖父稿、重复消息不产生孤立任务卡片、进程重启恢复，以及 `channel + userid` 多用户隔离。脱敏自然语言样本保存在 `tests/fixtures/task_relation_cases.json`；新增线上误判时先加入该评测集，再修改规则、阈值或模型提示。
@@ -222,7 +222,7 @@ uv run --locked python -m app.rewrite_bot --check-config
 验证具体业务能力：
 
 ```bash
-uv run --locked pytest tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_revision_support.py -v
+uv run --locked pytest tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_direct_report_guardrails.py tests/test_direct_report_policy_gate.py tests/test_direct_report_quality_regression.py tests/test_writer_prompt_rules.py tests/test_brief_quality.py tests/test_brief_quality_regression.py tests/test_brief_revision.py tests/test_brief_writer_workflows.py tests/test_research_synthesis_workflow.py tests/test_shenyinxie_news_*.py tests/test_internal_weekly_*.py tests/test_installed_writer_skills.py tests/test_rewrite_workflow.py tests/test_platform_revision.py -v
 ```
 
 深银协动态还要重点验证：明确指定月份及上/下半月时使用对应发布日期范围；未明确时在任何搜索调用前追问；后台恢复追问后仍保持 `shenyinxie_news` 意图并合并用户回答；查询包含精确日期和成果主题；最终入选仍以原文页面发布日期、白名单和正文核验为准。人民日报旧版页面回归必须覆盖固定错误 `publishdate`，只有页面内期号路径双重印证时才采用真实期号日期；同稿去重必须忽略媒体站点追加的短标题尾缀。
@@ -409,12 +409,13 @@ uv run --locked pytest tests/test_platform_router.py tests/test_platform_runtime
 至少跑：
 
 ```bash
-uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_router.py tests/test_writing_platform_bot.py tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_brief_writer_workflows.py -v
+uv run --locked pytest tests/test_platform_conversation.py tests/test_platform_intent.py tests/test_platform_chat_log.py tests/test_platform_app.py tests/test_platform_storage.py tests/test_platform_router.py tests/test_platform_revision.py tests/test_platform_runtime.py tests/test_writing_platform_bot.py tests/test_direct_report_docx_output.py tests/test_direct_report_workflow.py tests/test_brief_revision.py tests/test_brief_writer_workflows.py tests/test_rewrite_workflow.py tests/test_rewrite_bot.py -v
 ```
 
 重点确认：
 
-- 直报和简报共用底座会话能力；简报的单素材、多素材和历史续改必须落入 `writer1` 同一规则和 workflow。
+- 直报、简报和材料润色共用 `RevisionEngine` 的改稿计划、未修改内容保护和结果自检；各自文种规则仍在对应 Skill。
+- 简报的单素材、多素材和历史续改必须落入 `writer1` 同一规则和 workflow。
 - 用户换说法仍能改当前稿。
 - 中间一次追问或失败不会覆盖当前稿。
 - 用户发新链接、新文件或明确要求新写时，不会误入改稿。

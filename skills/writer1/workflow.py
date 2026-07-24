@@ -1,11 +1,11 @@
 import re
 from pathlib import Path
 
-from skills.brief_revision import (
-    apply_revision_constraints,
-    build_revision_plan,
-    render_revision_plan,
-    validate_revision_result,
+from app.platform.revision import (
+    PreparedRevision,
+    RevisionEngine,
+    RevisionPolicy,
+    previous_sources,
 )
 from skills.brief_quality import (
     assess_multi_source_relation,
@@ -17,7 +17,6 @@ from skills.brief_quality import (
 from app.policy_research import candidate_to_material
 from app.platform.tools import ToolGateway, ToolNotAllowedError
 from skills.material_priority import source_materials_have_quantitative_data
-from skills.revision_support import build_revision_payload, previous_sources
 from skills.writer1.document_metadata import (
     extract_brief_document_metadata,
     is_brief_document_metadata_only,
@@ -30,7 +29,7 @@ from skills.writer1.docx_output import (
     is_brief_docx_export_only,
     should_generate_brief_docx,
 )
-from skills.writer1.schema import BriefResult, BriefRevisionPlanResult
+from skills.writer1.schema import BriefResult, BriefViolation
 
 
 def run(inputs: dict[str, object], tools: ToolGateway) -> BriefResult:
@@ -161,20 +160,20 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
     content_revision_request = strip_brief_document_metadata_instructions(
         revision_request
     )
-    revision_plan = build_revision_plan(
-        content_revision_request,
-        previous_title=previous_title,
-        previous_body=previous_body,
-        tools=tools,
-        skill_id="writer1",
-    )
     content_inputs = dict(inputs)
     content_inputs["text"] = strip_brief_document_metadata_instructions(
         str(inputs.get("text", "") or "")
     )
     content_inputs["revision_request"] = content_revision_request
-    payload = build_revision_payload(content_inputs, skill_id="writer1")
-    sources = previous_sources(inputs)
+    revision = RevisionEngine(
+        policy=RevisionPolicy(min_target_length=100, max_target_length=1200)
+    ).prepare(
+        content_inputs,
+        skill_id="writer1",
+        tools=tools,
+    )
+    payload = revision.payload
+    sources = list(revision.sources)
     if inputs.get("supplement_materials"):
         supplemental = _source_materials(inputs=inputs, tools=tools)
         if not _has_usable_materials(supplemental) or _has_read_errors(supplemental):
@@ -194,27 +193,26 @@ def _revise_previous_draft(inputs: dict[str, object], tools: ToolGateway) -> Bri
             for item in supplemental
             if str(item.get("url", "")).strip()
         )
-    payload["planning_note"] = (
-        build_brief_plan(
-            str(payload.get("instruction", "") or ""),
-            payload["materials"],
-            multi_source=_uses_multi_source_mode(inputs, payload["materials"]),
-            tools=tools,
-            skill_id="writer1",
-        )
-        + "\n\n"
-        + render_revision_plan(revision_plan)
+    payload["planning_note"] = build_brief_plan(
+        str(payload.get("instruction", "") or ""),
+        payload["materials"],
+        multi_source=_uses_multi_source_mode(inputs, payload["materials"]),
+        tools=tools,
+        skill_id="writer1",
     )
     result = _generate_and_validate(
         payload=payload,
         tools=tools,
         sources=list(dict.fromkeys(sources)),
         default_message="已根据上一稿完成简报修改。",
-        revision_plan=revision_plan,
-        previous_title=previous_title,
-        previous_body=previous_body,
+        revision=revision,
     )
-    result = result.model_copy(update={"document_metadata": document_metadata})
+    result = result.model_copy(
+        update={
+            "document_metadata": document_metadata,
+            "revision_plan": revision.plan.model_dump(mode="json"),
+        }
+    )
     return _with_docx_if_requested(
         result,
         request_text=revision_request,
@@ -270,9 +268,7 @@ def _generate_and_validate(
     sources: list[str],
     default_message: str,
     feedback: str | None = None,
-    revision_plan: BriefRevisionPlanResult | None = None,
-    previous_title: str = "",
-    previous_body: str = "",
+    revision: PreparedRevision | None = None,
 ) -> BriefResult:
     draft_payload = dict(payload)
     if feedback:
@@ -291,11 +287,8 @@ def _generate_and_validate(
             message=str(draft.get("message", "") or ""),
         )
 
-    if revision_plan is not None:
-        title, body = apply_revision_constraints(
-            revision_plan,
-            previous_title=previous_title,
-            previous_body=previous_body,
+    if revision is not None:
+        title, body = revision.apply(
             generated_title=title,
             generated_body=body,
         )
@@ -305,12 +298,10 @@ def _generate_and_validate(
         body,
         materials=list(draft_payload.get("materials") or []),
     )
-    if revision_plan is not None:
+    if revision is not None:
         deterministic_violations.extend(
-            validate_revision_result(
-                revision_plan,
-                previous_title=previous_title,
-                previous_body=previous_body,
+            BriefViolation.model_validate(item.model_dump())
+            for item in revision.validate(
                 revised_title=title,
                 revised_body=body,
             )
@@ -331,9 +322,7 @@ def _generate_and_validate(
             sources=sources,
             default_message=default_message,
             feedback=format_brief_violations(blocking_violations),
-            revision_plan=revision_plan,
-            previous_title=previous_title,
-            previous_body=previous_body,
+            revision=revision,
         )
 
     message = str(draft.get("message", "") or default_message)

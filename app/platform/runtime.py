@@ -43,6 +43,11 @@ class PlatformRuntime:
         revision_note = getattr(result, "revision_note", "")
         if isinstance(revision_note, str) and revision_note.strip():
             output["revision_note"] = revision_note.strip()
+        revision_plan = _clean_revision_plan(
+            getattr(result, "revision_plan", None)
+        )
+        if revision_plan:
+            output["revision_plan"] = revision_plan
         if bool(getattr(result, "message_only", False)):
             output["message_only"] = True
         for field_name in ("output_file", "manifest_file"):
@@ -68,3 +73,51 @@ def _validated_output_file(output_file: str, *, output_dir: str) -> str:
     if candidate.parent != expected_dir:
         raise ValueError("生成文件必须位于当前任务 output 目录")
     return str(candidate)
+
+
+def _clean_revision_plan(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    allowed = {
+        "scope",
+        "target_paragraphs",
+        "preserve_title",
+        "preserve_other_paragraphs",
+        "target_length",
+        "preserve_facts_and_numbers",
+        "required_changes",
+        "must_remove",
+    }
+    clean: dict[str, object] = {}
+    for key in allowed:
+        item = value.get(key)
+        if key in {"required_changes", "must_remove"} and isinstance(item, list):
+            clean[key] = [
+                str(entry).strip()[:500]
+                for entry in item[:20]
+                if str(entry).strip()
+            ]
+        elif key == "target_paragraphs" and isinstance(item, list):
+            clean[key] = [
+                int(entry)
+                for entry in item[:50]
+                if isinstance(entry, int) and not isinstance(entry, bool) and entry > 0
+            ]
+        elif key == "scope" and item in {"title", "paragraph", "whole"}:
+            clean[key] = item
+        elif key in {
+            "preserve_title",
+            "preserve_other_paragraphs",
+            "preserve_facts_and_numbers",
+        } and isinstance(item, bool):
+            clean[key] = item
+        elif key == "target_length" and (
+            item is None
+            or (
+                isinstance(item, int)
+                and not isinstance(item, bool)
+                and 0 < item <= 20_000
+            )
+        ):
+            clean[key] = item
+    return clean

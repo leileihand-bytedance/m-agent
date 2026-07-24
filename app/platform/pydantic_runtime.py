@@ -156,8 +156,13 @@ class PydanticAIWriter:
         skill_dir = self._resolve_skill_dir(payload)
         skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
 
+        platform_prompt = str(payload.get("platform_prompt", "") or "").strip()
         prompt_path = payload.get("prompt_path")
-        if isinstance(prompt_path, str) and prompt_path:
+        if platform_prompt:
+            if platform_prompt != "revision-plan":
+                raise ValueError("不支持的底座公共提示词")
+            draft_prompt_path = Path(__file__).parent / "prompts" / "revision-plan.md"
+        elif isinstance(prompt_path, str) and prompt_path:
             draft_prompt_path = skill_dir / prompt_path
         else:
             draft_prompt_path = skill_dir / "prompts" / "draft.md"
@@ -186,6 +191,7 @@ class PydanticAIWriter:
         fields = [
             f"- {name}: {'必填' if field.is_required() else '可选'}"
             for name, field in output_type.model_fields.items()
+            if field.exclude is not True
         ]
         return (
             f"请严格返回 {output_type.__name__} 结构化结果，不要输出额外说明：\n"
