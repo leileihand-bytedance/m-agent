@@ -303,7 +303,7 @@ def test_shenyinxie_delivery_checkpoints_text_and_word_separately(tmp_path: Path
     ]
 
 
-def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
+def test_internal_weekly_delivers_only_text_and_compact_review(
     tmp_path: Path,
 ):
     repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
@@ -321,7 +321,7 @@ def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
                 "manifest_file": str(manifest_path),
             },
             needs_clarification=False,
-            message="已生成内容核对稿和溯源清单，请完成人工核对。",
+            message="已生成精简内容核对稿，请点击每条原文链接核对。",
         )
 
     async def text_sender(_recipient: str, text: str) -> bool:
@@ -362,9 +362,8 @@ def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
 
     assert result.status == "completed"
     assert delivered == [
-        ("text", "已生成内容核对稿和溯源清单，请完成人工核对。"),
+        ("text", "已生成精简内容核对稿，请点击每条原文链接核对。"),
         ("attachment", "内参周报-内容核对稿.md"),
-        ("attachment", "内参周报-溯源清单.json"),
     ]
     checkpoint = json.loads(
         (Path(str(submission.task.payload["task_dir"])) / "execution.json").read_text(
@@ -374,10 +373,8 @@ def test_internal_weekly_checkpoints_text_review_and_manifest_separately(
     assert [item["item_id"] for item in checkpoint["delivery_items"]] == [
         "text-1",
         "attachment-1",
-        "attachment-2",
     ]
     assert [item["status"] for item in checkpoint["delivery_items"]] == [
-        "confirmed_delivered",
         "confirmed_delivered",
         "confirmed_delivered",
     ]
@@ -581,7 +578,7 @@ def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(
                 "manifest_file": str(manifest_path),
             },
             needs_clarification=False,
-            message="已生成内容核对稿和溯源清单。",
+            message="已生成精简内容核对稿，请点击每条原文链接核对。",
         )
 
     async def text_sender(_recipient: str, _text: str) -> bool:
@@ -596,9 +593,7 @@ def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(
     ) -> bool:
         assert skill_id == "internal_weekly"
         calls["attachments"].append(path.suffix)
-        if path.suffix == ".json":
-            raise asyncio.CancelledError
-        return True
+        raise asyncio.CancelledError
 
     async def failure_notifier(_recipient: str, code: str, _task_id: str) -> None:
         failures.append(code)
@@ -656,7 +651,7 @@ def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(
     error = asyncio.run(scenario())
 
     assert error.safe_error_code == "delivery_status_uncertain"
-    assert calls == {"process": 1, "text": 1, "attachments": [".md", ".json"]}
+    assert calls == {"process": 1, "text": 1, "attachments": [".md"]}
     assert failures == ["delivery_status_uncertain"]
 
 

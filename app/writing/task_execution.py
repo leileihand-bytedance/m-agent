@@ -804,10 +804,7 @@ class WritingTaskService:
             field_specs = (
                 (("output_file", ".docx"),)
                 if Path(raw_output).suffix.lower() == ".docx"
-                else (
-                    ("output_file", ".md"),
-                    ("manifest_file", ".json"),
-                )
+                else (("output_file", ".md"),)
             )
         if field_specs is None or result.needs_clarification:
             return []

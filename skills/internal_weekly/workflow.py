@@ -17,6 +17,7 @@ from skills.internal_weekly.docx_output import (
     is_explicit_word_approval,
     parse_approved_review,
     requests_clean_word,
+    review_content_sha256,
 )
 from skills.internal_weekly.output import render_review_markdown, write_review_bundle
 from skills.internal_weekly.schema import (
@@ -2508,7 +2509,7 @@ def _run_market_update(
         warnings=warnings,
         ready_for_approval=ready,
         message=(
-            "已生成今日资本市场综述更新块和溯源清单，可人工核对后替换原占位。"
+            "已生成今日资本市场综述更新核对稿，请点击原文链接核对后替换原占位。"
             if ready
             else (
                 "当前尚未收盘，已生成醒目待更新占位；请15:00收盘后再次生成。"
@@ -2518,8 +2519,9 @@ def _run_market_update(
         ),
     )
     result.draft_version = _digest(result)
-    result.document_metadata = _document_metadata(result)
     result.body = render_review_markdown(result)
+    result.document_metadata = _document_metadata(result)
+    result.document_metadata["review_sha256"] = review_content_sha256(result.body)
     output_dir = str(inputs.get("output_dir") or "").strip()
     if output_dir:
         result.output_file, result.manifest_file = write_review_bundle(result, output_dir)
@@ -2733,7 +2735,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         warnings=warnings,
         ready_for_approval=ready,
         message=(
-            "已生成内容核对稿和溯源清单，请完成人工核对。"
+            "已生成精简内容核对稿，请点击每条原文链接核对。"
             if ready
             else (
                 "已生成上周内容核对稿；今日A股收盘数据待15:00收盘后更新，"
@@ -2744,8 +2746,9 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         ),
     )
     result.draft_version = _digest(result)
-    result.document_metadata = _document_metadata(result)
     result.body = render_review_markdown(result)
+    result.document_metadata = _document_metadata(result)
+    result.document_metadata["review_sha256"] = review_content_sha256(result.body)
     output_dir = str(inputs.get("output_dir") or "").strip()
     if output_dir:
         result.output_file, result.manifest_file = write_review_bundle(result, output_dir)

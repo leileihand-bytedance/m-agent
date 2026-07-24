@@ -138,7 +138,7 @@ def test_runtime_preserves_internal_weekly_review_and_manifest_files(
         lambda inputs, tools: InternalWeeklyResult(
             title="内参周报（2026-07-20）",
             body="# 内参周报",
-            message="已生成内容核对稿和溯源清单。",
+            message="已生成精简内容核对稿，请点击每条原文链接核对。",
             document_metadata={
                 "draft_version": "draft-001",
                 "ready_for_approval": "true",

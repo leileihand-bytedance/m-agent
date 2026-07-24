@@ -361,23 +361,31 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert "第二段分析银行净息差变化。" not in frontier.items[0].body
     assert "这是模型" not in frontier.items[0].body
     assert result.draft_version
-    assert result.document_metadata == {
-        "generation_mode": "full_weekly",
-        "publication_date": "2026-07-13",
-        "period_start": "2026-07-06",
-        "period_end": "2026-07-12",
-        "draft_version": result.draft_version,
-        "ready_for_approval": "true",
-    }
+    assert result.document_metadata["generation_mode"] == "full_weekly"
+    assert result.document_metadata["publication_date"] == "2026-07-13"
+    assert result.document_metadata["period_start"] == "2026-07-06"
+    assert result.document_metadata["period_end"] == "2026-07-12"
+    assert result.document_metadata["draft_version"] == result.draft_version
+    assert result.document_metadata["ready_for_approval"] == "true"
+    assert result.document_metadata["review_sha256"]
     assert result.output_file.endswith(".md")
     assert not list(output_dir.glob("*.docx"))
 
     review_text = Path(result.output_file).read_text(encoding="utf-8")
     assert "内容核对稿" in review_text
-    assert "原文链接" in review_text
-    assert "发生日期：2026-07-09" in review_text
-    assert "发布日期：2026-07-09" in review_text
-    assert "报告位置：网页摘要" in review_text
+    assert "出版日：2026-07-13｜统计期：2026-07-06 至 2026-07-12" in review_text
+    assert "原文：[" in review_text
+    for redundant_label in (
+        "草稿版本",
+        "状态：",
+        "核对信息：",
+        "来源机构：",
+        "发生日期：",
+        "发布日期：",
+        "报告位置：",
+        "核验原句：",
+    ):
+        assert redundant_label not in review_text
 
     manifest = json.loads(Path(result.manifest_file).read_text(encoding="utf-8"))
     assert manifest["draft_version"] == result.draft_version

@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
+import hashlib
 from pathlib import Path
 import re
 from uuid import uuid4
@@ -55,6 +56,7 @@ _APPROVAL_MARKERS = (
 )
 _FORBIDDEN_CLEAN_MARKERS = (
     "核对信息",
+    "原文：",
     "草稿版本",
     "待核事项",
     "今日资本市场内容待收盘后更新",
@@ -94,6 +96,10 @@ def is_explicit_word_approval(text: str) -> bool:
     )
 
 
+def review_content_sha256(review_markdown: str) -> str:
+    return hashlib.sha256(review_markdown.strip().encode("utf-8")).hexdigest()
+
+
 def parse_approved_review(
     review_markdown: str,
     metadata: Mapping[str, object] | None,
@@ -123,26 +129,47 @@ def parse_approved_review(
     if not draft_version:
         raise ValueError("核对稿缺少草稿版本")
 
-    review_publication = _metadata_value(review_markdown, "出版日")
-    review_period = re.search(
+    compact_dates = re.search(
+        (
+            r"(?m)^出版日：(\d{4}-\d{2}-\d{2})"
+            r"｜统计期：(\d{4}-\d{2}-\d{2})\s+至\s+(\d{4}-\d{2}-\d{2})\s*$"
+        ),
+        review_markdown,
+    )
+    legacy_publication = _metadata_value(review_markdown, "出版日")
+    legacy_period = re.search(
         r"(?m)^-\s*统计期：(\d{4}-\d{2}-\d{2})\s+至\s+(\d{4}-\d{2}-\d{2})\s*$",
         review_markdown,
     )
-    review_version = re.search(
-        r"(?m)^-\s*草稿版本：`([^`]+)`\s*$",
-        review_markdown,
-    )
+    if compact_dates is not None:
+        review_publication = compact_dates.group(1)
+        review_period_start = compact_dates.group(2)
+        review_period_end = compact_dates.group(3)
+    else:
+        review_publication = legacy_publication
+        review_period_start = legacy_period.group(1) if legacy_period else ""
+        review_period_end = legacy_period.group(2) if legacy_period else ""
     if (
         review_publication != publication_date.isoformat()
-        or review_period is None
-        or review_period.group(1) != period_start.isoformat()
-        or review_period.group(2) != period_end.isoformat()
+        or review_period_start != period_start.isoformat()
+        or review_period_end != period_end.isoformat()
     ):
         raise ValueError("核对稿日期与批准元数据不一致")
-    if review_version is None or review_version.group(1).strip() != draft_version:
-        raise ValueError("核对稿草稿版本不一致")
-    if "- 状态：可提交人工核对" not in review_markdown:
-        raise ValueError("核对稿尚未达到可批准状态")
+
+    expected_review_sha256 = clean_metadata.get("review_sha256", "")
+    if expected_review_sha256:
+        actual_review_sha256 = review_content_sha256(review_markdown)
+        if actual_review_sha256 != expected_review_sha256:
+            raise ValueError("核对稿内容与批准版本不一致")
+    else:
+        review_version = re.search(
+            r"(?m)^-\s*草稿版本：`([^`]+)`\s*$",
+            review_markdown,
+        )
+        if review_version is None or review_version.group(1).strip() != draft_version:
+            raise ValueError("核对稿草稿版本不一致")
+        if "- 状态：可提交人工核对" not in review_markdown:
+            raise ValueError("核对稿尚未达到可批准状态")
 
     sections = _parse_sections(review_markdown)
     return ApprovedWeeklyDraft(
@@ -263,7 +290,9 @@ def _parse_sections(review_markdown: str) -> tuple[ApprovedWeeklySection, ...]:
             current_title = item_match.group(1).strip()
             collecting_body = True
             continue
-        if current_title and line.strip() == "核对信息：":
+        if current_title and (
+            line.strip() == "核对信息：" or line.strip().startswith("原文：")
+        ):
             collecting_body = False
             continue
         if current_title and collecting_body:

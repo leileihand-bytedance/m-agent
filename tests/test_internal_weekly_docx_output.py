@@ -15,6 +15,7 @@ from skills.internal_weekly.docx_output import (
     is_explicit_word_approval,
     parse_approved_review,
     requests_clean_word,
+    review_content_sha256,
 )
 
 
@@ -66,12 +67,7 @@ def _cache_toc(path: Path, headings: Sequence[str]) -> None:
 def _approved_review() -> str:
     return """# 内参周报（2026-07-27）（内容核对稿）
 
-- 出版日：2026-07-27
-- 统计期：2026-07-20 至 2026-07-26
-- 草稿版本：`draft-20260727`
-- 状态：可提交人工核对
-
-> 本文件保留全部溯源信息，仅供人工核对；不是对外洁净版本。
+出版日：2026-07-27｜统计期：2026-07-20 至 2026-07-26
 
 ## 党政要闻
 
@@ -79,11 +75,7 @@ def _approved_review() -> str:
 
 中央有关会议部署进一步优化民营经济发展环境。
 
-核对信息：
-- 原文链接：[中央部署](https://www.gov.cn/example)
-- 来源机构：中国政府网
-- 发布日期：2026-07-22
-- 核验原句：会议部署进一步优化民营经济发展环境。
+原文：[中央部署](https://www.gov.cn/example)
 
 ## 监管动态
 
@@ -91,11 +83,7 @@ def _approved_review() -> str:
 
 金融监管总局部署提升小微企业金融服务质效。
 
-核对信息：
-- 原文链接：[监管部署](https://www.nfra.gov.cn/example)
-- 来源机构：国家金融监督管理总局
-- 发布日期：2026-07-23
-- 核验原句：提升小微企业金融服务质效。
+原文：[监管部署](https://www.nfra.gov.cn/example)
 
 ## 同业动向
 
@@ -103,11 +91,7 @@ def _approved_review() -> str:
 
 该机构披露客户经营与风险管理的新进展。
 
-核对信息：
-- 原文链接：[经营进展](https://www.example-bank.com/report)
-- 来源机构：某数字银行
-- 发布日期：2026-07-24
-- 核验原句：披露客户经营与风险管理的新进展。
+原文：[经营进展](https://www.example-bank.com/report)
 
 ## 市场观察
 
@@ -115,21 +99,13 @@ def _approved_review() -> str:
 
 上周A股、港股和美股主要指数以及周一A股收盘情况均已完成核验。
 
-核对信息：
-- 原文链接：[市场周报](https://www.example.com/market)
-- 来源机构：权威市场数据源
-- 发布日期：2026-07-27
-- 核验原句：主要指数收盘情况。
+原文：[市场周报](https://www.example.com/market)
 
 ### 2. 全球主要央行释放新信号
 
 主要央行政策信号影响全球流动性预期和银行资产负债管理判断。
 
-核对信息：
-- 原文链接：[央行动态](https://www.example.com/central-bank)
-- 来源机构：权威通讯社
-- 发布日期：2026-07-25
-- 核验原句：政策信号影响全球流动性预期。
+原文：[央行动态](https://www.example.com/central-bank)
 
 ## 前沿观点
 
@@ -139,16 +115,12 @@ def _approved_review() -> str:
 
 （来源：国际清算银行《Digital finance infrastructure》）
 
-核对信息：
-- 原文链接：[研究报告](https://www.bis.org/example)
-- 来源机构：国际清算银行
-- 发布日期：2026-07-21
-- 报告位置：网页摘要
-- 核验原句：Digital finance infrastructure is changing payments.
+原文：[研究报告](https://www.bis.org/example)
 """
 
 
 def _approval_metadata(**overrides: str) -> dict[str, str]:
+    review = _approved_review()
     metadata = {
         "generation_mode": "full_weekly",
         "publication_date": "2026-07-27",
@@ -156,9 +128,26 @@ def _approval_metadata(**overrides: str) -> dict[str, str]:
         "period_end": "2026-07-26",
         "draft_version": "draft-20260727",
         "ready_for_approval": "true",
+        "review_sha256": review_content_sha256(review),
     }
     metadata.update(overrides)
     return metadata
+
+
+def _legacy_approved_review() -> str:
+    return (
+        _approved_review()
+        .replace(
+            "出版日：2026-07-27｜统计期：2026-07-20 至 2026-07-26",
+            (
+                "- 出版日：2026-07-27\n"
+                "- 统计期：2026-07-20 至 2026-07-26\n"
+                "- 草稿版本：`draft-20260727`\n"
+                "- 状态：可提交人工核对"
+            ),
+        )
+        .replace("原文：[", "核对信息：\n- 原文链接：[")
+    )
 
 
 @pytest.mark.parametrize(
@@ -186,18 +175,34 @@ def test_explicit_word_approval_requires_approval_and_export(text: str, expected
     assert is_explicit_word_approval(text) is expected
 
 
-def test_parse_approved_review_rejects_incomplete_or_changed_version():
+def test_parse_approved_review_rejects_incomplete_or_changed_review():
     with pytest.raises(ValueError, match="尚未达到可批准状态"):
         parse_approved_review(
             _approved_review(),
             _approval_metadata(ready_for_approval="false"),
         )
 
-    with pytest.raises(ValueError, match="草稿版本不一致"):
+    with pytest.raises(ValueError, match="核对稿内容与批准版本不一致"):
         parse_approved_review(
-            _approved_review(),
-            _approval_metadata(draft_version="another-version"),
+            _approved_review().replace("优化民营经济发展环境", "改变后的正文"),
+            _approval_metadata(),
         )
+
+
+def test_parse_approved_review_keeps_legacy_review_compatible():
+    metadata = _approval_metadata()
+    metadata.pop("review_sha256")
+
+    draft = parse_approved_review(_legacy_approved_review(), metadata)
+
+    assert draft.draft_version == "draft-20260727"
+    assert [section.name for section in draft.sections] == [
+        "党政要闻",
+        "监管动态",
+        "同业动向",
+        "市场观察",
+        "前沿观点",
+    ]
 
 
 def test_explicit_annual_and_total_issue_numbers_are_parsed_independently():
