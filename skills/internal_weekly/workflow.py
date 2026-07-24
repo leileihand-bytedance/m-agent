@@ -1798,7 +1798,7 @@ def _run_approved_word_export(
         output_file=str(output_path),
         message=(
             f"已按人工确认的草稿版本 {draft.draft_version} 生成洁净版 Word。"
-            "打开 Word 后，请对目录选择“更新域—更新整个目录”，刷新目录项和页码。"
+            "目录项和页码已生成，打开文件即可查看，无需再手工更新目录。"
         ),
     )
 

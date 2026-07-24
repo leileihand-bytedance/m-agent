@@ -369,7 +369,21 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     ]
 
 
-def test_approved_revision_generates_word_without_researching_again(tmp_path):
+def test_approved_revision_generates_word_without_researching_again(
+    tmp_path,
+    monkeypatch,
+):
+    def fake_generate_word(*, draft, request_text, output_dir):
+        output = Path(output_dir) / (
+            f"微众银行信息内参周报-{draft.publication_date.isoformat()}.docx"
+        )
+        output.write_bytes(b"test-docx")
+        return output
+
+    monkeypatch.setattr(
+        "skills.internal_weekly.workflow.generate_internal_weekly_docx",
+        fake_generate_word,
+    )
     fake = FakeTools()
     gateway = ToolGateway(
         allowed_tools=("search", "web_reader", "llm_writer"),
@@ -434,7 +448,8 @@ def test_approved_revision_generates_word_without_researching_again(tmp_path):
     assert exported.output_file.endswith(".docx")
     assert Path(exported.output_file).is_file()
     assert exported.draft_version == original.draft_version
-    assert "更新整个目录" in exported.message
+    assert "目录项和页码已生成" in exported.message
+    assert "更新整个目录" not in exported.message
     assert calls_before_export == (
         len(fake.search_calls),
         len(fake.market_required_scopes),

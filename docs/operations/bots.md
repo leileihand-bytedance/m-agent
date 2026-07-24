@@ -90,6 +90,8 @@ uv run --locked python -m app.writing.bot --check-config
 
 入口配置使用 `WRITING_BOT_ID`、`WRITING_BOT_SECRET` 和公共模型、数据目录配置。生产运行由上述常驻服务管理；前台命令只用于排障，执行前必须先 `stop writing`，避免同一 Bot 重复连接。详细技术行为见 `app/writing/README.md`。
 
+内参周报批准后的洁净版需要本机已安装 Microsoft Word。系统不会让 Word 直接打开任务目录文件，而是使用 `~/Library/Containers/com.microsoft.Word/Data/Documents/M-Agent-TOC/` 作为固定临时目录，后台更新目录、校验页码并清理副本。该目录只保存处理中的随机文件，不是长期任务存储；真实成品仍只保存在任务 `output/`。Word 未安装、自动化超时或目录不完整时，任务按生成失败处理，不会发送空目录附件。首次上线后应使用脱敏周报样本做一次生产用户会话验收，确认 Word 自动化权限可用、没有弹出文件访问提示，成品打开后目录项和页码已显示。
+
 ## 审核 Bot
 
 ```bash

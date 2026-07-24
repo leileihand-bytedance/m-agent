@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from collections.abc import Sequence
 from zipfile import ZipFile
 
 import pytest
@@ -19,6 +20,47 @@ from skills.internal_weekly.docx_output import (
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
+W = f"{{{W_NS}}}"
+
+
+def _cache_toc(path: Path, headings: Sequence[str]) -> None:
+    with ZipFile(path) as package:
+        entries = [(info, package.read(info.filename)) for info in package.infolist()]
+        document_xml = package.read("word/document.xml")
+    root = etree.fromstring(document_xml)
+    toc_nodes = root.xpath(
+        "//w:sdt[.//w:instrText[contains(., 'TOC')]]",
+        namespaces=NS,
+    )
+    assert len(toc_nodes) == 1
+    content = toc_nodes[0].find(f"{W}sdtContent")
+    assert content is not None
+    for index, heading in enumerate(headings, start=1):
+        paragraph = etree.SubElement(content, f"{W}p")
+        title_run = etree.SubElement(paragraph, f"{W}r")
+        etree.SubElement(title_run, f"{W}t").text = heading
+        instruction_run = etree.SubElement(paragraph, f"{W}r")
+        etree.SubElement(instruction_run, f"{W}instrText").text = (
+            f" PAGEREF _TocTest{index} \\h "
+        )
+        page_run = etree.SubElement(paragraph, f"{W}r")
+        etree.SubElement(page_run, f"{W}t").text = "2"
+    replacements = {
+        "word/document.xml": etree.tostring(
+            root,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True,
+        )
+    }
+    temporary = path.with_name(f".{path.name}.rewrite")
+    try:
+        with ZipFile(temporary, "w") as output:
+            for info, payload in entries:
+                output.writestr(info, replacements.get(info.filename, payload))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _approved_review() -> str:
@@ -195,14 +237,50 @@ def test_sanitized_template_contains_no_case_content_or_personal_metadata():
 
 def test_generate_word_from_approved_review_preserves_template_and_toc(tmp_path: Path):
     draft = parse_approved_review(_approved_review(), _approval_metadata())
+    finalizer_calls: list[tuple[Path, Path, tuple[str, ...]]] = []
+
+    def finalizer(
+        path: str | Path,
+        *,
+        allowed_root: str | Path,
+        expected_headings: Sequence[str],
+    ) -> object:
+        resolved_path = Path(path).resolve()
+        finalizer_calls.append(
+            (
+                resolved_path,
+                Path(allowed_root).resolve(),
+                tuple(expected_headings),
+            )
+        )
+        _cache_toc(resolved_path, expected_headings)
+        return object()
+
     output_path = generate_internal_weekly_docx(
         draft=draft,
         request_text="这版核对无误，请生成 Word 洁净版",
         output_dir=tmp_path,
+        toc_finalizer=finalizer,
     )
 
     assert output_path.name == "微众银行信息内参周报-2026-07-27.docx"
     assert output_path.is_file()
+    assert len(finalizer_calls) == 1
+    assert finalizer_calls[0][0].parent == tmp_path.resolve()
+    assert finalizer_calls[0][1] == tmp_path.resolve()
+    assert finalizer_calls[0][2] == (
+        "党政要闻",
+        "中央部署促进民营经济发展",
+        "监管动态",
+        "金融监管总局部署小微金融服务",
+        "同业动向",
+        "某数字银行发布经营进展",
+        "市场观察",
+        "资本市场综述",
+        "全球主要央行释放新信号",
+        "前沿观点",
+        "数字金融基础设施的新变化",
+    )
 
     with ZipFile(DEFAULT_TEMPLATE_PATH) as template, ZipFile(output_path) as output:
         template_parts = {name: template.read(name) for name in template.namelist()}
@@ -252,11 +330,37 @@ def test_generate_word_from_approved_review_preserves_template_and_toc(tmp_path:
         for node in document.xpath("//w:instrText", namespaces=NS)
     ]
     assert any('TOC \\o "1-3" \\h \\z \\u' in instruction for instruction in instructions)
-    assert all("PAGEREF" not in instruction for instruction in instructions)
-    assert "_Toc" not in output_parts["word/document.xml"].decode("utf-8")
+    assert sum("PAGEREF" in instruction for instruction in instructions) == 11
+    assert "_Toc" in output_parts["word/document.xml"].decode("utf-8")
     assert not document.xpath("//w:fldChar[@w:dirty]", namespaces=NS)
     assert not settings.xpath("/w:settings/w:updateFields", namespaces=NS)
     assert document.xpath(
         "//w:body/w:p[w:r/w:br[@w:type='page']]",
         namespaces=NS,
     )
+
+
+def test_generate_word_does_not_replace_existing_file_when_toc_finalization_fails(
+    tmp_path: Path,
+):
+    draft = parse_approved_review(_approved_review(), _approval_metadata())
+    target = tmp_path / "微众银行信息内参周报-2026-07-27.docx"
+    target.write_bytes(b"previous-approved-version")
+
+    def failing_finalizer(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("toc finalization failed")
+
+    with pytest.raises(RuntimeError, match="toc finalization failed"):
+        generate_internal_weekly_docx(
+            draft=draft,
+            request_text="这版核对无误，请生成 Word 洁净版",
+            output_dir=tmp_path,
+            toc_finalizer=failing_finalizer,
+        )
+
+    assert target.read_bytes() == b"previous-approved-version"
+    assert not [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(".微众银行信息内参周报-2026-07-27")
+    ]

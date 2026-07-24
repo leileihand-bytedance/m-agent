@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 from lxml import etree
 
+from app.platform.documents.word_toc import finalize_word_toc
 from skills.internal_weekly.template_tools import (
     _remove_automatic_field_update,
     _reset_toc_field,
@@ -159,6 +160,7 @@ def generate_internal_weekly_docx(
     request_text: str,
     output_dir: str | Path,
     template_path: str | Path = DEFAULT_TEMPLATE_PATH,
+    toc_finalizer: Callable[..., object] | None = None,
 ) -> Path:
     if not is_explicit_word_approval(request_text):
         raise ValueError("生成洁净版 Word 前必须明确确认核对无误")
@@ -169,7 +171,7 @@ def generate_internal_weekly_docx(
     target = target_dir / (
         f"微众银行信息内参周报-{draft.publication_date.isoformat()}.docx"
     )
-    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    temporary = target.with_name(f".{target.stem}.{uuid4().hex}.docx")
 
     with ZipFile(template) as package:
         entries = [(info, package.read(info.filename)) for info in package.infolist()]
@@ -188,10 +190,24 @@ def generate_internal_weekly_docx(
         with ZipFile(temporary, "w") as output:
             for info, payload in entries:
                 output.writestr(info, replacements.get(info.filename, payload))
+        finalizer = toc_finalizer or finalize_word_toc
+        finalizer(
+            temporary,
+            allowed_root=target_dir,
+            expected_headings=_toc_headings(draft),
+        )
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)
     return target
+
+
+def _toc_headings(draft: ApprovedWeeklyDraft) -> tuple[str, ...]:
+    headings: list[str] = []
+    for section in draft.sections:
+        headings.append(section.name)
+        headings.extend(item.title for item in section.items)
+    return tuple(headings)
 
 
 def _parse_sections(review_markdown: str) -> tuple[ApprovedWeeklySection, ...]:

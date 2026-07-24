@@ -87,6 +87,7 @@ Pydantic AI Agent
 - `app/platform/model_reliability.py`：写作、审核和模型搜索共用的调用可靠性合同；统一超时、有限重试、供应商无关安全错误码和不含正文的调用报告，不自动跨供应商切换模型。
 - `app/platform/attachment_delivery.py`：公共附件交付，统一任务目录校验、串行上传、动态超时、上传阶段重试、主动/被动媒体发送、交付状态、运维事件和“处理编号”兜底。进入最终媒体发送后，状态未知不会自动重发。
 - `app/platform/documents/enrichment.py`：扫描 PDF 按需 OCR 以及 PDF/PPTX 逐页渲染；外部文档工具使用绝对命令、隔离环境和资源限制，失败时保留文本解析结果并记录结构化告警。
+- `app/platform/documents/word_toc.py`：任务内 DOCX 的 Microsoft Word 目录终稿服务；使用 Word 自有沙盒暂存和固定 AppleScript 更新目录，只在预期标题、页码域与书签完整后原子写回，并净化 Word 保存产生的个人元数据。
 - `app/platform/cli.py`：新底座 CLI，可做配置检查和本地消息测试。
 - `app/platform/runtime_environment.py`：生产/测试运行模式、Bot 凭据选择、Git 分支和数据目录边界的公共启动守卫。
 - `app/platform/app.py`：平台应用服务，把路由、权限、任务记录、runtime 串起来。
