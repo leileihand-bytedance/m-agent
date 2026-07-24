@@ -26,13 +26,29 @@ class ContentCandidateAssessment(BaseModel):
     section: SectionName
     title: str
     summary: str
-    evidence_excerpt: str
+    evidence_excerpt: str = ""
+    evidence_block_ids: list[str] = Field(default_factory=list)
     score: float = Field(ge=0, le=10)
     reason: str
 
 
 class ContentAssessmentBatch(BaseModel):
     items: list[ContentCandidateAssessment] = Field(default_factory=list)
+
+
+class GroundingRepairItem(BaseModel):
+    source_url: str
+    summary: str
+    evidence_block_ids: list[str] = Field(default_factory=list)
+
+
+class GroundingRepairBatch(BaseModel):
+    items: list[GroundingRepairItem] = Field(default_factory=list)
+
+
+class PartyEventSynthesis(BaseModel):
+    title: str
+    summary: str
 
 
 class MarketSeriesEvidence(BaseModel):

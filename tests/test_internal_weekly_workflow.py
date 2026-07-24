@@ -11,9 +11,12 @@ from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
     ContentCandidateAssessment,
     FrontierSelection,
+    GroundingRepairBatch,
+    GroundingRepairItem,
     MarketContextEvidence,
     MarketEvidenceBundle,
     MarketSeriesEvidence,
+    PartyEventSynthesis,
     WebCandidate,
 )
 from skills.internal_weekly.workflow import (
@@ -1341,6 +1344,93 @@ def test_party_items_merge_major_event_updates_and_drop_low_value_commentary():
     assert warnings == []
 
 
+def test_party_major_event_is_rewritten_as_one_integrated_summary():
+    speech = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/speech.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/speech.htm",
+        title="习近平出席2026世界人工智能大会开幕式并发表主旨讲话",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-17",
+        body="习近平在2026世界人工智能大会发表主旨讲话，提出完善全球治理。",
+    )
+    plan = WebCandidate(
+        url="https://www.gov.cn/yaowen/liebiao/202607/plan.htm",
+        canonical_url="https://www.gov.cn/yaowen/liebiao/202607/plan.htm",
+        title="《人工智能合作发展行动计划》发布",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-17",
+        body="有关部门在2026世界人工智能大会发布行动计划，提出数据和算力合作。",
+    )
+    assessments = ContentAssessmentBatch(
+        items=[
+            ContentCandidateAssessment(
+                source_url=speech.canonical_url,
+                include=True,
+                section="党政要闻",
+                title=speech.title,
+                summary="习近平提出推动人工智能创新发展并完善全球治理。",
+                evidence_excerpt="提出完善全球治理",
+                score=10,
+                reason="中央层面人工智能重大活动",
+            ),
+            ContentCandidateAssessment(
+                source_url=plan.canonical_url,
+                include=True,
+                section="党政要闻",
+                title=plan.title,
+                summary="大会发布人工智能合作发展行动计划，部署数据、算力和人才合作。",
+                evidence_excerpt="提出数据和算力合作",
+                score=9,
+                reason="中央层面人工智能重大活动",
+            ),
+        ]
+    )
+    integrated = (
+        "2026世界人工智能大会围绕创新发展与全球治理形成系列部署。"
+        "习近平在主旨讲话中提出推动人工智能创新发展、完善全球治理；"
+        "大会同期发布合作发展行动计划，部署数据、算力和人才合作。"
+    )
+    calls: list[str] = []
+
+    def llm_writer(payload):
+        task = str(payload["task"])
+        calls.append(task)
+        if task == "internal_weekly_content_assessment":
+            return assessments
+        if task == "internal_weekly_party_event_synthesis":
+            return PartyEventSynthesis(
+                title="2026世界人工智能大会形成创新发展与全球治理系列部署",
+                summary=integrated,
+            )
+        raise AssertionError(f"unexpected task: {task}")
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [speech, plan],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert calls == [
+        "internal_weekly_content_assessment",
+        "internal_weekly_party_event_synthesis",
+    ]
+    assert len(items) == 1
+    assert items[0].title == "2026世界人工智能大会形成创新发展与全球治理系列部署"
+    assert items[0].body == integrated
+    assert "\n\n" not in items[0].body
+    assert len(items[0].source_ids) == 2
+    assert len(records) == 2
+    assert warnings == []
+
+
 def test_party_major_event_key_supports_lujiazui_forum():
     speech_keys = _party_major_event_keys(
         "有关负责人出席2026陆家嘴论坛并发表演讲",
@@ -1393,6 +1483,228 @@ def test_regulatory_item_uses_regulator_as_subject_for_state_council_briefing():
     assert "国新办" not in items[0].body
     assert records[0].publisher == "中国人民银行"
     assert warnings == []
+
+
+def test_ordinary_item_repairs_paraphrased_evidence_with_exact_source_sentence():
+    page = WebCandidate(
+        url="https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId=1264585",
+        canonical_url="https://www.nfra.gov.cn/cn/view/pages/ItemDetail.html?docId=1264585",
+        title="金融监管总局召开2026年两会重点建议提案座谈会",
+        site="nfra.gov.cn",
+        publisher="国家金融监督管理总局",
+        publish_date="2026-07-15",
+        body=(
+            "金融监管总局党委委员、副局长丛林同志出席会议，与代表委员面对面交流，"
+            "认真听取代表委员对推动普惠金融高质量发展的意见建议，"
+            "研究进一步完善我国普惠金融体系。"
+        ),
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="监管动态",
+        title=page.title,
+        summary="金融监管总局研究完善普惠金融体系，提升小微企业金融服务水平。",
+        evidence_excerpt="金融监管总局副局长丛林与代表委员交流，研究完善普惠金融体系。",
+        score=9,
+        reason="普惠金融监管部署",
+    )
+    exact = (
+        "金融监管总局党委委员、副局长丛林同志出席会议，与代表委员面对面交流，"
+        "认真听取代表委员对推动普惠金融高质量发展的意见建议，"
+        "研究进一步完善我国普惠金融体系。"
+    )
+    calls: list[str] = []
+
+    def llm_writer(payload):
+        task = str(payload["task"])
+        calls.append(task)
+        if task == "internal_weekly_content_assessment":
+            return ContentAssessmentBatch(items=[assessment])
+        if task == "internal_weekly_grounding_repair":
+            return GroundingRepairBatch(
+                items=[
+                    GroundingRepairItem(
+                        source_url=page.canonical_url,
+                        summary=assessment.summary,
+                        evidence_block_ids=["E001"],
+                    )
+                ]
+            )
+        raise AssertionError(f"unexpected task: {task}")
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="监管动态",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert calls == [
+        "internal_weekly_content_assessment",
+        "internal_weekly_grounding_repair",
+    ]
+    assert [item.title for item in items] == [page.title]
+    assert records[0].evidence_excerpts == [exact]
+    assert warnings == []
+
+
+def test_ordinary_summary_can_compress_source_when_core_facts_stay_grounded():
+    page = WebCandidate(
+        url="https://www.gov.cn/zhengce/content/202607/content_7075216.htm",
+        canonical_url="https://www.gov.cn/zhengce/content/202607/content_7075216.htm",
+        title="中共中央 国务院部署扩大消费重点工作",
+        site="gov.cn",
+        publisher="中国政府网",
+        publish_date="2026-07-13",
+        body=(
+            "中共中央、国务院部署扩大消费重点工作，提出到2030年社会消费品零售"
+            "总额达到60万亿元左右，并要求深入实施提振消费专项行动。"
+        ),
+    )
+    compressed = (
+        "中共中央、国务院提出到2030年社会消费品零售总额达到60万亿元左右，"
+        "并部署提振消费专项行动。"
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="党政要闻",
+        title=page.title,
+        summary=compressed,
+        evidence_excerpt="",
+        evidence_block_ids=["E001"],
+        score=9,
+        reason="中央扩大内需和促进消费部署",
+    )
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: ContentAssessmentBatch(items=[assessment])
+        },
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="党政要闻",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert warnings == []
+    assert items[0].body == compressed
+    assert records[0].evidence_excerpts == [page.body]
+
+
+def test_ordinary_item_rejects_repaired_summary_that_changes_a_core_number():
+    page = WebCandidate(
+        url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
+        canonical_url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
+        title="中国证监会组织财务造假综合惩防跨部门培训",
+        site="csrc.gov.cn",
+        publisher="中国证券监督管理委员会",
+        publish_date="2026-07-17",
+        body=(
+            "中国证监会启动专项行动，目前已办理47起典型案件，"
+            "持续打击和防范上市公司财务造假。"
+        ),
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="监管动态",
+        title=page.title,
+        summary="中国证监会专项行动已办理247起典型案件。",
+        evidence_excerpt="证监会专项行动已办理247起典型案件。",
+        score=9,
+        reason="资本市场监管执法",
+    )
+
+    def llm_writer(payload):
+        if payload["task"] == "internal_weekly_content_assessment":
+            return ContentAssessmentBatch(items=[assessment])
+        return GroundingRepairBatch(
+            items=[
+                GroundingRepairItem(
+                    source_url=page.canonical_url,
+                    summary=assessment.summary,
+                    evidence_block_ids=["E001"],
+                )
+            ]
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="监管动态",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert items == []
+    assert records == []
+    assert warnings == [f"《{page.title}》摘要核心事实无法由原文证据支持，已排除"]
+
+
+def test_ordinary_item_rejects_summary_that_reverses_the_source_direction():
+    page = WebCandidate(
+        url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
+        canonical_url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
+        title="上半年经济运行情况",
+        site="stats.gov.cn",
+        publisher="国家统计局",
+        publish_date="2026-07-15",
+        body="二季度国内生产总值同比增长4.3%，增速较一季度回落0.7个百分点。",
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="市场观察",
+        title=page.title,
+        summary="二季度国内生产总值同比增长4.3%，增速较一季度提高0.7个百分点。",
+        evidence_excerpt="",
+        evidence_block_ids=["E001"],
+        score=9,
+        reason="宏观经济增速变化影响市场判断",
+    )
+
+    def llm_writer(payload):
+        if payload["task"] == "internal_weekly_content_assessment":
+            return ContentAssessmentBatch(items=[assessment])
+        return GroundingRepairBatch(
+            items=[
+                GroundingRepairItem(
+                    source_url=page.canonical_url,
+                    summary=assessment.summary,
+                    evidence_block_ids=["E001"],
+                )
+            ]
+        )
+
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={"llm_writer": llm_writer},
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="市场观察",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert items == []
+    assert records == []
+    assert warnings == [f"《{page.title}》摘要核心事实无法由原文证据支持，已排除"]
 
 
 def test_ordinary_assessment_retries_when_model_omits_the_whole_batch():
@@ -1477,7 +1789,10 @@ def test_ordinary_assessment_reports_consecutive_empty_batches():
     assert calls == 2
     assert items == []
     assert records == []
-    assert warnings == ["党政要闻第1批候选评估连续返回空判断"]
+    assert warnings == [
+        "党政要闻第1批候选评估连续返回空判断"
+        "（候选：国务院部署促进消费重点工作）"
+    ]
 
 
 def test_frontier_queries_cover_report_series_and_both_months_in_fallback_window():

@@ -23,9 +23,11 @@ from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
     ContentCandidateAssessment,
     FrontierSelection,
+    GroundingRepairBatch,
     InternalWeeklyResult,
     MarketEvidenceBundle,
     MarketSeriesEvidence,
+    PartyEventSynthesis,
     SourceRecord,
     WebCandidate,
     WeeklyItem,
@@ -75,6 +77,7 @@ MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
 MAX_ORDINARY_BODY_CHARS = 12000
 MAX_PARTY_EVENT_SOURCES = 3
 MAX_PARTY_EVENT_BODY_CHARS = 600
+MAX_PARTY_EVENT_SYNTHESIS_CHARS = 420
 WEB_READER_ATTEMPTS = 2
 MAX_PARALLEL_SECTION_TASKS = 5
 MARKET_CLOSE_TIME = time(15, 0)
@@ -211,6 +214,19 @@ class _SectionTaskOutput:
     items: tuple[WeeklyItem, ...] = ()
     source_records: tuple[SourceRecord, ...] = ()
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _PartyEventPart:
+    title: str
+    summary: str
+    source_url: str
+
+
+@dataclass(frozen=True)
+class _GroundedSummary:
+    summary: str
+    evidence_excerpts: tuple[str, ...]
 
 
 def _run_parallel_section_tasks(
@@ -543,10 +559,66 @@ def _merge_party_event_summary(existing: str, supplement: str) -> str | None:
     normalized_supplement = re.sub(r"\s+", "", supplement)
     if normalized_supplement in normalized_existing:
         return None
-    combined = f"{existing.rstrip()}\n\n{supplement}"
+    combined = f"{existing.rstrip('。；; ')}；{supplement}"
     if len(combined) > MAX_PARTY_EVENT_BODY_CHARS:
         return None
     return combined
+
+
+def _number_tokens(value: str) -> set[str]:
+    return {
+        token.replace(",", "")
+        for token in re.findall(r"\d[\d,]*(?:\.\d+)?%?", value)
+    }
+
+
+def _synthesize_party_event(
+    parts: list[_PartyEventPart],
+    tools: ToolGateway,
+) -> tuple[str, str] | None:
+    if len(parts) < 2:
+        return None
+    grounded_text = "\n".join(
+        f"{part.title}\n{part.summary}" for part in parts
+    )
+    try:
+        result = tools.call(
+            "llm_writer",
+            {
+                "task": "internal_weekly_party_event_synthesis",
+                "skill_id": "internal_weekly",
+                "output_type": PartyEventSynthesis,
+                "prompt_path": "prompts/party_event_synthesis.md",
+                "instruction": (
+                    "把以下同一重大活动的互补正式稿综合为一个标题和一个连贯段落。"
+                    "只使用输入事实，不按来源分段，不重复活动背景。"
+                ),
+                "materials": [
+                    {
+                        "source_url": part.source_url,
+                        "title": part.title,
+                        "summary": part.summary,
+                    }
+                    for part in parts
+                ],
+            },
+        )
+        synthesis = (
+            result
+            if isinstance(result, PartyEventSynthesis)
+            else PartyEventSynthesis.model_validate(result)
+        )
+    except Exception:
+        return None
+
+    title = " ".join(synthesis.title.split()).strip()
+    summary = re.sub(r"\s*\n+\s*", "", synthesis.summary).strip()
+    if not title or not summary or len(summary) > MAX_PARTY_EVENT_SYNTHESIS_CHARS:
+        return None
+    grounded_numbers = _number_tokens(grounded_text)
+    if not _number_tokens(f"{title}\n{summary}").issubset(grounded_numbers):
+        return None
+    return title, summary
 
 
 def _regulatory_subject(page: WebCandidate, assessment: ContentCandidateAssessment) -> str:
@@ -1115,6 +1187,183 @@ def _materials(
     ]
 
 
+def _evidence_block_map(
+    body: str,
+    *,
+    max_body_chars: int = MAX_ORDINARY_BODY_CHARS,
+) -> dict[str, str]:
+    """把原文切成由程序持有的证据块，模型只选择编号，不再重新抄原句。"""
+    source = body[:max_body_chars]
+    blocks: list[str] = []
+    for paragraph in re.split(r"\n+", source):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= 600:
+            blocks.append(paragraph)
+            continue
+        sentences = [
+            match.group(0).strip()
+            for match in re.finditer(r"[^。！？!?\n]+[。！？!?]?", paragraph)
+            if match.group(0).strip()
+        ]
+        current = ""
+        for sentence in sentences:
+            if current and len(current) + len(sentence) > 600:
+                blocks.append(current)
+                current = sentence
+            else:
+                current += sentence
+        if current:
+            blocks.append(current)
+    return {
+        f"E{index:03d}": block
+        for index, block in enumerate(blocks, start=1)
+    }
+
+
+def _ordinary_materials(pages: list[WebCandidate]) -> list[dict[str, str]]:
+    materials: list[dict[str, str]] = []
+    for page in pages:
+        evidence_blocks = _evidence_block_map(page.body)
+        block_text = "\n".join(
+            f"[{block_id}] {text}"
+            for block_id, text in evidence_blocks.items()
+        )
+        materials.append(
+            {
+                "type": "web_page",
+                "source": "web_reader",
+                "source_label": page.publisher or page.site,
+                "title": page.title,
+                "url": page.canonical_url,
+                "publish_date": page.publish_date,
+                "text": (
+                    f"标题：{page.title}\n发布日期：{page.publish_date}\n"
+                    f"原文链接：{page.canonical_url}\n\n"
+                    f"原文证据块：\n{block_text}"
+                ),
+            }
+        )
+    return materials
+
+
+def _selected_evidence_blocks(
+    block_ids: list[str],
+    page: WebCandidate,
+) -> tuple[str, ...]:
+    if not block_ids or len(block_ids) > 3:
+        return ()
+    block_map = _evidence_block_map(page.body)
+    selected: list[str] = []
+    for block_id in dict.fromkeys(block_ids):
+        block = block_map.get(block_id)
+        if block is None:
+            return ()
+        selected.append(block)
+    return tuple(selected)
+
+
+def _numeric_fact_tokens(value: str) -> set[str]:
+    pattern = (
+        r"\d[\d,]*(?:\.\d+)?"
+        r"(?:个百分点|个基点|基点|万亿美元|亿美元|万亿元|亿元|万元|"
+        r"%|年|月|日|万|亿|人|个|家|项|倍|点)?"
+    )
+    normalized: set[str] = set()
+    for year, month, day in re.findall(
+        r"(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})",
+        value,
+    ):
+        normalized.update(
+            {
+                f"{int(year)}年",
+                f"{int(month)}月",
+                f"{int(day)}日",
+            }
+        )
+    for token in re.findall(pattern, value):
+        match = re.fullmatch(r"([\d,]+(?:\.\d+)?)(.*)", token)
+        if match is None:
+            continue
+        number, unit = match.groups()
+        number = number.replace(",", "")
+        if "." not in number:
+            number = str(int(number))
+        normalized.add(f"{number}{unit}")
+    return normalized
+
+
+def _summary_core_supported(
+    summary: str,
+    evidence_excerpts: tuple[str, ...],
+    page: WebCandidate,
+) -> bool:
+    """允许概括压缩，但拦截数字、政策题名和增减方向等核心事实变化。"""
+    normalized_summary = summary.strip()
+    if not normalized_summary or not evidence_excerpts:
+        return False
+    evidence_text = "\n".join(evidence_excerpts)
+    source_facts = f"{page.title}\n{page.publish_date}\n{evidence_text}"
+    if not _numeric_fact_tokens(normalized_summary).issubset(
+        _numeric_fact_tokens(source_facts)
+    ):
+        return False
+    for policy_title in re.findall(r"《[^》]{2,80}》", normalized_summary):
+        if policy_title not in page.body and policy_title not in page.title:
+            return False
+
+    up_markers = ("增长", "上升", "上涨", "增加", "提高", "回升", "走强")
+    down_markers = ("下降", "下跌", "减少", "降低", "回落", "收缩", "走弱")
+    summary_has_up = any(marker in normalized_summary for marker in up_markers)
+    summary_has_down = any(marker in normalized_summary for marker in down_markers)
+    evidence_has_up = any(marker in evidence_text for marker in up_markers)
+    evidence_has_down = any(marker in evidence_text for marker in down_markers)
+    if summary_has_up and evidence_has_down and not evidence_has_up:
+        return False
+    if summary_has_down and evidence_has_up and not evidence_has_down:
+        return False
+    specific_up = ("上升", "上涨", "增加", "提高", "回升", "走强")
+    specific_down = ("下降", "下跌", "减少", "降低", "回落", "收缩", "走弱")
+    if (
+        any(marker in normalized_summary for marker in specific_up)
+        and any(marker in evidence_text for marker in specific_down)
+        and not any(marker in evidence_text for marker in specific_up)
+    ):
+        return False
+    if (
+        any(marker in normalized_summary for marker in specific_down)
+        and any(marker in evidence_text for marker in specific_up)
+        and not any(marker in evidence_text for marker in specific_down)
+    ):
+        return False
+    return True
+
+
+def _grounding_from_assessment(
+    assessment: ContentCandidateAssessment,
+    page: WebCandidate,
+) -> _GroundedSummary | None:
+    evidence_excerpts = _selected_evidence_blocks(
+        assessment.evidence_block_ids,
+        page,
+    )
+    if not evidence_excerpts:
+        evidence = assessment.evidence_excerpt.strip()
+        if _evidence_in_body(evidence, page.body):
+            evidence_excerpts = (evidence,)
+    if not _summary_core_supported(
+        assessment.summary,
+        evidence_excerpts,
+        page,
+    ):
+        return None
+    return _GroundedSummary(
+        summary=assessment.summary.strip(),
+        evidence_excerpts=evidence_excerpts,
+    )
+
+
 def _record_from_page(
     page: WebCandidate,
     *,
@@ -1135,6 +1384,73 @@ def _record_from_page(
         evidence_excerpts=evidence,
         content_sha256=hashlib.sha256(page.body.encode("utf-8")).hexdigest(),
     )
+
+
+def _repair_ordinary_grounding(
+    candidates: list[tuple[ContentCandidateAssessment, WebCandidate]],
+    tools: ToolGateway,
+) -> dict[str, _GroundedSummary]:
+    """只允许模型重写摘要并选择程序编号，代码复核核心事实后才接纳。"""
+    unique: dict[str, tuple[ContentCandidateAssessment, WebCandidate]] = {}
+    for assessment, page in candidates:
+        unique.setdefault(page.canonical_url, (assessment, page))
+    pending = list(unique.values())
+    repaired: dict[str, _GroundedSummary] = {}
+    for offset in range(0, len(pending), MAX_PAGES_PER_ASSESSMENT_BATCH):
+        batch = pending[offset : offset + MAX_PAGES_PER_ASSESSMENT_BATCH]
+        try:
+            result = tools.call(
+                "llm_writer",
+                {
+                    "task": "internal_weekly_grounding_repair",
+                    "skill_id": "internal_weekly",
+                    "output_type": GroundingRepairBatch,
+                    "prompt_path": "prompts/grounding_repair.md",
+                    "instruction": (
+                        "允许概括压缩，但人物、机构、时间、数字、单位、政策动作、"
+                        "因果关系和增减方向必须由所选原文证据块直接支持。"
+                    ),
+                    "requests": [
+                        {
+                            "source_url": page.canonical_url,
+                            "title": assessment.title,
+                            "summary": assessment.summary,
+                            "rejected_evidence_excerpt": assessment.evidence_excerpt,
+                            "rejected_evidence_block_ids": assessment.evidence_block_ids,
+                        }
+                        for assessment, page in batch
+                    ],
+                    "materials": _ordinary_materials(
+                        [page for _, page in batch]
+                    ),
+                },
+            )
+            repair_batch = (
+                result
+                if isinstance(result, GroundingRepairBatch)
+                else GroundingRepairBatch.model_validate(result)
+            )
+        except Exception:
+            continue
+        page_map = {page.canonical_url: page for _, page in batch}
+        for item in repair_batch.items:
+            page = page_map.get(item.source_url)
+            if page is None:
+                continue
+            evidence_excerpts = _selected_evidence_blocks(
+                item.evidence_block_ids,
+                page,
+            )
+            if _summary_core_supported(item.summary, evidence_excerpts, page):
+                repaired[page.canonical_url] = _GroundedSummary(
+                    summary=item.summary.strip(),
+                    evidence_excerpts=evidence_excerpts,
+                )
+    return repaired
+
+
+def _batch_candidate_titles(pages: list[WebCandidate]) -> str:
+    return "；".join(page.title.strip() or page.canonical_url for page in pages)
 
 
 def _ordinary_items(
@@ -1213,12 +1529,11 @@ def _ordinary_items(
                             f"{peer_scope_instruction}"
                             "党建仅保留党中央层面或金融监管部门自身部署，其他部委党建排除。"
                             "每一条候选都必须返回判断；不入选也要返回 include=false，不能漏答或返回空列表。"
-                            "只形成事实摘要，并返回可在原文逐字核对的证据句。"
+                            "摘要可以概括压缩，但不得改变人物、机构、时间、数字、单位、"
+                            "政策动作、因果关系或增减方向；证据优先返回1至3个原文证据块编号，"
+                            "不要自行重抄证据文字。"
                         ),
-                        "materials": _materials(
-                            page_batch,
-                            max_body_chars=MAX_ORDINARY_BODY_CHARS,
-                        ),
+                        "materials": _ordinary_materials(page_batch),
                     },
                 )
                 batch = (
@@ -1229,17 +1544,35 @@ def _ordinary_items(
                 if batch.items or assessment_attempt == MAX_EMPTY_ASSESSMENT_ATTEMPTS - 1:
                     break
         except Exception:
-            warnings.append(f"{expected_section}第{batch_index}批候选评估失败")
+            warnings.append(
+                f"{expected_section}第{batch_index}批候选评估失败"
+                f"（候选：{_batch_candidate_titles(page_batch)}）"
+            )
             continue
         if not batch.items:
-            warnings.append(f"{expected_section}第{batch_index}批候选评估连续返回空判断")
+            warnings.append(
+                f"{expected_section}第{batch_index}批候选评估连续返回空判断"
+                f"（候选：{_batch_candidate_titles(page_batch)}）"
+            )
             continue
         assessed.extend((assessment, page_map) for assessment in batch.items)
+    grounding_repairs = _repair_ordinary_grounding(
+        [
+            (assessment, page)
+            for assessment, page_map in assessed
+            if assessment.include
+            and assessment.section == expected_section
+            and (page := page_map.get(assessment.source_url)) is not None
+            and _grounding_from_assessment(assessment, page) is None
+        ],
+        tools,
+    )
     items: list[WeeklyItem] = []
     records: list[SourceRecord] = []
     seen_urls: set[str] = set()
     selected_party_event_titles: list[str] = []
     party_event_item_indexes: dict[str, int] = {}
+    party_event_parts: dict[int, list[_PartyEventPart]] = {}
     for assessment, page_map in sorted(
         assessed,
         key=lambda pair: _ordinary_assessment_rank(
@@ -1275,10 +1608,18 @@ def _ordinary_items(
                 f"《{assessment.title}》同业价值评分低于7分，已排除"
             )
             continue
-        evidence = assessment.evidence_excerpt.strip()
-        if not _evidence_in_body(evidence, page.body):
-            warnings.append(f"《{assessment.title}》缺少可逐字核验的证据句，已排除")
+        grounding = (
+            _grounding_from_assessment(assessment, page)
+            or grounding_repairs.get(page.canonical_url)
+        )
+        if grounding is None:
+            warnings.append(
+                f"《{assessment.title}》摘要核心事实无法由原文证据支持，已排除"
+            )
             continue
+        assessment = assessment.model_copy(
+            update={"summary": grounding.summary}
+        )
         party_event_keys = (
             _party_major_event_keys(assessment.title, page.body)
             if expected_section == "党政要闻"
@@ -1336,7 +1677,7 @@ def _ordinary_items(
                     page,
                     retrieved_at=retrieved_at,
                     source_type="news",
-                    evidence=[evidence],
+                    evidence=list(grounding.evidence_excerpts),
                 )
                 items[item_index] = existing_item.model_copy(
                     update={
@@ -1346,6 +1687,13 @@ def _ordinary_items(
                 )
                 records.append(source_record)
                 seen_urls.add(page.canonical_url)
+                party_event_parts.setdefault(item_index, []).append(
+                    _PartyEventPart(
+                        title=assessment.title,
+                        summary=assessment.summary,
+                        source_url=page.canonical_url,
+                    )
+                )
                 for key in party_event_keys:
                     party_event_item_indexes[key] = item_index
                 continue
@@ -1367,7 +1715,7 @@ def _ordinary_items(
             page,
             retrieved_at=retrieved_at,
             source_type="news",
-            evidence=[evidence],
+            evidence=list(grounding.evidence_excerpts),
         )
         if regulatory_subject:
             source_record = source_record.model_copy(
@@ -1391,6 +1739,14 @@ def _ordinary_items(
         if expected_section == "党政要闻":
             selected_party_event_titles.append(assessment.title)
             item_index = len(items) - 1
+            if party_event_keys:
+                party_event_parts[item_index] = [
+                    _PartyEventPart(
+                        title=assessment.title,
+                        summary=assessment.summary,
+                        source_url=page.canonical_url,
+                    )
+                ]
             for key in party_event_keys:
                 party_event_item_indexes[key] = item_index
         item_limit = (
@@ -1404,6 +1760,14 @@ def _ordinary_items(
         )
         if expected_section != "党政要闻" and len(items) >= item_limit:
             break
+    for item_index, parts in party_event_parts.items():
+        synthesis = _synthesize_party_event(parts, tools)
+        if synthesis is None:
+            continue
+        title, summary = synthesis
+        items[item_index] = items[item_index].model_copy(
+            update={"title": title, "body": summary}
+        )
     return items, records, warnings
 
 
