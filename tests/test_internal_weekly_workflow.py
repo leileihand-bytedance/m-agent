@@ -509,7 +509,7 @@ def test_full_weekly_keeps_other_sections_when_one_parallel_task_fails(monkeypat
     assert all("sensitive provider detail" not in warning for warning in result.warnings)
 
 
-def test_full_weekly_is_not_approvable_when_selected_item_needs_rewrite():
+def test_full_weekly_uses_source_extract_instead_of_leaving_rewrite_problem():
     class InvalidRegulatorySummaryTools(FakeTools):
         def llm_writer(self, payload):
             if payload["task"] == "internal_weekly_grounding_repair":
@@ -550,11 +550,12 @@ def test_full_weekly_is_not_approvable_when_selected_item_needs_rewrite():
         section for section in result.sections if section.name == "监管动态"
     )
     assert len(regulatory.items) == 1
-    assert regulatory.items[0].review_status == "needs_rewrite"
-    assert result.ready_for_approval is False
-    assert result.document_metadata["ready_for_approval"] == "false"
-    assert "加工状态：待整理" in result.body
-    assert any("已保留待整理" in warning for warning in result.warnings)
+    assert regulatory.items[0].body.startswith("近日，中国人民银行发布金融统计数据")
+    assert "999项" not in regulatory.items[0].body
+    assert result.ready_for_approval is True
+    assert result.document_metadata["ready_for_approval"] == "true"
+    assert "加工状态：待整理" not in result.body
+    assert all("已保留待整理" not in warning for warning in result.warnings)
 
 
 def test_approved_revision_generates_word_without_researching_again(
@@ -1659,7 +1660,7 @@ def test_ordinary_summary_can_compress_source_when_core_facts_stay_grounded():
     assert records[0].evidence_excerpts == [page.body]
 
 
-def test_ordinary_item_keeps_valuable_source_pending_when_summary_changes_a_core_number():
+def test_ordinary_item_regenerates_summary_when_core_number_is_wrong():
     page = WebCandidate(
         url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
         canonical_url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
@@ -1683,14 +1684,23 @@ def test_ordinary_item_keeps_valuable_source_pending_when_summary_changes_a_core
         reason="资本市场监管执法",
     )
 
+    repair_calls = 0
+
     def llm_writer(payload):
+        nonlocal repair_calls
         if payload["task"] == "internal_weekly_content_assessment":
             return ContentAssessmentBatch(items=[assessment])
+        repair_calls += 1
+        repaired_summary = (
+            assessment.summary
+            if repair_calls == 1
+            else "中国证监会专项行动已办理47起典型案件，持续防范财务造假。"
+        )
         return GroundingRepairBatch(
             items=[
                 GroundingRepairItem(
                     source_url=page.canonical_url,
-                    summary=assessment.summary,
+                    summary=repaired_summary,
                     evidence_block_ids=["E001"],
                 )
             ]
@@ -1708,19 +1718,18 @@ def test_ordinary_item_keeps_valuable_source_pending_when_summary_changes_a_core
         retrieved_at="2026-07-20T10:00:00+08:00",
     )
 
+    assert repair_calls == 2
     assert len(items) == 1
-    assert items[0].review_status == "needs_rewrite"
     assert items[0].body.startswith("近日，")
-    assert "摘要待整理" in items[0].body
+    assert "47起" in items[0].body
+    assert "247起" not in items[0].body
     assert len(records) == 1
     assert records[0].url == page.canonical_url
     assert records[0].evidence_excerpts == [page.body]
-    assert warnings == [
-        f"《{page.title}》已通过内容价值筛选，但摘要核心事实未通过校验，已保留待整理"
-    ]
+    assert warnings == []
 
 
-def test_ordinary_item_keeps_valuable_source_pending_when_summary_reverses_direction():
+def test_ordinary_item_uses_verified_source_extract_when_regeneration_keeps_failing():
     page = WebCandidate(
         url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
         canonical_url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
@@ -1768,12 +1777,11 @@ def test_ordinary_item_keeps_valuable_source_pending_when_summary_reverses_direc
     )
 
     assert len(items) == 1
-    assert items[0].review_status == "needs_rewrite"
-    assert items[0].body.startswith("近日，")
+    assert items[0].body == f"近日，{page.body}"
+    assert "回落0.7个百分点" in items[0].body
+    assert "提高0.7个百分点" not in items[0].body
     assert len(records) == 1
-    assert warnings == [
-        f"《{page.title}》已通过内容价值筛选，但摘要核心事实未通过校验，已保留待整理"
-    ]
+    assert warnings == []
 
 
 def test_ordinary_item_uses_event_date_from_evidence_instead_of_publish_date():

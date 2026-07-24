@@ -25,8 +25,6 @@ def render_review_markdown(result: InternalWeeklyResult) -> str:
             lines.extend(["_本板块暂无通过筛选和溯源校验的条目。_", ""])
         for index, item in enumerate(section.items, start=1):
             lines.extend([f"### {index}. {item.title}", "", item.body, "", "核对信息："])
-            if item.review_status == "needs_rewrite":
-                lines.append(f"- 加工状态：待整理（{item.review_note or '摘要未通过核心事实校验'}）")
             for source_id in item.source_ids:
                 source = source_map[source_id]
                 lines.append(f"- 原文链接：[{source.title}]({source.url})")

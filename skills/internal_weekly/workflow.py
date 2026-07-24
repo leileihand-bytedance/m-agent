@@ -74,6 +74,7 @@ MAX_PEER_ACTIVITY_ITEMS = 5
 MIN_PEER_ACTIVITY_SCORE = 7.0
 MAX_PAGES_PER_ASSESSMENT_BATCH = 5
 MAX_EMPTY_ASSESSMENT_ATTEMPTS = 2
+MAX_GROUNDING_REPAIR_ATTEMPTS = 3
 MAX_ORDINARY_BODY_CHARS = 12000
 MAX_PARTY_EVENT_SOURCES = 3
 MAX_PARTY_EVENT_BODY_CHARS = 600
@@ -1355,6 +1356,25 @@ def _fallback_evidence(
     return (next(iter(blocks.values())),) if blocks else ()
 
 
+def _source_extract_grounding(
+    assessment: ContentCandidateAssessment,
+    page: WebCandidate,
+) -> _GroundedSummary:
+    """模型连续失真时直接使用程序取回的原文，绝不交付已知错误摘要。"""
+    evidence_excerpts = _fallback_evidence(assessment, page)
+    summary = "\n".join(evidence_excerpts).strip() or page.title.strip()
+    occurrence_date = _verified_occurrence_date(
+        assessment.occurrence_date,
+        evidence_excerpts,
+        page,
+    ) or _verified_occurrence_date("", evidence_excerpts, page)
+    return _GroundedSummary(
+        summary=summary,
+        evidence_excerpts=evidence_excerpts,
+        occurrence_date=occurrence_date,
+    )
+
+
 def _numeric_fact_tokens(value: str) -> set[str]:
     pattern = (
         r"\d[\d,]*(?:\.\d+)?"
@@ -1492,66 +1512,74 @@ def _repair_ordinary_grounding(
     unique: dict[str, tuple[ContentCandidateAssessment, WebCandidate]] = {}
     for assessment, page in candidates:
         unique.setdefault(page.canonical_url, (assessment, page))
-    pending = list(unique.values())
     repaired: dict[str, _GroundedSummary] = {}
-    for offset in range(0, len(pending), MAX_PAGES_PER_ASSESSMENT_BATCH):
-        batch = pending[offset : offset + MAX_PAGES_PER_ASSESSMENT_BATCH]
-        try:
-            result = tools.call(
-                "llm_writer",
-                {
-                    "task": "internal_weekly_grounding_repair",
-                    "skill_id": "internal_weekly",
-                    "output_type": GroundingRepairBatch,
-                    "prompt_path": "prompts/grounding_repair.md",
-                    "instruction": (
-                        "允许概括压缩，但人物、机构、时间、数字、单位、政策动作、"
-                        "因果关系和增减方向必须由所选原文证据块直接支持。"
-                        "occurrence_date只填写证据块中明确记载的事件发生日，"
-                        "不得用网页发布日期代替；没有可靠发生日时留空。"
-                    ),
-                    "requests": [
-                        {
-                            "source_url": page.canonical_url,
-                            "title": assessment.title,
-                            "summary": assessment.summary,
-                            "occurrence_date": assessment.occurrence_date,
-                            "rejected_evidence_excerpt": assessment.evidence_excerpt,
-                            "rejected_evidence_block_ids": assessment.evidence_block_ids,
-                        }
-                        for assessment, page in batch
-                    ],
-                    "materials": _ordinary_materials(
-                        [page for _, page in batch]
-                    ),
-                },
-            )
-            repair_batch = (
-                result
-                if isinstance(result, GroundingRepairBatch)
-                else GroundingRepairBatch.model_validate(result)
-            )
-        except Exception:
-            continue
-        page_map = {page.canonical_url: page for _, page in batch}
-        for item in repair_batch.items:
-            page = page_map.get(item.source_url)
-            if page is None:
-                continue
-            evidence_excerpts = _selected_evidence_blocks(
-                item.evidence_block_ids,
-                page,
-            )
-            if _summary_core_supported(item.summary, evidence_excerpts, page):
-                repaired[page.canonical_url] = _GroundedSummary(
-                    summary=item.summary.strip(),
-                    evidence_excerpts=evidence_excerpts,
-                    occurrence_date=_verified_occurrence_date(
-                        item.occurrence_date,
-                        evidence_excerpts,
-                        page,
-                    ),
+    for attempt in range(1, MAX_GROUNDING_REPAIR_ATTEMPTS + 1):
+        pending = [
+            pair
+            for url, pair in unique.items()
+            if url not in repaired
+        ]
+        if not pending:
+            break
+        for offset in range(0, len(pending), MAX_PAGES_PER_ASSESSMENT_BATCH):
+            batch = pending[offset : offset + MAX_PAGES_PER_ASSESSMENT_BATCH]
+            try:
+                result = tools.call(
+                    "llm_writer",
+                    {
+                        "task": "internal_weekly_grounding_repair",
+                        "skill_id": "internal_weekly",
+                        "output_type": GroundingRepairBatch,
+                        "prompt_path": "prompts/grounding_repair.md",
+                        "repair_attempt": attempt,
+                        "instruction": (
+                            "重新生成摘要，不要保留已知错误。允许概括压缩，但人物、机构、"
+                            "时间、数字、单位、政策动作、因果关系和增减方向必须由所选"
+                            "原文证据块直接支持。occurrence_date只填写证据块中明确记载的"
+                            "事件发生日，不得用网页发布日期代替；没有可靠发生日时留空。"
+                        ),
+                        "requests": [
+                            {
+                                "source_url": page.canonical_url,
+                                "title": assessment.title,
+                                "summary": assessment.summary,
+                                "occurrence_date": assessment.occurrence_date,
+                                "rejected_evidence_excerpt": assessment.evidence_excerpt,
+                                "rejected_evidence_block_ids": assessment.evidence_block_ids,
+                            }
+                            for assessment, page in batch
+                        ],
+                        "materials": _ordinary_materials(
+                            [page for _, page in batch]
+                        ),
+                    },
                 )
+                repair_batch = (
+                    result
+                    if isinstance(result, GroundingRepairBatch)
+                    else GroundingRepairBatch.model_validate(result)
+                )
+            except Exception:
+                continue
+            page_map = {page.canonical_url: page for _, page in batch}
+            for item in repair_batch.items:
+                page = page_map.get(item.source_url)
+                if page is None:
+                    continue
+                evidence_excerpts = _selected_evidence_blocks(
+                    item.evidence_block_ids,
+                    page,
+                )
+                if _summary_core_supported(item.summary, evidence_excerpts, page):
+                    repaired[page.canonical_url] = _GroundedSummary(
+                        summary=item.summary.strip(),
+                        evidence_excerpts=evidence_excerpts,
+                        occurrence_date=_verified_occurrence_date(
+                            item.occurrence_date,
+                            evidence_excerpts,
+                            page,
+                        ),
+                    )
     return repaired
 
 
@@ -1718,22 +1746,8 @@ def _ordinary_items(
         grounding = (
             _grounding_from_assessment(assessment, page)
             or grounding_repairs.get(page.canonical_url)
+            or _source_extract_grounding(assessment, page)
         )
-        review_status = "verified"
-        review_note = ""
-        if grounding is None:
-            fallback_evidence = _fallback_evidence(assessment, page)
-            grounding = _GroundedSummary(
-                summary="摘要待整理，请结合核对信息中的原文证据重新整理。",
-                evidence_excerpts=fallback_evidence,
-                occurrence_date=_verified_occurrence_date(
-                    assessment.occurrence_date,
-                    fallback_evidence,
-                    page,
-                ),
-            )
-            review_status = "needs_rewrite"
-            review_note = "摘要核心事实未通过原文校验"
         assessment = assessment.model_copy(
             update={"summary": grounding.summary}
         )
@@ -1767,7 +1781,7 @@ def _ordinary_items(
         ):
             warnings.append(f"《{assessment.title}》属于微众银行自身动态，不作为同业收录")
             continue
-        if expected_section == "党政要闻" and review_status == "verified":
+        if expected_section == "党政要闻":
             if matching_party_event_indexes:
                 item_index = min(matching_party_event_indexes)
                 existing_item = items[item_index]
@@ -1858,18 +1872,11 @@ def _ordinary_items(
                 body=item_body,
                 content_mode="summary",
                 source_ids=[source_record.source_id],
-                review_status=review_status,
-                review_note=review_note,
             )
         )
         records.append(source_record)
         seen_urls.add(page.canonical_url)
-        if review_status == "needs_rewrite":
-            warnings.append(
-                f"《{assessment.title}》已通过内容价值筛选，但摘要核心事实未通过校验，"
-                "已保留待整理"
-            )
-        if expected_section == "党政要闻" and review_status == "verified":
+        if expected_section == "党政要闻":
             selected_party_event_titles.append(assessment.title)
             item_index = len(items) - 1
             if party_event_keys:
@@ -2709,17 +2716,11 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         for item in items_by_section["市场观察"]
     )
     frontier_item_present = bool(items_by_section["前沿观点"])
-    all_items_verified = all(
-        item.review_status == "verified"
-        for section in sections
-        for item in section.items
-    )
     ready = (
         all(items_by_section[name] for name in ("党政要闻", "监管动态", "同业动向"))
         and market_item_present
         and frontier_item_present
         and not monday_pending
-        and all_items_verified
     )
     result = InternalWeeklyResult(
         title=f"内参周报（{publication_date.isoformat()}）",

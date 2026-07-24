@@ -121,8 +121,6 @@ class WeeklyItem(BaseModel):
     ]
     source_ids: list[str] = Field(default_factory=list)
     fixed_position: int | None = None
-    review_status: Literal["verified", "needs_rewrite"] = "verified"
-    review_note: str = ""
 
 
 class WeeklySection(BaseModel):
