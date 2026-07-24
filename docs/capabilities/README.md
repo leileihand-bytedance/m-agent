@@ -11,7 +11,7 @@
 | 材料润色 | `skills/rewrite/` | 对用户粘贴文字做保守润色并继续改稿 |
 | 综合调研整合 | `skills/research_synthesis/` | 按现成提纲整合多部门 Word/PDF/PPTX 材料并输出 Word |
 | 深银协动态 | `skills/shenyinxie_news/` | 按指定半月搜索、筛选微众银行正面报道并生成 Word |
-| 内参周报 | `skills/internal_weekly/` | 搜集上一自然周公开信息，输出可追溯内容核对稿和溯源清单 |
+| 内参周报 | `skills/internal_weekly/` | 搜集上一自然周公开信息，先输出可追溯核对稿和溯源清单，人工明确批准同一版本后生成洁净版 Word |
 | 材料审核 | `app/review/` | 独立入口支持文字、Word、HTML、PPTX、格式和多文件审核 |
 
 详细说明：

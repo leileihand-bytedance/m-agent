@@ -122,6 +122,7 @@ class InternalWeeklyResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     ready_for_approval: bool = False
     draft_version: str = ""
+    document_metadata: dict[str, str] = Field(default_factory=dict)
     output_file: str = ""
     manifest_file: str = ""
     needs_clarification: bool = False

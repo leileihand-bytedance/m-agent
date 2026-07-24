@@ -707,9 +707,9 @@ async def _reply_stream_safely(ws_client, frame, stream_id: str, message: str, f
 
 def _result_output_file(result: PlatformResult) -> Path | None:
     allowed_suffixes = {
-        "research_synthesis": ".docx",
-        "shenyinxie_news": ".docx",
-        "internal_weekly": ".md",
+        "research_synthesis": (".docx",),
+        "shenyinxie_news": (".docx",),
+        "internal_weekly": (".md", ".docx"),
     }
     if result.needs_clarification or result.skill_id not in allowed_suffixes:
         return None
@@ -717,7 +717,7 @@ def _result_output_file(result: PlatformResult) -> Path | None:
     if not raw_path:
         return None
     path = Path(raw_path).resolve()
-    if path.suffix.lower() != allowed_suffixes[result.skill_id] or path.parent.name != "output":
+    if path.suffix.lower() not in allowed_suffixes[result.skill_id] or path.parent.name != "output":
         return None
     try:
         size = path.stat().st_size
@@ -1035,8 +1035,14 @@ def _looks_like_material_relation_command(content: str) -> bool:
 
 def _queued_acceptance_message(*, skill_id: str, created: bool, revision: bool = False) -> str:
     label = _ack_label_for_skill(skill_id)
+    if skill_id == "internal_weekly" and revision:
+        return (
+            "已进入内参周报正式 Word 生成队列，完成后会自动发送 Word 附件。"
+            if created
+            else "这项内参周报正式 Word 任务已经在处理中，无需重复提交。"
+        )
     result_label = (
-        "核对稿"
+        ("正式 Word" if revision else "核对稿")
         if skill_id == "internal_weekly"
         else ("修改稿" if revision else "初稿")
     )

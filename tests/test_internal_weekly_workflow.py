@@ -306,6 +306,14 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     assert "第二段分析银行净息差变化。" not in frontier.items[0].body
     assert "这是模型" not in frontier.items[0].body
     assert result.draft_version
+    assert result.document_metadata == {
+        "generation_mode": "full_weekly",
+        "publication_date": "2026-07-13",
+        "period_start": "2026-07-06",
+        "period_end": "2026-07-12",
+        "draft_version": result.draft_version,
+        "ready_for_approval": "true",
+    }
     assert result.output_file.endswith(".md")
     assert not list(output_dir.glob("*.docx"))
 
@@ -359,6 +367,78 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
         ("weekly_hk",),
         ("weekly_us",),
     ]
+
+
+def test_approved_revision_generates_word_without_researching_again(tmp_path):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+    original = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+            "output_dir": str(tmp_path / "review-output"),
+        },
+        gateway,
+    )
+    calls_before_export = (
+        len(fake.search_calls),
+        len(fake.market_required_scopes),
+    )
+
+    confirmation = run(
+        {
+            "revision": True,
+            "text": "请生成 Word 洁净版",
+            "revision_request": "请生成 Word 洁净版",
+            "previous_title": original.title,
+            "previous_body": original.body,
+            "previous_sources": original.sources,
+            "previous_document_metadata": original.document_metadata,
+            "output_dir": str(tmp_path / "unapproved-output"),
+        },
+        gateway,
+    )
+
+    assert confirmation.needs_clarification is True
+    assert "核对无误" in confirmation.message
+    assert confirmation.output_file == ""
+    assert calls_before_export == (
+        len(fake.search_calls),
+        len(fake.market_required_scopes),
+    )
+
+    approved_output = tmp_path / "approved-output"
+    approved_output.mkdir()
+    exported = run(
+        {
+            "revision": True,
+            "text": "请生成 Word 洁净版\n核对无误",
+            "revision_request": "请生成 Word 洁净版",
+            "previous_title": original.title,
+            "previous_body": original.body,
+            "previous_sources": original.sources,
+            "previous_document_metadata": original.document_metadata,
+            "output_dir": str(approved_output),
+        },
+        gateway,
+    )
+
+    assert exported.needs_clarification is False
+    assert exported.output_file.endswith(".docx")
+    assert Path(exported.output_file).is_file()
+    assert exported.draft_version == original.draft_version
+    assert "更新整个目录" in exported.message
+    assert calls_before_export == (
+        len(fake.search_calls),
+        len(fake.market_required_scopes),
+    )
     weekly_instructions = [
         instruction
         for scopes, instruction in zip(

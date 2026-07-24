@@ -115,6 +115,28 @@ def test_word_export_request_continues_selected_direct_report(tmp_path: Path):
     assert decision.action is RelationAction.EXECUTE
 
 
+def test_approved_word_request_continues_selected_internal_weekly(tmp_path: Path):
+    repository = TaskRelationRepository(tmp_path / "relations.sqlite3")
+    _create_completed_task(
+        repository,
+        task_id="weekly-task",
+        skill_id="internal_weekly",
+        title="内参周报（2026-07-27）",
+        body="# 内参周报（内容核对稿）",
+    )
+
+    decision = TaskRelationService(repository).resolve_text(
+        channel="wecom",
+        user_id="user-001",
+        text="这版核对无误，请生成 Word 洁净版",
+        route_skill_id="internal_weekly",
+    )
+
+    assert decision.relation is TaskRelation.CONTINUE
+    assert decision.target_task_id == "weekly-task"
+    assert decision.action is RelationAction.EXECUTE
+
+
 @pytest.mark.parametrize(
     "case",
     json.loads(

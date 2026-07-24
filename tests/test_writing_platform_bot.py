@@ -769,6 +769,14 @@ async def test_research_synthesis_is_accepted_into_persistent_queue():
     )
 
 
+def test_internal_weekly_revision_acceptance_names_formal_word():
+    assert writing_bot._queued_acceptance_message(
+        skill_id="internal_weekly",
+        created=True,
+        revision=True,
+    ) == "已进入内参周报正式 Word 生成队列，完成后会自动发送 Word 附件。"
+
+
 @pytest.mark.anyio
 async def test_revision_uses_persistent_queue_when_queue_is_enabled():
     ws_client = FakeWsClient()

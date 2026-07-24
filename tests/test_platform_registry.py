@@ -79,7 +79,7 @@ def test_registry_loads_enabled_internal_weekly_skill():
     assert skill.enabled is True
     assert skill.allowed_tools == ("search", "web_reader", "llm_writer")
     assert skill.workflow == "skills.internal_weekly.workflow:run"
-    assert skill.supports_revision is False
+    assert skill.supports_revision is True
 
 
 def test_registry_lists_only_enabled_skills(tmp_path):

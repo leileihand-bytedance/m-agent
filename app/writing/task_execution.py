@@ -60,10 +60,6 @@ _WRITING_OUTPUT_FIELDS_BY_SKILL = {
     "writer1": (("output_file", ".docx"),),
     "research_synthesis": (("output_file", ".docx"),),
     "shenyinxie_news": (("output_file", ".docx"),),
-    "internal_weekly": (
-        ("output_file", ".md"),
-        ("manifest_file", ".json"),
-    ),
 }
 _REQUIRED_OUTPUT_SKILLS = frozenset(
     {"research_synthesis", "shenyinxie_news", "internal_weekly"}
@@ -803,6 +799,16 @@ class WritingTaskService:
         field_specs = _WRITING_OUTPUT_FIELDS_BY_SKILL.get(
             str(result.skill_id or "")
         )
+        if result.skill_id == "internal_weekly":
+            raw_output = str(result.output.get("output_file", "") or "").strip()
+            field_specs = (
+                (("output_file", ".docx"),)
+                if Path(raw_output).suffix.lower() == ".docx"
+                else (
+                    ("output_file", ".md"),
+                    ("manifest_file", ".json"),
+                )
+            )
         if field_specs is None or result.needs_clarification:
             return []
         output_root = (workspace.task_dir / "output").resolve(strict=True)

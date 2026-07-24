@@ -504,6 +504,63 @@ def test_attachment_only_writing_skills_do_not_report_success_without_output(
     assert delivered == []
 
 
+def test_internal_weekly_approved_word_is_one_attachment_checkpoint(tmp_path: Path):
+    repository = TaskRepository(tmp_path / "runtime" / "writing.sqlite3")
+    delivered: list[tuple[str, str]] = []
+
+    async def processor(workspace):
+        word_path = workspace.task_dir / "output" / "内参周报.docx"
+        word_path.write_bytes(b"approved-word")
+        return PlatformResult(
+            skill_id="internal_weekly",
+            output={"output_file": str(word_path)},
+            needs_clarification=False,
+            message="已按人工确认版本生成洁净版 Word。",
+        )
+
+    async def text_sender(_recipient: str, text: str) -> bool:
+        delivered.append(("text", text))
+        return True
+
+    async def attachment_sender(
+        _recipient: str,
+        path: Path,
+        task_dir: Path,
+        skill_id: str,
+    ) -> bool:
+        assert path.parent == task_dir / "output"
+        assert skill_id == "internal_weekly"
+        delivered.append(("attachment", path.name))
+        return True
+
+    service = _service(
+        repository=repository,
+        workspace_root=tmp_path / "workspaces",
+        processor=processor,
+        text_sender=text_sender,
+        attachment_sender=attachment_sender,
+    )
+    submission = service.submit_structured(
+        channel="wecom",
+        sender_userid="user-1",
+        sender_name="User One",
+        message_id="message-internal-weekly-word-001",
+        skill_id="internal_weekly",
+        text="这版核对无误，请生成 Word 洁净版",
+        material_text="",
+        urls=(),
+        files=(),
+    )
+
+    result = asyncio.run(service.handle(submission.task))
+
+    assert result.status == "completed"
+    assert delivered == [
+        ("text", "已按人工确认版本生成洁净版 Word。"),
+        ("attachment", "内参周报.docx"),
+    ]
+
+
 def test_internal_weekly_restart_does_not_repeat_confirmed_delivery_items(
     tmp_path: Path,
 ):

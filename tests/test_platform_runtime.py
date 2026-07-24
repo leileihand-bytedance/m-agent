@@ -94,6 +94,10 @@ def test_runtime_preserves_internal_weekly_review_and_manifest_files(
             title="内参周报（2026-07-20）",
             body="# 内参周报",
             message="已生成内容核对稿和溯源清单。",
+            document_metadata={
+                "draft_version": "draft-001",
+                "ready_for_approval": "true",
+            },
             output_file=str(review_path),
             manifest_file=str(manifest_path),
         ),
@@ -115,6 +119,42 @@ def test_runtime_preserves_internal_weekly_review_and_manifest_files(
 
     assert result.output["output_file"] == str(review_path)
     assert result.output["manifest_file"] == str(manifest_path)
+    assert result.output["document_metadata"] == {
+        "draft_version": "draft-001",
+        "ready_for_approval": "true",
+    }
+
+
+def test_runtime_preserves_internal_weekly_approved_word(monkeypatch, tmp_path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    word_path = output_dir / "内参周报.docx"
+    word_path.write_bytes(b"approved-word")
+    monkeypatch.setattr(
+        "skills.internal_weekly.workflow.run",
+        lambda inputs, tools: InternalWeeklyResult(
+            title="内参周报（2026-07-20）",
+            body="# 内参周报",
+            message="已生成洁净版 Word。",
+            output_file=str(word_path),
+        ),
+    )
+    runtime = PlatformRuntime(
+        registry=SkillRegistry.from_directory(Path("skills")),
+        tools={},
+    )
+
+    result = runtime.run(
+        RoutedRequest(
+            skill_id="internal_weekly",
+            confidence=1.0,
+            needs_clarification=False,
+            message="",
+            inputs={"output_dir": str(output_dir)},
+        )
+    )
+
+    assert result.output["output_file"] == str(word_path)
 
 
 def test_runtime_rejects_generated_output_file_outside_job_output(monkeypatch, tmp_path):

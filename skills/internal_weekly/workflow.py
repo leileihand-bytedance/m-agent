@@ -8,6 +8,12 @@ from zoneinfo import ZoneInfo
 
 from app.platform.tools import ToolGateway
 from skills.internal_weekly.dates import parse_flexible_date
+from skills.internal_weekly.docx_output import (
+    generate_internal_weekly_docx,
+    is_explicit_word_approval,
+    parse_approved_review,
+    requests_clean_word,
+)
 from skills.internal_weekly.output import render_review_markdown, write_review_bundle
 from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
@@ -1616,6 +1622,17 @@ def _digest(result: InternalWeeklyResult) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
+def _document_metadata(result: InternalWeeklyResult) -> dict[str, str]:
+    return {
+        "generation_mode": result.generation_mode,
+        "publication_date": result.publication_date,
+        "period_start": result.period_start,
+        "period_end": result.period_end,
+        "draft_version": result.draft_version,
+        "ready_for_approval": "true" if result.ready_for_approval else "false",
+    }
+
+
 def _clarification(message: str, publication_date: date, period_start: date, period_end: date) -> InternalWeeklyResult:
     return InternalWeeklyResult(
         publication_date=publication_date.isoformat(),
@@ -1705,6 +1722,7 @@ def _run_market_update(
         ),
     )
     result.draft_version = _digest(result)
+    result.document_metadata = _document_metadata(result)
     result.body = render_review_markdown(result)
     output_dir = str(inputs.get("output_dir") or "").strip()
     if output_dir:
@@ -1712,8 +1730,84 @@ def _run_market_update(
     return result
 
 
+def _run_approved_word_export(
+    inputs: dict[str, object],
+) -> InternalWeeklyResult:
+    previous_title = str(inputs.get("previous_title", "") or "").strip()
+    previous_body = str(inputs.get("previous_body", "") or "").strip()
+    previous_sources = [
+        str(item).strip()
+        for item in list(inputs.get("previous_sources") or [])
+        if str(item).strip()
+    ]
+    metadata = inputs.get("previous_document_metadata")
+    request_text = str(inputs.get("text") or inputs.get("revision_request") or "").strip()
+    common = {
+        "title": previous_title,
+        "body": previous_body,
+        "sources": previous_sources,
+        "document_metadata": (
+            {
+                str(key): str(value or "").strip()
+                for key, value in metadata.items()
+            }
+            if isinstance(metadata, dict)
+            else {}
+        ),
+    }
+    if not requests_clean_word(request_text):
+        return InternalWeeklyResult(
+            **common,
+            needs_clarification=True,
+            message="当前续接的是内参周报核对稿。如需定稿，请明确回复“核对无误，生成 Word 洁净版”。",
+        )
+    if not is_explicit_word_approval(request_text):
+        return InternalWeeklyResult(
+            **common,
+            needs_clarification=True,
+            message=(
+                "生成洁净版会锁定当前核对稿。请确认来源和内容均已人工核对后，"
+                "回复“核对无误，生成 Word 洁净版”。"
+            ),
+        )
+    try:
+        draft = parse_approved_review(
+            previous_body,
+            metadata if isinstance(metadata, dict) else {},
+        )
+    except ValueError as exc:
+        return InternalWeeklyResult(
+            **common,
+            needs_clarification=True,
+            message=f"当前版本不能生成洁净版 Word：{exc}",
+        )
+
+    output_dir = str(inputs.get("output_dir", "") or "").strip()
+    output_path = generate_internal_weekly_docx(
+        draft=draft,
+        request_text=request_text,
+        output_dir=output_dir,
+    )
+    return InternalWeeklyResult(
+        **common,
+        publication_date=draft.publication_date.isoformat(),
+        period_start=draft.period_start.isoformat(),
+        period_end=draft.period_end.isoformat(),
+        ready_for_approval=True,
+        draft_version=draft.draft_version,
+        output_file=str(output_path),
+        message=(
+            f"已按人工确认的草稿版本 {draft.draft_version} 生成洁净版 Word。"
+            "打开 Word 后，请对目录选择“更新域—更新整个目录”，刷新目录项和页码。"
+        ),
+    )
+
+
 def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
-    """生成可人工核对的内参周报内容稿和溯源清单，不生成 Word。"""
+    """先生成可追溯核对稿；人工明确批准后再从同一版本生成 Word。"""
+    if inputs.get("revision"):
+        return _run_approved_word_export(inputs)
+
     current = _now(inputs)
     instruction = str(inputs.get("text") or "").strip()
     requested = extract_requested_publication_date(instruction)
@@ -1962,6 +2056,7 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         ),
     )
     result.draft_version = _digest(result)
+    result.document_metadata = _document_metadata(result)
     result.body = render_review_markdown(result)
     output_dir = str(inputs.get("output_dir") or "").strip()
     if output_dir:
