@@ -242,9 +242,11 @@ class DeliveryRecoveryService:
                 raw_item["status"] = normalize_checkpoint_status(raw_item.get("status"))
             checkpoint["delivery_status"] = aggregate_delivery_status(raw_items)
         else:
-            checkpoint["delivery_status"] = normalize_checkpoint_status(
+            delivery_status = normalize_checkpoint_status(
                 checkpoint.get("delivery_status")
             )
+            checkpoint["delivery_status"] = delivery_status
+            checkpoint["status"] = delivery_status
         checkpoint["schema_version"] = 2
         return str(checkpoint["delivery_status"])
 

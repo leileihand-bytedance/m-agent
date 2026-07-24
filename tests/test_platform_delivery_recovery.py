@@ -285,3 +285,34 @@ def test_confirmed_delivered_task_cannot_be_retried(tmp_path: Path):
     assert json.loads((task_dir / "execution.json").read_text(encoding="utf-8"))[
         "delivery_status"
     ] == "confirmed_delivered"
+
+
+def test_legacy_single_item_unknown_delivery_can_be_closed(tmp_path: Path):
+    repository, task_id, task_dir = _failed_delivery_task(
+        tmp_path,
+        checkpoint_status="delivery_unknown",
+        safe_error_code="delivery_status_uncertain",
+    )
+    checkpoint_path = task_dir / "execution.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["schema_version"] = 1
+    checkpoint.pop("delivery_items")
+    checkpoint_path.write_text(
+        json.dumps(checkpoint, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = _service(tmp_path, repository).recover(
+        task_id,
+        action="close",
+        operator="local-admin",
+    )
+
+    assert result.queue_status == "completed"
+    assert result.delivery_status == "delivery_unknown_closed"
+    assert repository.get_task(task_id).status == "completed"
+    saved = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert saved["schema_version"] == 2
+    assert saved["status"] == "delivery_unknown_closed"
+    assert saved["delivery_status"] == "delivery_unknown_closed"
+    assert saved["delivery_history"][-1]["recovery_action"] == "close"
