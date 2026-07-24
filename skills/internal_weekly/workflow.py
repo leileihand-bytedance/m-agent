@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import hashlib
 import json
 import re
 from datetime import date, datetime, time, timedelta
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from app.platform.tools import ToolGateway
@@ -72,6 +76,7 @@ MAX_ORDINARY_BODY_CHARS = 12000
 MAX_PARTY_EVENT_SOURCES = 3
 MAX_PARTY_EVENT_BODY_CHARS = 600
 WEB_READER_ATTEMPTS = 2
+MAX_PARALLEL_SECTION_TASKS = 5
 MARKET_CLOSE_TIME = time(15, 0)
 PARTY_FEED_PRIORITY_MARKERS = (
     "人工智能",
@@ -197,6 +202,40 @@ _RESEARCH_INSTITUTION_NAMES = {
     "ecb.europa.eu": "欧洲中央银行",
     "bankofengland.co.uk": "英格兰银行",
 }
+
+SectionTaskValue = TypeVar("SectionTaskValue")
+
+
+@dataclass(frozen=True)
+class _SectionTaskOutput:
+    items: tuple[WeeklyItem, ...] = ()
+    source_records: tuple[SourceRecord, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+def _run_parallel_section_tasks(
+    tasks: Mapping[str, Callable[[], SectionTaskValue]],
+) -> tuple[dict[str, SectionTaskValue], dict[str, Exception]]:
+    """Run the five independent weekly sections concurrently, then restore key order."""
+    if not tasks:
+        return {}, {}
+    worker_count = min(MAX_PARALLEL_SECTION_TASKS, len(tasks))
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="internal-weekly-section",
+    ) as executor:
+        futures = {
+            section_name: executor.submit(task)
+            for section_name, task in tasks.items()
+        }
+        results: dict[str, SectionTaskValue] = {}
+        failures: dict[str, Exception] = {}
+        for section_name in tasks:
+            try:
+                results[section_name] = futures[section_name].result()
+            except Exception as exc:
+                failures[section_name] = exc
+    return results, failures
 
 
 def _evidence_in_body(excerpt: str, body: str) -> bool:
@@ -1606,6 +1645,243 @@ def _frontier_item(
     return item, [record], warnings
 
 
+def _assess_ordinary_section(
+    section_name: str,
+    pages: list[WebCandidate],
+    tools: ToolGateway,
+    *,
+    retrieved_at: str,
+    warnings: list[str],
+) -> _SectionTaskOutput:
+    items: list[WeeklyItem] = []
+    records: list[SourceRecord] = []
+    try:
+        items, records, item_warnings = _ordinary_items(
+            pages,
+            tools,
+            expected_section=section_name,
+            retrieved_at=retrieved_at,
+        )
+        warnings.extend(item_warnings)
+    except Exception as exc:
+        warnings.append(f"{section_name}内容评估失败：{exc}")
+    return _SectionTaskOutput(
+        items=tuple(items),
+        source_records=tuple(records),
+        warnings=tuple(warnings),
+    )
+
+
+def _run_party_section_task(
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+    retrieved_at: str,
+) -> _SectionTaskOutput:
+    section_name = "党政要闻"
+    queries = dict(_ordinary_query_groups(period_start, period_end))[section_name]
+    pages, warnings = _collect_pages(
+        list(queries),
+        tools,
+        period_start=period_start,
+        period_end=period_end,
+        source_section=section_name,
+        max_results_per_query=10,
+    )
+    feed_pages, feed_warnings = _collect_source_feed_pages(
+        list(section_source_feed_urls(section_name)),
+        tools,
+        period_start=period_start,
+        period_end=period_end,
+        source_section=section_name,
+    )
+    warnings.extend(feed_warnings)
+    return _assess_ordinary_section(
+        section_name,
+        _merge_candidate_pages(feed_pages, pages),
+        tools,
+        retrieved_at=retrieved_at,
+        warnings=warnings,
+    )
+
+
+def _run_regulatory_section_task(
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+    retrieved_at: str,
+) -> _SectionTaskOutput:
+    section_name = "监管动态"
+    pages, warnings = _collect_regulatory_pages(
+        _regulatory_query_groups(period_start, period_end),
+        list(section_source_feed_specs(section_name)),
+        tools,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    return _assess_ordinary_section(
+        section_name,
+        pages,
+        tools,
+        retrieved_at=retrieved_at,
+        warnings=warnings,
+    )
+
+
+def _run_peer_section_task(
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+    retrieved_at: str,
+) -> _SectionTaskOutput:
+    section_name = "同业动向"
+    page_groups: list[list[WebCandidate]] = []
+    warnings: list[str] = []
+    for _, queries in _peer_activity_query_groups(period_start, period_end):
+        pages, group_warnings = _collect_pages(
+            list(queries),
+            tools,
+            period_start=period_start,
+            period_end=period_end,
+            source_section=section_name,
+            max_results_per_query=10,
+        )
+        page_groups.append(pages)
+        warnings.extend(group_warnings)
+    return _assess_ordinary_section(
+        section_name,
+        _merge_candidate_pages_balanced(*page_groups),
+        tools,
+        retrieved_at=retrieved_at,
+        warnings=warnings,
+    )
+
+
+def _run_market_section_task(
+    tools: ToolGateway,
+    *,
+    publication_date: date,
+    period_start: date,
+    period_end: date,
+    retrieved_at: str,
+    monday_pending: bool,
+) -> _SectionTaskOutput:
+    section_name = "市场观察"
+    warnings: list[str] = []
+    topic_page_groups: list[list[WebCandidate]] = []
+    for _, queries in _market_observation_query_groups(period_start, period_end):
+        pages, group_warnings = _collect_pages(
+            list(queries),
+            tools,
+            period_start=period_start,
+            period_end=period_end,
+            source_section=section_name,
+            max_results_per_query=10,
+        )
+        topic_page_groups.append(pages)
+        warnings.extend(group_warnings)
+    ordinary_output = _assess_ordinary_section(
+        section_name,
+        _merge_candidate_pages_balanced(*topic_page_groups),
+        tools,
+        retrieved_at=retrieved_at,
+        warnings=warnings,
+    )
+
+    items = list(ordinary_output.items)
+    records = list(ordinary_output.source_records)
+    warnings = list(ordinary_output.warnings)
+    market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []
+    for required_scopes, queries in _market_query_groups(
+        publication_date,
+        period_start,
+        period_end,
+    ):
+        if monday_pending and required_scopes == ("monday_a",):
+            continue
+        pages, group_warnings = _collect_pages(
+            list(queries),
+            tools,
+            source_section=section_name,
+            max_results_per_query=10,
+        )
+        market_page_groups.append((required_scopes, pages))
+        warnings.extend(group_warnings)
+    try:
+        market_item, market_records, item_warnings = _market_item(
+            market_page_groups,
+            tools,
+            publication_date=publication_date,
+            period_start=period_start,
+            period_end=period_end,
+            retrieved_at=retrieved_at,
+            monday_pending=monday_pending,
+        )
+        if market_item is not None:
+            items.insert(0, market_item)
+        records.extend(market_records)
+        warnings.extend(item_warnings)
+    except Exception as exc:
+        warnings.append(f"资本市场综述未通过完整性校验：{exc}")
+    if monday_pending:
+        warnings.append("今日A股收盘数据待15:00收盘后更新")
+    return _SectionTaskOutput(
+        items=tuple(items),
+        source_records=tuple(records),
+        warnings=tuple(warnings),
+    )
+
+
+def _run_frontier_section_task(
+    tools: ToolGateway,
+    *,
+    period_start: date,
+    period_end: date,
+    retrieved_at: str,
+) -> _SectionTaskOutput:
+    frontier_window_start = period_end - timedelta(days=29)
+    pages, warnings = _collect_pages(
+        _frontier_queries(frontier_window_start, period_end, fallback=True),
+        tools,
+        period_start=frontier_window_start,
+        period_end=period_end,
+        require_research=True,
+        source_section="前沿观点",
+        max_results_per_query=10,
+    )
+    weekly_pages = [
+        page
+        for page in pages
+        if date_in_period(page.publish_date, period_start, period_end)
+    ]
+    if weekly_pages:
+        pages = weekly_pages
+    elif pages:
+        warnings.append("前沿观点使用近30日兜底报告，发布日期不在本期统计周")
+
+    item: WeeklyItem | None = None
+    records: list[SourceRecord] = []
+    try:
+        item, records, item_warnings = _frontier_item(
+            pages,
+            tools,
+            retrieved_at=retrieved_at,
+            period_start=frontier_window_start,
+            period_end=period_end,
+        )
+        warnings.extend(item_warnings)
+    except Exception as exc:
+        warnings.append(f"前沿观点未通过原文校验：{exc}")
+    return _SectionTaskOutput(
+        items=(item,) if item is not None else (),
+        source_records=tuple(records),
+        warnings=tuple(warnings),
+    )
+
+
 def _digest(result: InternalWeeklyResult) -> str:
     payload = {
         "generation_mode": result.generation_mode,
@@ -1855,168 +2131,55 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     )
 
     retrieved_at = current.astimezone().isoformat()
-    ordinary_page_groups: list[tuple[str, list[WebCandidate]]] = []
-    warnings: list[str] = []
-    for section_name, queries in _ordinary_query_groups(period_start, period_end):
-        if section_name == "监管动态":
-            pages, group_warnings = _collect_regulatory_pages(
-                _regulatory_query_groups(period_start, period_end),
-                list(section_source_feed_specs(section_name)),
-                tools,
-                period_start=period_start,
-                period_end=period_end,
-            )
-        elif section_name == "同业动向":
-            peer_page_groups: list[list[WebCandidate]] = []
-            group_warnings = []
-            for _, peer_queries in _peer_activity_query_groups(
-                period_start,
-                period_end,
-            ):
-                peer_pages, peer_warnings = _collect_pages(
-                    list(peer_queries),
-                    tools,
-                    period_start=period_start,
-                    period_end=period_end,
-                    source_section=section_name,
-                    max_results_per_query=10,
-                )
-                peer_page_groups.append(peer_pages)
-                group_warnings.extend(peer_warnings)
-            pages = _merge_candidate_pages_balanced(*peer_page_groups)
-        elif section_name == "市场观察":
-            market_topic_page_groups: list[list[WebCandidate]] = []
-            group_warnings = []
-            for _, topic_queries in _market_observation_query_groups(
-                period_start,
-                period_end,
-            ):
-                topic_pages, topic_warnings = _collect_pages(
-                    list(topic_queries),
-                    tools,
-                    period_start=period_start,
-                    period_end=period_end,
-                    source_section=section_name,
-                    max_results_per_query=10,
-                )
-                market_topic_page_groups.append(topic_pages)
-                group_warnings.extend(topic_warnings)
-            pages = _merge_candidate_pages_balanced(*market_topic_page_groups)
-        else:
-            pages, group_warnings = _collect_pages(
-                list(queries),
-                tools,
-                period_start=period_start,
-                period_end=period_end,
-                source_section=section_name,
-                max_results_per_query=(
-                    10 if section_name in {"党政要闻", "市场观察"} else 5
-                ),
-            )
-        if section_name == "党政要闻":
-            feed_pages, feed_warnings = _collect_source_feed_pages(
-                list(section_source_feed_urls(section_name)),
-                tools,
-                period_start=period_start,
-                period_end=period_end,
-                source_section=section_name,
-            )
-            pages = _merge_candidate_pages(feed_pages, pages)
-            group_warnings.extend(feed_warnings)
-        ordinary_page_groups.append((section_name, pages))
-        warnings.extend(group_warnings)
-    market_page_groups: list[tuple[tuple[str, ...], list[WebCandidate]]] = []
-    market_search_warnings: list[str] = []
-    for required_scopes, queries in _market_query_groups(
-        publication_date, period_start, period_end
-    ):
-        if monday_pending and required_scopes == ("monday_a",):
-            continue
-        group_pages, group_warnings = _collect_pages(
-            queries,
+    section_tasks: dict[str, Callable[[], _SectionTaskOutput]] = {
+        "党政要闻": lambda: _run_party_section_task(
             tools,
-            source_section="市场观察",
-            max_results_per_query=10,
-        )
-        market_page_groups.append((required_scopes, group_pages))
-        market_search_warnings.extend(group_warnings)
-    frontier_window_start = period_end - timedelta(days=29)
-    frontier_pages, frontier_search_warnings = _collect_pages(
-        _frontier_queries(frontier_window_start, period_end, fallback=True),
-        tools,
-        period_start=frontier_window_start,
-        period_end=period_end,
-        require_research=True,
-        source_section="前沿观点",
-        max_results_per_query=10,
-    )
-    weekly_frontier_pages = [
-        page
-        for page in frontier_pages
-        if date_in_period(page.publish_date, period_start, period_end)
-    ]
-    if weekly_frontier_pages:
-        frontier_pages = weekly_frontier_pages
-    elif frontier_pages:
-        warnings.append("前沿观点使用近30日兜底报告，发布日期不在本期统计周")
-    warnings.extend(market_search_warnings)
-    warnings.extend(frontier_search_warnings)
-    if monday_pending:
-        warnings.append("今日A股收盘数据待15:00收盘后更新")
-
-    ordinary_items: list[WeeklyItem] = []
-    source_records: list[SourceRecord] = []
-    for section_name, pages in ordinary_page_groups:
-        try:
-            items, records, item_warnings = _ordinary_items(
-                pages,
-                tools,
-                expected_section=section_name,
-                retrieved_at=retrieved_at,
-            )
-            ordinary_items.extend(items)
-            source_records.extend(records)
-            warnings.extend(item_warnings)
-        except Exception as exc:
-            warnings.append(f"{section_name}内容评估失败：{exc}")
-
-    market_item: WeeklyItem | None = None
-    try:
-        market_item, records, item_warnings = _market_item(
-            market_page_groups,
+            period_start=period_start,
+            period_end=period_end,
+            retrieved_at=retrieved_at,
+        ),
+        "监管动态": lambda: _run_regulatory_section_task(
+            tools,
+            period_start=period_start,
+            period_end=period_end,
+            retrieved_at=retrieved_at,
+        ),
+        "同业动向": lambda: _run_peer_section_task(
+            tools,
+            period_start=period_start,
+            period_end=period_end,
+            retrieved_at=retrieved_at,
+        ),
+        "市场观察": lambda: _run_market_section_task(
             tools,
             publication_date=publication_date,
             period_start=period_start,
             period_end=period_end,
             retrieved_at=retrieved_at,
             monday_pending=monday_pending,
-        )
-        source_records.extend(records)
-        warnings.extend(item_warnings)
-    except Exception as exc:
-        warnings.append(f"资本市场综述未通过完整性校验：{exc}")
-
-    frontier_item: WeeklyItem | None = None
-    try:
-        frontier_item, records, item_warnings = _frontier_item(
-            frontier_pages,
+        ),
+        "前沿观点": lambda: _run_frontier_section_task(
             tools,
-            retrieved_at=retrieved_at,
-            period_start=frontier_window_start,
+            period_start=period_start,
             period_end=period_end,
-        )
-        source_records.extend(records)
-        warnings.extend(item_warnings)
-    except Exception as exc:
-        warnings.append(f"前沿观点未通过原文校验：{exc}")
-
+            retrieved_at=retrieved_at,
+        ),
+    }
+    section_outputs, section_failures = _run_parallel_section_tasks(section_tasks)
+    warnings: list[str] = []
+    source_records: list[SourceRecord] = []
     items_by_section: dict[str, list[WeeklyItem]] = {name: [] for name in SECTION_ORDER}
-    for item in ordinary_items:
-        items_by_section[item.section].append(item)
-    if market_item is not None:
-        items_by_section["市场观察"].insert(0, market_item)
-    if frontier_item is not None:
-        items_by_section["前沿观点"].append(frontier_item)
+    for section_name in SECTION_ORDER:
+        output = section_outputs.get(section_name)
+        if output is not None:
+            items_by_section[section_name].extend(output.items)
+            source_records.extend(output.source_records)
+            warnings.extend(output.warnings)
+        if section_name in section_failures:
+            warnings.append(
+                f"{section_name}模块执行失败"
+                f"（{type(section_failures[section_name]).__name__}），已保留待核事项"
+            )
     sections = [
         WeeklySection(name=name, items=items_by_section[name]) for name in SECTION_ORDER
     ]
@@ -2028,10 +2191,15 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
     deduped_records: dict[str, SourceRecord] = {}
     for record in source_records:
         deduped_records[record.source_id] = record
+    market_item_present = any(
+        item.content_mode == "market_fixed"
+        for item in items_by_section["市场观察"]
+    )
+    frontier_item_present = bool(items_by_section["前沿观点"])
     ready = (
         all(items_by_section[name] for name in ("党政要闻", "监管动态", "同业动向"))
-        and market_item is not None
-        and frontier_item is not None
+        and market_item_present
+        and frontier_item_present
         and not monday_pending
     )
     result = InternalWeeklyResult(

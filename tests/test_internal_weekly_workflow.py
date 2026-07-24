@@ -1,10 +1,12 @@
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from app.platform.tools import ToolGateway
+from skills.internal_weekly import workflow as internal_weekly_workflow
 from skills.internal_weekly.schema import (
     ContentAssessmentBatch,
     ContentCandidateAssessment,
@@ -70,6 +72,55 @@ def _market_series() -> list[MarketSeriesEvidence]:
             )
         )
     return result
+
+
+def test_five_section_tasks_run_in_parallel_and_return_in_fixed_order():
+    barrier = threading.Barrier(5, timeout=3)
+    lock = threading.Lock()
+    thread_ids: set[int] = set()
+
+    def task(section_name: str):
+        def execute() -> str:
+            with lock:
+                thread_ids.add(threading.get_ident())
+            barrier.wait()
+            return section_name
+
+        return execute
+
+    tasks = {section_name: task(section_name) for section_name in (
+        "党政要闻",
+        "监管动态",
+        "同业动向",
+        "市场观察",
+        "前沿观点",
+    )}
+
+    results, failures = internal_weekly_workflow._run_parallel_section_tasks(tasks)
+
+    assert failures == {}
+    assert list(results) == list(tasks)
+    assert list(results.values()) == list(tasks)
+    assert len(thread_ids) == 5
+
+
+def test_parallel_section_failure_does_not_cancel_other_sections():
+    def fail_regulation() -> str:
+        raise RuntimeError("regulation failed")
+
+    tasks = {
+        "党政要闻": lambda: "党政要闻",
+        "监管动态": fail_regulation,
+        "同业动向": lambda: "同业动向",
+        "市场观察": lambda: "市场观察",
+        "前沿观点": lambda: "前沿观点",
+    }
+
+    results, failures = internal_weekly_workflow._run_parallel_section_tasks(tasks)
+
+    assert list(results) == ["党政要闻", "同业动向", "市场观察", "前沿观点"]
+    assert list(failures) == ["监管动态"]
+    assert isinstance(failures["监管动态"], RuntimeError)
 
 
 class FakeTools:
@@ -369,6 +420,89 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     ]
 
 
+def test_full_weekly_dispatches_exactly_five_section_tasks(monkeypatch):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+    captured_sections: list[str] = []
+    original_runner = internal_weekly_workflow._run_parallel_section_tasks
+
+    def capture_tasks(tasks):
+        captured_sections.extend(tasks)
+        return original_runner(tasks)
+
+    monkeypatch.setattr(
+        internal_weekly_workflow,
+        "_run_parallel_section_tasks",
+        capture_tasks,
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+        },
+        gateway,
+    )
+
+    assert captured_sections == [
+        "党政要闻",
+        "监管动态",
+        "同业动向",
+        "市场观察",
+        "前沿观点",
+    ]
+    assert result.ready_for_approval is True
+
+
+def test_full_weekly_keeps_other_sections_when_one_parallel_task_fails(monkeypatch):
+    fake = FakeTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    def fail_regulation(*_args, **_kwargs):
+        raise RuntimeError("sensitive provider detail")
+
+    monkeypatch.setattr(
+        internal_weekly_workflow,
+        "_run_regulatory_section_task",
+        fail_regulation,
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+        },
+        gateway,
+    )
+
+    sections = {section.name: section.items for section in result.sections}
+    assert sections["监管动态"] == []
+    assert all(
+        sections[section_name]
+        for section_name in ("党政要闻", "同业动向", "市场观察", "前沿观点")
+    )
+    assert result.ready_for_approval is False
+    assert any(
+        warning.startswith("监管动态模块执行失败（RuntimeError）")
+        for warning in result.warnings
+    )
+    assert all("sensitive provider detail" not in warning for warning in result.warnings)
+
+
 def test_approved_revision_generates_word_without_researching_again(
     tmp_path,
     monkeypatch,
@@ -592,6 +726,8 @@ def test_market_update_request_after_close_only_collects_current_day_market(tmp_
     assert result.sections[0].items[0].title == "今日资本市场综述更新"
     assert "截至7月13日收盘，A股" in result.sections[0].items[0].body
     assert fake.market_required_scopes == [("monday_a",)]
+    assert len(fake.search_calls) == 2
+    assert all("2026年7月13日" in query and "A股" in query for query in fake.search_calls)
     assert all("研究报告" not in query for query in fake.search_calls)
     assert all("中国政府网" not in query for query in fake.search_calls)
     assert result.ready_for_approval is True
