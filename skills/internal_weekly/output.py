@@ -25,10 +25,16 @@ def render_review_markdown(result: InternalWeeklyResult) -> str:
             lines.extend(["_本板块暂无通过筛选和溯源校验的条目。_", ""])
         for index, item in enumerate(section.items, start=1):
             lines.extend([f"### {index}. {item.title}", "", item.body, "", "核对信息："])
+            if item.review_status == "needs_rewrite":
+                lines.append(f"- 加工状态：待整理（{item.review_note or '摘要未通过核心事实校验'}）")
             for source_id in item.source_ids:
                 source = source_map[source_id]
                 lines.append(f"- 原文链接：[{source.title}]({source.url})")
                 lines.append(f"- 来源机构：{source.publisher or source.title}")
+                if source.source_type != "market_data":
+                    lines.append(
+                        f"- 发生日期：{source.occurrence_date or '原文未明确，正文使用“近日”'}"
+                    )
                 lines.append(f"- 发布日期：{source.publish_date or '以原页面为准'}")
                 if item.content_mode in {"report_extract", "report_summary"}:
                     lines.append(f"- 报告位置：{source.source_location}")

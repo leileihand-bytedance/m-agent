@@ -26,6 +26,7 @@ class ContentCandidateAssessment(BaseModel):
     section: SectionName
     title: str
     summary: str
+    occurrence_date: str = ""
     evidence_excerpt: str = ""
     evidence_block_ids: list[str] = Field(default_factory=list)
     score: float = Field(ge=0, le=10)
@@ -39,6 +40,7 @@ class ContentAssessmentBatch(BaseModel):
 class GroundingRepairItem(BaseModel):
     source_url: str
     summary: str
+    occurrence_date: str = ""
     evidence_block_ids: list[str] = Field(default_factory=list)
 
 
@@ -96,6 +98,7 @@ class SourceRecord(BaseModel):
     title: str
     publisher: str = ""
     publish_date: str = ""
+    occurrence_date: str = ""
     url: str
     retrieved_at: str
     source_type: Literal["news", "market_data", "research_report"]
@@ -118,6 +121,8 @@ class WeeklyItem(BaseModel):
     ]
     source_ids: list[str] = Field(default_factory=list)
     fixed_position: int | None = None
+    review_status: Literal["verified", "needs_rewrite"] = "verified"
+    review_note: str = ""
 
 
 class WeeklySection(BaseModel):

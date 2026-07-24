@@ -221,12 +221,14 @@ class _PartyEventPart:
     title: str
     summary: str
     source_url: str
+    occurrence_date: date | None = None
 
 
 @dataclass(frozen=True)
 class _GroundedSummary:
     summary: str
     evidence_excerpts: tuple[str, ...]
+    occurrence_date: date | None = None
 
 
 def _run_parallel_section_tasks(
@@ -1264,6 +1266,95 @@ def _selected_evidence_blocks(
     return tuple(selected)
 
 
+def _verified_occurrence_date(
+    value: str,
+    evidence_excerpts: tuple[str, ...],
+    page: WebCandidate,
+) -> date | None:
+    """只接受原文证据中出现的事件发生日，不用网页发布日期补位。"""
+    normalized = str(value or "").strip()
+    if not evidence_excerpts:
+        return None
+    try:
+        publish_year = parse_flexible_date(page.publish_date).year
+    except ValueError:
+        publish_year = None
+    candidate: date | None = None
+    if normalized:
+        try:
+            candidate = parse_flexible_date(normalized, default_year=publish_year)
+        except ValueError:
+            candidate = None
+
+    evidence_text = "\n".join(evidence_excerpts)
+    evidence_dates: set[date] = set()
+    for match in re.finditer(
+        r"(?<!\d)(20\d{2})\s*[-/.年]\s*(\d{1,2})"
+        r"\s*[-/.月]\s*(\d{1,2})\s*日?",
+        evidence_text,
+    ):
+        try:
+            evidence_date = date(
+                int(match.group(1)),
+                int(match.group(2)),
+                int(match.group(3)),
+            )
+        except ValueError:
+            continue
+        evidence_dates.add(evidence_date)
+    if not evidence_dates:
+        for month, day in re.findall(
+            r"(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            evidence_text,
+        ):
+            if publish_year is None:
+                continue
+            try:
+                evidence_dates.add(date(publish_year, int(month), int(day)))
+            except ValueError:
+                continue
+    if candidate is not None and candidate in evidence_dates:
+        return candidate
+    if not normalized and len(evidence_dates) == 1:
+        return next(iter(evidence_dates))
+    return None
+
+
+def _strip_item_time_prefix(value: str) -> str:
+    normalized = value.strip()
+    normalized = re.sub(
+        r"^(?:(?:20\d{2}年)?\d{1,2}月\d{1,2}日|近日)[，,\s]*",
+        "",
+        normalized,
+        count=1,
+    )
+    return normalized.strip()
+
+
+def _with_occurrence_prefix(value: str, occurrence_date: date | None) -> str:
+    body = _strip_item_time_prefix(value)
+    prefix = (
+        f"{occurrence_date.month}月{occurrence_date.day}日"
+        if occurrence_date is not None
+        else "近日"
+    )
+    return f"{prefix}，{body}" if body else f"{prefix}，"
+
+
+def _fallback_evidence(
+    assessment: ContentCandidateAssessment,
+    page: WebCandidate,
+) -> tuple[str, ...]:
+    selected = _selected_evidence_blocks(assessment.evidence_block_ids, page)
+    if selected:
+        return selected
+    excerpt = assessment.evidence_excerpt.strip()
+    if _evidence_in_body(excerpt, page.body):
+        return (excerpt,)
+    blocks = _evidence_block_map(page.body)
+    return (next(iter(blocks.values())),) if blocks else ()
+
+
 def _numeric_fact_tokens(value: str) -> set[str]:
     pattern = (
         r"\d[\d,]*(?:\.\d+)?"
@@ -1304,7 +1395,7 @@ def _summary_core_supported(
     if not normalized_summary or not evidence_excerpts:
         return False
     evidence_text = "\n".join(evidence_excerpts)
-    source_facts = f"{page.title}\n{page.publish_date}\n{evidence_text}"
+    source_facts = f"{page.title}\n{evidence_text}"
     if not _numeric_fact_tokens(normalized_summary).issubset(
         _numeric_fact_tokens(source_facts)
     ):
@@ -1361,6 +1452,11 @@ def _grounding_from_assessment(
     return _GroundedSummary(
         summary=assessment.summary.strip(),
         evidence_excerpts=evidence_excerpts,
+        occurrence_date=_verified_occurrence_date(
+            assessment.occurrence_date,
+            evidence_excerpts,
+            page,
+        ),
     )
 
 
@@ -1370,6 +1466,7 @@ def _record_from_page(
     retrieved_at: str,
     source_type: str,
     evidence: list[str],
+    occurrence_date: date | None = None,
     source_location: str = "网页正文",
 ) -> SourceRecord:
     return SourceRecord(
@@ -1377,6 +1474,7 @@ def _record_from_page(
         title=page.title,
         publisher=page.publisher or page.site,
         publish_date=page.publish_date,
+        occurrence_date=occurrence_date.isoformat() if occurrence_date else "",
         url=page.canonical_url,
         retrieved_at=retrieved_at,
         source_type=source_type,
@@ -1409,12 +1507,15 @@ def _repair_ordinary_grounding(
                     "instruction": (
                         "允许概括压缩，但人物、机构、时间、数字、单位、政策动作、"
                         "因果关系和增减方向必须由所选原文证据块直接支持。"
+                        "occurrence_date只填写证据块中明确记载的事件发生日，"
+                        "不得用网页发布日期代替；没有可靠发生日时留空。"
                     ),
                     "requests": [
                         {
                             "source_url": page.canonical_url,
                             "title": assessment.title,
                             "summary": assessment.summary,
+                            "occurrence_date": assessment.occurrence_date,
                             "rejected_evidence_excerpt": assessment.evidence_excerpt,
                             "rejected_evidence_block_ids": assessment.evidence_block_ids,
                         }
@@ -1445,6 +1546,11 @@ def _repair_ordinary_grounding(
                 repaired[page.canonical_url] = _GroundedSummary(
                     summary=item.summary.strip(),
                     evidence_excerpts=evidence_excerpts,
+                    occurrence_date=_verified_occurrence_date(
+                        item.occurrence_date,
+                        evidence_excerpts,
+                        page,
+                    ),
                 )
     return repaired
 
@@ -1531,7 +1637,8 @@ def _ordinary_items(
                             "每一条候选都必须返回判断；不入选也要返回 include=false，不能漏答或返回空列表。"
                             "摘要可以概括压缩，但不得改变人物、机构、时间、数字、单位、"
                             "政策动作、因果关系或增减方向；证据优先返回1至3个原文证据块编号，"
-                            "不要自行重抄证据文字。"
+                            "不要自行重抄证据文字。occurrence_date只填写原文明确记载的"
+                            "事件发生日，不得用网页发布日期代替；没有可靠发生日时留空。"
                         ),
                         "materials": _ordinary_materials(page_batch),
                     },
@@ -1612,11 +1719,21 @@ def _ordinary_items(
             _grounding_from_assessment(assessment, page)
             or grounding_repairs.get(page.canonical_url)
         )
+        review_status = "verified"
+        review_note = ""
         if grounding is None:
-            warnings.append(
-                f"《{assessment.title}》摘要核心事实无法由原文证据支持，已排除"
+            fallback_evidence = _fallback_evidence(assessment, page)
+            grounding = _GroundedSummary(
+                summary="摘要待整理，请结合核对信息中的原文证据重新整理。",
+                evidence_excerpts=fallback_evidence,
+                occurrence_date=_verified_occurrence_date(
+                    assessment.occurrence_date,
+                    fallback_evidence,
+                    page,
+                ),
             )
-            continue
+            review_status = "needs_rewrite"
+            review_note = "摘要核心事实未通过原文校验"
         assessment = assessment.model_copy(
             update={"summary": grounding.summary}
         )
@@ -1650,7 +1767,7 @@ def _ordinary_items(
         ):
             warnings.append(f"《{assessment.title}》属于微众银行自身动态，不作为同业收录")
             continue
-        if expected_section == "党政要闻":
+        if expected_section == "党政要闻" and review_status == "verified":
             if matching_party_event_indexes:
                 item_index = min(matching_party_event_indexes)
                 existing_item = items[item_index]
@@ -1678,6 +1795,7 @@ def _ordinary_items(
                     retrieved_at=retrieved_at,
                     source_type="news",
                     evidence=list(grounding.evidence_excerpts),
+                    occurrence_date=grounding.occurrence_date,
                 )
                 items[item_index] = existing_item.model_copy(
                     update={
@@ -1692,6 +1810,7 @@ def _ordinary_items(
                         title=assessment.title,
                         summary=assessment.summary,
                         source_url=page.canonical_url,
+                        occurrence_date=grounding.occurrence_date,
                     )
                 )
                 for key in party_event_keys:
@@ -1704,6 +1823,11 @@ def _ordinary_items(
                 continue
             if len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION:
                 continue
+        if (
+            expected_section == "党政要闻"
+            and len(items) >= MAX_ITEMS_PER_ORDINARY_SECTION
+        ):
+            continue
         item_title = assessment.title.strip() or page.title
         item_body = assessment.summary.strip()
         regulatory_subject = ""
@@ -1711,11 +1835,13 @@ def _ordinary_items(
             regulatory_subject = _regulatory_subject(page, assessment)
             item_title = _normalize_regulatory_title(item_title, regulatory_subject)
             item_body = _normalize_regulatory_summary(item_body, regulatory_subject)
+        item_body = _with_occurrence_prefix(item_body, grounding.occurrence_date)
         source_record = _record_from_page(
             page,
             retrieved_at=retrieved_at,
             source_type="news",
             evidence=list(grounding.evidence_excerpts),
+            occurrence_date=grounding.occurrence_date,
         )
         if regulatory_subject:
             source_record = source_record.model_copy(
@@ -1732,11 +1858,18 @@ def _ordinary_items(
                 body=item_body,
                 content_mode="summary",
                 source_ids=[source_record.source_id],
+                review_status=review_status,
+                review_note=review_note,
             )
         )
         records.append(source_record)
         seen_urls.add(page.canonical_url)
-        if expected_section == "党政要闻":
+        if review_status == "needs_rewrite":
+            warnings.append(
+                f"《{assessment.title}》已通过内容价值筛选，但摘要核心事实未通过校验，"
+                "已保留待整理"
+            )
+        if expected_section == "党政要闻" and review_status == "verified":
             selected_party_event_titles.append(assessment.title)
             item_index = len(items) - 1
             if party_event_keys:
@@ -1745,6 +1878,7 @@ def _ordinary_items(
                         title=assessment.title,
                         summary=assessment.summary,
                         source_url=page.canonical_url,
+                        occurrence_date=grounding.occurrence_date,
                     )
                 ]
             for key in party_event_keys:
@@ -1765,8 +1899,19 @@ def _ordinary_items(
         if synthesis is None:
             continue
         title, summary = synthesis
+        occurrence_dates = [
+            part.occurrence_date
+            for part in parts
+            if part.occurrence_date is not None
+        ]
         items[item_index] = items[item_index].model_copy(
-            update={"title": title, "body": summary}
+            update={
+                "title": title,
+                "body": _with_occurrence_prefix(
+                    summary,
+                    min(occurrence_dates) if occurrence_dates else None,
+                ),
+            }
         )
     return items, records, warnings
 
@@ -1990,6 +2135,7 @@ def _frontier_item(
         retrieved_at=retrieved_at,
         source_type="research_report",
         evidence=passages,
+        occurrence_date=selected_date,
         source_location=selection.source_location,
     ).model_copy(
         update={
@@ -2002,7 +2148,10 @@ def _frontier_item(
         item_id="frontier-" + hashlib.sha256(selection.source_url.encode("utf-8")).hexdigest()[:12],
         section="前沿观点",
         title=chinese_title,
-        body=f"{chinese_summary}\n\n（来源：{institution}《{selection.title}》）",
+        body=(
+            f"{_with_occurrence_prefix(chinese_summary, selected_date)}"
+            f"\n\n（来源：{institution}《{selection.title}》）"
+        ),
         content_mode="report_summary",
         source_ids=[record.source_id],
     )
@@ -2560,11 +2709,17 @@ def run(inputs: dict[str, object], tools: ToolGateway) -> InternalWeeklyResult:
         for item in items_by_section["市场观察"]
     )
     frontier_item_present = bool(items_by_section["前沿观点"])
+    all_items_verified = all(
+        item.review_status == "verified"
+        for section in sections
+        for item in section.items
+    )
     ready = (
         all(items_by_section[name] for name in ("党政要闻", "监管动态", "同业动向"))
         and market_item_present
         and frontier_item_present
         and not monday_pending
+        and all_items_verified
     )
     result = InternalWeeklyResult(
         title=f"内参周报（{publication_date.isoformat()}）",

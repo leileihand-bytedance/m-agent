@@ -355,6 +355,7 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     frontier = next(section for section in result.sections if section.name == "前沿观点")
     assert frontier.items[0].content_mode == "report_summary"
     assert frontier.items[0].title == "利率传导对银行净息差的影响"
+    assert frontier.items[0].body.startswith("7月9日，")
     assert "报告分析利率变化向银行资产负债表的传导" in frontier.items[0].body
     assert "（来源：国际清算银行《利率传导与银行净息差》）" in frontier.items[0].body
     assert "第二段分析银行净息差变化。" not in frontier.items[0].body
@@ -374,6 +375,8 @@ def test_workflow_outputs_traceable_review_bundle_without_word(tmp_path):
     review_text = Path(result.output_file).read_text(encoding="utf-8")
     assert "内容核对稿" in review_text
     assert "原文链接" in review_text
+    assert "发生日期：2026-07-09" in review_text
+    assert "发布日期：2026-07-09" in review_text
     assert "报告位置：网页摘要" in review_text
 
     manifest = json.loads(Path(result.manifest_file).read_text(encoding="utf-8"))
@@ -504,6 +507,54 @@ def test_full_weekly_keeps_other_sections_when_one_parallel_task_fails(monkeypat
         for warning in result.warnings
     )
     assert all("sensitive provider detail" not in warning for warning in result.warnings)
+
+
+def test_full_weekly_is_not_approvable_when_selected_item_needs_rewrite():
+    class InvalidRegulatorySummaryTools(FakeTools):
+        def llm_writer(self, payload):
+            if payload["task"] == "internal_weekly_grounding_repair":
+                return GroundingRepairBatch(items=[])
+            result = super().llm_writer(payload)
+            if payload["task"] != "internal_weekly_content_assessment":
+                return result
+            return ContentAssessmentBatch(
+                items=[
+                    item.model_copy(
+                        update={"summary": "中国人民银行发布999项金融统计数据。"}
+                    )
+                    if item.section == "监管动态"
+                    else item
+                    for item in result.items
+                ]
+            )
+
+    fake = InvalidRegulatorySummaryTools()
+    gateway = ToolGateway(
+        allowed_tools=("search", "web_reader", "llm_writer"),
+        tools={
+            "search": fake.search,
+            "web_reader": fake.web_reader,
+            "llm_writer": fake.llm_writer,
+        },
+    )
+
+    result = run(
+        {
+            "text": "生成本周内参周报",
+            "now": datetime(2026, 7, 17, 10, 0),
+        },
+        gateway,
+    )
+
+    regulatory = next(
+        section for section in result.sections if section.name == "监管动态"
+    )
+    assert len(regulatory.items) == 1
+    assert regulatory.items[0].review_status == "needs_rewrite"
+    assert result.ready_for_approval is False
+    assert result.document_metadata["ready_for_approval"] == "false"
+    assert "加工状态：待整理" in result.body
+    assert any("已保留待整理" in warning for warning in result.warnings)
 
 
 def test_approved_revision_generates_word_without_researching_again(
@@ -1424,7 +1475,7 @@ def test_party_major_event_is_rewritten_as_one_integrated_summary():
     ]
     assert len(items) == 1
     assert items[0].title == "2026世界人工智能大会形成创新发展与全球治理系列部署"
-    assert items[0].body == integrated
+    assert items[0].body == f"近日，{integrated}"
     assert "\n\n" not in items[0].body
     assert len(items[0].source_ids) == 2
     assert len(records) == 2
@@ -1452,15 +1503,19 @@ def test_regulatory_item_uses_regulator_as_subject_for_state_council_briefing():
         site="pbc.gov.cn",
         publisher="中国人民银行",
         publish_date="2026-07-15",
-        body="国新办举行新闻发布会，中国人民银行副行长介绍上半年货币政策执行情况。",
+        body=(
+            "7月14日，国新办举行新闻发布会，"
+            "中国人民银行副行长介绍上半年货币政策执行情况。"
+        ),
     )
     assessment = ContentCandidateAssessment(
         source_url=page.canonical_url,
         include=True,
         section="监管动态",
         title=page.title,
-        summary="7月15日，国新办举行新闻发布会，央行副行长介绍货币政策执行情况。",
-        evidence_excerpt="中国人民银行副行长介绍上半年货币政策执行情况",
+        summary="国新办举行新闻发布会，央行副行长介绍货币政策执行情况。",
+        occurrence_date="2026-07-14",
+        evidence_block_ids=["E001"],
         score=9,
         reason="人民银行政策发布",
     )
@@ -1479,7 +1534,7 @@ def test_regulatory_item_uses_regulator_as_subject_for_state_council_briefing():
     )
 
     assert items[0].title == "中国人民银行介绍上半年货币政策执行情况"
-    assert items[0].body.startswith("7月15日，中国人民银行副行长")
+    assert items[0].body.startswith("7月14日，中国人民银行副行长")
     assert "国新办" not in items[0].body
     assert records[0].publisher == "中国人民银行"
     assert warnings == []
@@ -1563,7 +1618,7 @@ def test_ordinary_summary_can_compress_source_when_core_facts_stay_grounded():
         publisher="中国政府网",
         publish_date="2026-07-13",
         body=(
-            "中共中央、国务院部署扩大消费重点工作，提出到2030年社会消费品零售"
+            "7月12日，中共中央、国务院部署扩大消费重点工作，提出到2030年社会消费品零售"
             "总额达到60万亿元左右，并要求深入实施提振消费专项行动。"
         ),
     )
@@ -1577,6 +1632,7 @@ def test_ordinary_summary_can_compress_source_when_core_facts_stay_grounded():
         section="党政要闻",
         title=page.title,
         summary=compressed,
+        occurrence_date="2026-07-12",
         evidence_excerpt="",
         evidence_block_ids=["E001"],
         score=9,
@@ -1597,11 +1653,13 @@ def test_ordinary_summary_can_compress_source_when_core_facts_stay_grounded():
     )
 
     assert warnings == []
-    assert items[0].body == compressed
+    assert items[0].body == f"7月12日，{compressed}"
+    assert records[0].occurrence_date == "2026-07-12"
+    assert records[0].publish_date == "2026-07-13"
     assert records[0].evidence_excerpts == [page.body]
 
 
-def test_ordinary_item_rejects_repaired_summary_that_changes_a_core_number():
+def test_ordinary_item_keeps_valuable_source_pending_when_summary_changes_a_core_number():
     page = WebCandidate(
         url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
         canonical_url="https://www.csrc.gov.cn/csrc/c100028/c7646105/content.shtml",
@@ -1650,12 +1708,19 @@ def test_ordinary_item_rejects_repaired_summary_that_changes_a_core_number():
         retrieved_at="2026-07-20T10:00:00+08:00",
     )
 
-    assert items == []
-    assert records == []
-    assert warnings == [f"《{page.title}》摘要核心事实无法由原文证据支持，已排除"]
+    assert len(items) == 1
+    assert items[0].review_status == "needs_rewrite"
+    assert items[0].body.startswith("近日，")
+    assert "摘要待整理" in items[0].body
+    assert len(records) == 1
+    assert records[0].url == page.canonical_url
+    assert records[0].evidence_excerpts == [page.body]
+    assert warnings == [
+        f"《{page.title}》已通过内容价值筛选，但摘要核心事实未通过校验，已保留待整理"
+    ]
 
 
-def test_ordinary_item_rejects_summary_that_reverses_the_source_direction():
+def test_ordinary_item_keeps_valuable_source_pending_when_summary_reverses_direction():
     page = WebCandidate(
         url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
         canonical_url="https://www.stats.gov.cn/sj/xwfbh/fbhwd/202607/content.htm",
@@ -1702,9 +1767,98 @@ def test_ordinary_item_rejects_summary_that_reverses_the_source_direction():
         retrieved_at="2026-07-20T10:00:00+08:00",
     )
 
-    assert items == []
-    assert records == []
-    assert warnings == [f"《{page.title}》摘要核心事实无法由原文证据支持，已排除"]
+    assert len(items) == 1
+    assert items[0].review_status == "needs_rewrite"
+    assert items[0].body.startswith("近日，")
+    assert len(records) == 1
+    assert warnings == [
+        f"《{page.title}》已通过内容价值筛选，但摘要核心事实未通过校验，已保留待整理"
+    ]
+
+
+def test_ordinary_item_uses_event_date_from_evidence_instead_of_publish_date():
+    page = WebCandidate(
+        url="https://www.pbc.gov.cn/goutongjiaoliu/event.htm",
+        canonical_url="https://www.pbc.gov.cn/goutongjiaoliu/event.htm",
+        title="中国人民银行召开金融支持小微企业座谈会",
+        site="pbc.gov.cn",
+        publisher="中国人民银行",
+        publish_date="2026-07-16",
+        body=(
+            "7月14日，中国人民银行召开金融支持小微企业座谈会，"
+            "研究提升小微企业金融服务质效。"
+        ),
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="监管动态",
+        title=page.title,
+        summary="中国人民银行召开座谈会，研究提升小微企业金融服务质效。",
+        evidence_block_ids=["E001"],
+        score=9,
+        reason="金融监管部门支持小微企业的重要部署",
+    )
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: ContentAssessmentBatch(items=[assessment])
+        },
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="监管动态",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert warnings == []
+    assert items[0].body.startswith("7月14日，")
+    assert not items[0].body.startswith("7月16日，")
+    assert records[0].occurrence_date == "2026-07-14"
+    assert records[0].publish_date == "2026-07-16"
+
+
+def test_ordinary_item_uses_recent_when_evidence_has_no_event_date():
+    page = WebCandidate(
+        url="https://www.nfra.gov.cn/cn/view/pages/recent.htm",
+        canonical_url="https://www.nfra.gov.cn/cn/view/pages/recent.htm",
+        title="金融监管总局部署提升银行业服务质效",
+        site="nfra.gov.cn",
+        publisher="国家金融监督管理总局",
+        publish_date="2026-07-16",
+        body="金融监管总局部署提升银行业服务质效，要求完善小微企业金融服务。",
+    )
+    assessment = ContentCandidateAssessment(
+        source_url=page.canonical_url,
+        include=True,
+        section="监管动态",
+        title=page.title,
+        summary="金融监管总局部署提升银行业服务质效，完善小微企业金融服务。",
+        occurrence_date="2026-07-16",
+        evidence_block_ids=["E001"],
+        score=9,
+        reason="银行业经营管理相关监管部署",
+    )
+    gateway = ToolGateway(
+        allowed_tools=("llm_writer",),
+        tools={
+            "llm_writer": lambda payload: ContentAssessmentBatch(items=[assessment])
+        },
+    )
+
+    items, records, warnings = _ordinary_items(
+        [page],
+        gateway,
+        expected_section="监管动态",
+        retrieved_at="2026-07-20T10:00:00+08:00",
+    )
+
+    assert warnings == []
+    assert items[0].body.startswith("近日，")
+    assert not items[0].body.startswith("7月16日，")
+    assert records[0].occurrence_date == ""
 
 
 def test_ordinary_assessment_retries_when_model_omits_the_whole_batch():
